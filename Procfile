@@ -1,1 +1,1 @@
-web: python suhani.py
+worker: python suhani.py
