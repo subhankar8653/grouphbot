@@ -13,10 +13,15 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from threading import Thread
 from flask import Flask
 
-# ═══════════════ CONFIG ═══════════════
-BOT_TOKEN = ""
-OWNER_ID = 2135144380
-DATA_FILE = "data.json"
+# ═══════════════ CONFIG (Railway Environment Variables) ═══════════════
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
+DATA_FILE = os.environ.get("DATA_FILE", "data.json")
+
+if not BOT_TOKEN:
+    raise ValueError("❌ BOT_TOKEN environment variable not set!")
+if not OWNER_ID:
+    raise ValueError("❌ OWNER_ID environment variable not set!")
 
 # Warning messages
 WARN_MSG = {
@@ -757,7 +762,7 @@ async def on_leave(u, c):
     if u.message.left_chat_member.id == c.bot.id:
         db.rm_g(u.effective_chat.id)
 
-# ═══════════════ WEB SERVER (for Render) ═══════════════
+# ═══════════════ WEB SERVER (for Railway) ═══════════════
 web_app = Flask(__name__)
 
 @web_app.route('/')
@@ -769,8 +774,8 @@ def health():
     return "OK"
 
 def run_web():
-    port = int(os.environ.get('PORT', 10000))
-    web_app.run(host='0.0.0.0', port=port)
+    port = int(os.environ.get('PORT', 8080))
+    web_app.run(host='0.0.0.0', port=port, use_reloader=False)
 
 # ═══════════════ MAIN ═══════════════
 def main():
@@ -778,6 +783,9 @@ def main():
     print("⚡ Optimized for low resources")
     print("🔗 Advanced Link Detection")
     print("✅ Linked Channel Forwards Allowed")
+    print("━" * 40)
+    print(f"👑 Owner ID: {OWNER_ID}")
+    print(f"🌐 Web Port: {os.environ.get('PORT', 8080)}")
     print("━" * 40)
     
     app = Application.builder().token(BOT_TOKEN).build()
@@ -810,7 +818,7 @@ def main():
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
-    # Start web server in background thread (for Render)
+    # Start web server in background thread (for Railway health check)
     Thread(target=run_web, daemon=True).start()
     # Start bot
     main()
