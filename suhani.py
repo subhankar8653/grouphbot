@@ -14,8 +14,8 @@ from threading import Thread
 from flask import Flask
 
 # ═══════════════ CONFIG ═══════════════
-BOT_TOKEN = "8419270820:AAH4eroe4iksmJbdQcc_rfHJb-w84Ac2w74"
-OWNER_ID = 2135144380
+BOT_TOKEN = ""
+OWNER_ID = 
 DATA_FILE = "data.json"
 
 # Warning messages
