@@ -15,7 +15,7 @@ from flask import Flask
 
 # ═══════════════ CONFIG ═══════════════
 BOT_TOKEN = ""
-OWNER_ID = 
+OWNER_ID = 2135144380
 DATA_FILE = "data.json"
 
 # Warning messages
