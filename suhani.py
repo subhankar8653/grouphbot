@@ -106,12 +106,16 @@ WARN_MSG = {
 VIOLATION_MSG = {
     "bot":          "🤖 External bot username detected!",
     "url":          "🔗 Links/URLs are not allowed here!",
+    "username":     "👤 External usernames (@mentions) are not allowed here!",
     "forward":      "↩️ Forwarded messages not allowed!",
     "adult_emoji":  "🔞 Adult emojis are strictly banned!",
     "adult_word":   "🚫 Inappropriate language detected!",
     "blacklist":    "⛔ Blacklisted word used!",
     "flood":        "🌊 Slow down! Anti-flood triggered!",
 }
+
+# Usernames that are always exempt from @mention filtering
+EXEMPT_USERNAMES = {"admin", "owner", "request", "sbnime"}
 
 MUTE_TIME  = {1: 35, 2: 60, 3: 120, 4: 604800}
 WARN_EXP   = {1: 21600, 2: 57600, 3: 97200, 4: None}
@@ -120,6 +124,9 @@ WARN_EXP   = {1: 21600, 2: 57600, 3: 97200, 4: None}
 #  DETECTION PATTERNS
 # ═══════════════════════════════════════════════════════════
 BOT_RE = re.compile(r'@(\w{5,}bot)\b', re.I)
+
+# Matches any @username mention (3+ chars after @)
+USERNAME_RE = re.compile(r'@(\w{3,})\b')
 
 URL_RE = re.compile(
     r'('
@@ -438,6 +445,24 @@ def check_link(text):
     return False
 
 
+def check_username(text, wl_words):
+    """
+    Returns True if text contains a @username that should be blocked.
+    Exempt: EXEMPT_USERNAMES (admin/owner/request/sbnime) and any
+    username that appears in the group's whitelist words.
+    """
+    for match in USERNAME_RE.findall(text):
+        uname = match.lower()
+        # Skip permanently exempt usernames
+        if uname in EXEMPT_USERNAMES:
+            continue
+        # Skip if admin whitelisted this username
+        if wl_words and uname in [w.lower() for w in wl_words]:
+            continue
+        return True
+    return False
+
+
 def build_blacklist_re(words):
     if not words:
         return None
@@ -635,6 +660,9 @@ async def check_violations(msg, group_bots, ctx, chat_id):
     if check_link(text):
         return "url"
 
+    if check_username(text, wl_words):
+        return "username"
+
     found_bots = BOT_RE.findall(text)
     for b in found_bots:
         if b.lower() not in group_bots:
@@ -811,6 +839,9 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"🛡️ *AUTO PROTECTIONS*\n"
             f"{'─'*30}\n\n"
             f"🤖 External bot usernames\n"
+            f"👤 External @mentions (usernames)\n"
+            f"   ✅ _@admin @owner @request @sbnime: exempt_\n"
+            f"   ✅ _Whitelisted usernames: exempt_\n"
             f"🔗 All Links & URLs\n"
             f"↩️ Forwarded messages\n"
             f"   ✅ _(Linked channel: allowed)_\n"
@@ -1871,18 +1902,20 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         (msg.text and any(ord(c) > 127000 for c in txt))
     )
 
-    if sticker_del_min and is_sticker_media:
-        asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, sticker_del_min * 60))
-
-    if autodel_min:
-        asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, autodel_min * 60))
-
     if db.is_gmuted(usr.id):
         asyncio.create_task(msg.delete())
         asyncio.create_task(do_mute(ctx, ch.id, usr.id, 604800))
         return
 
-    if await is_adm(ctx, ch.id, usr.id):
+    is_admin = await is_adm(ctx, ch.id, usr.id)
+
+    if sticker_del_min and is_sticker_media and not is_admin:
+        asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, sticker_del_min * 60))
+
+    if autodel_min and not is_admin:
+        asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, autodel_min * 60))
+
+    if is_admin:
         return
 
     if db.is_immortal(ch.id, usr.id):
