@@ -1954,15 +1954,16 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await do_mute(ctx, ch.id, usr.id, MUTE_TIME[cnt])
         viol_txt = VIOLATION_MSG.get(violation, "Rule violation!")
         bars = "🟥" * cnt + "⬜" * (4 - cnt)
+        mute_sec = MUTE_TIME[cnt]
+        mute_str = f"{mute_sec}s" if mute_sec < 3600 else "1 week"
+        next_str = "1 week ban 🌐" if cnt == 3 else f"W{cnt+1}"
 
         notice = await ctx.bot.send_message(
             ch.id,
-            f"⚠️ *RULE VIOLATION*\n"
-            f"{'─'*25}\n\n"
-            f"👤 {user_name(usr)}\n"
-            f"🚨 {viol_txt}\n\n"
-            f"Progress: {bars} `{cnt}/4`\n\n"
-            f"{WARN_MSG[cnt]}",
+            f"🚨 *{user_name(usr)}* warned! `(W{cnt}/4)`\n"
+            f"📌 {viol_txt}\n"
+            f"⏱ Muted `{mute_str}` • Next = {next_str}\n\n"
+            f"Progress: {bars} `{cnt}/4`",
             parse_mode='Markdown',
             reply_markup=kb_warn_actions(ch.id, usr.id)
         )
