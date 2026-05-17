@@ -194,6 +194,7 @@ class DB:
         self.stats_c  = self.db["stats"]
         self.immortal = self.db["immortal"]
         self.blacklist= self.db["blacklist"]
+        self.gblacklist = self.db["global_blacklist"]
 
         if not self.stats_c.find_one({"_id": "global"}):
             self.stats_c.insert_one({"_id": "global", "warnings": 0, "mutes": 0, "scanned": 0, "gmutes": 0})
@@ -321,6 +322,21 @@ class DB:
     def get_whitelist(self, chat_id):
         doc = self.blacklist.find_one({"_id": chat_id})
         return doc.get("whitelist", []) if doc else []
+
+    # ── Global Blacklist (owner only, applies to ALL groups) ──
+    def add_gblacklist(self, word):
+        self.gblacklist.update_one(
+            {"_id": "global"},
+            {"$addToSet": {"words": word.lower()}},
+            upsert=True
+        )
+
+    def remove_gblacklist(self, word):
+        self.gblacklist.update_one({"_id": "global"}, {"$pull": {"words": word.lower()}})
+
+    def get_gblacklist(self):
+        doc = self.gblacklist.find_one({"_id": "global"})
+        return doc.get("words", []) if doc else []
 
     def set_rules(self, chat_id, text):
         self.update_group(chat_id, {"rules": text})
@@ -668,6 +684,13 @@ async def check_violations(msg, group_bots, ctx, chat_id):
             wl_re = build_blacklist_re(wl_words) if wl_words else None
             if not (wl_re and wl_re.search(text)):
                 return "blacklist"
+
+    # Global blacklist — applies to ALL groups
+    gbl_words = db.get_gblacklist()
+    if gbl_words and text:
+        gbl_re = build_blacklist_re(gbl_words)
+        if gbl_re and gbl_re.search(text):
+            return "blacklist"
 
     default_re = build_blacklist_re(DEFAULT_ADULT_WORDS)
     if default_re and default_re.search(text):
@@ -1871,6 +1894,83 @@ async def unglobalmute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Invalid ID!")
 
 
+# ─── /gblacklist ────────────────────────────────────────────
+async def gblacklist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Owner only — add/remove/list global blacklist words (apply to ALL groups)"""
+    if update.effective_user.id != OWNER_ID:
+        return await update.message.reply_text("❌ Owner only command!")
+
+    if not ctx.args:
+        # Show list
+        words = db.get_gblacklist()
+        if not words:
+            return await update.message.reply_text(
+                "📋 *Global Blacklist* is empty.\n\n"
+                "Usage:\n"
+                "`/gblacklist add <word>` — Add word\n"
+                "`/gblacklist remove <word>` — Remove word\n"
+                "`/gblacklist list` — Show all words",
+                parse_mode='Markdown'
+            )
+        word_list = "\n".join(f"  • `{w}`" for w in words)
+        return await update.message.reply_text(
+            f"🌐 *Global Blacklist* ({len(words)} words)\n"
+            f"{'─'*28}\n\n"
+            f"{word_list}\n\n"
+            f"_These words are blocked in ALL groups._",
+            parse_mode='Markdown'
+        )
+
+    action = ctx.args[0].lower()
+
+    if action == "list":
+        words = db.get_gblacklist()
+        if not words:
+            return await update.message.reply_text("📋 Global blacklist is empty.")
+        word_list = "\n".join(f"  • `{w}`" for w in words)
+        return await update.message.reply_text(
+            f"🌐 *Global Blacklist* ({len(words)} words)\n"
+            f"{'─'*28}\n\n"
+            f"{word_list}",
+            parse_mode='Markdown'
+        )
+
+    if action in ("add", "remove") and len(ctx.args) < 2:
+        return await update.message.reply_text(
+            f"❌ Usage: `/gblacklist {action} <word>`",
+            parse_mode='Markdown'
+        )
+
+    word = " ".join(ctx.args[1:]).lower().strip()
+
+    if action == "add":
+        db.add_gblacklist(word)
+        await update.message.reply_text(
+            f"✅ *Global Blacklist* — Added!\n\n"
+            f"🚫 `{word}`\n\n"
+            f"_This word is now blocked in ALL your groups._",
+            parse_mode='Markdown'
+        )
+
+    elif action == "remove":
+        db.remove_gblacklist(word)
+        await update.message.reply_text(
+            f"✅ *Global Blacklist* — Removed!\n\n"
+            f"🗑️ `{word}`",
+            parse_mode='Markdown'
+        )
+
+    else:
+        await update.message.reply_text(
+            "❌ Unknown action!\n\n"
+            "Usage:\n"
+            "`/gblacklist add <word>`\n"
+            "`/gblacklist remove <word>`\n"
+            "`/gblacklist list`",
+            parse_mode='Markdown'
+        )
+
+
 async def stats_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     s = db.get_stats()
@@ -2100,6 +2200,7 @@ def main():
     app.add_handler(CommandHandler("groups",           groups_cmd))
     app.add_handler(CommandHandler("globalmutes",      globalmutes_cmd))
     app.add_handler(CommandHandler("unglobalmute",     unglobalmute_cmd))
+    app.add_handler(CommandHandler("gblacklist",       gblacklist_cmd))
     app.add_handler(CommandHandler("stats",            stats_cmd))
 
     # ── Callback Queries ─────────────────────────────────────
