@@ -566,6 +566,11 @@ def kb_warn_actions(chat_id, user_id):
         ]
     ])
 
+def kb_unban_button(chat_id, user_id):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔓 Unban", callback_data=f"unban_{chat_id}_{user_id}")]
+    ])
+
 def kb_captcha(chat_id, user_id, options):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(opt, callback_data=f"captcha_{chat_id}_{user_id}_{opt}") for opt in options[:2]],
@@ -869,28 +874,38 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text, reply_markup=kb_back(), parse_mode='Markdown')
 
     elif data == "show_rules":
-        # Try to get chat rules — fallback to defaults
-        rules_text = (
-            f"📜 *GROUP RULES*\n"
-            f"{'─'*30}\n\n"
-            f"🚫 *NOT ALLOWED:*\n\n"
-            f"  1️⃣  🤖 External bot usernames\n"
-            f"  2️⃣  🔗 Links & URLs\n"
-            f"  3️⃣  ↩️ Forwarded messages\n"
-            f"       ✅ _Linked channel: allowed_\n"
-            f"  4️⃣  🔞 Adult emojis (2+)\n"
-            f"  5️⃣  🗣️ Abusive language\n"
-            f"  6️⃣  ⛔ Blacklisted words\n"
-            f"  7️⃣  🌊 Spamming / Flooding\n\n"
-            f"{'─'*30}\n\n"
-            f"⚠️ *PUNISHMENT SCALE:*\n"
-            f"  • 1st offense → 35s mute\n"
-            f"  • 2nd offense → 60s mute\n"
-            f"  • 3rd offense → 120s mute\n"
-            f"  • 4th offense → 1 WEEK (ALL groups!)\n\n"
-            f"{'─'*30}\n"
-            f"✅ _Respect the rules & enjoy the group!_"
-        )
+        chat_id = update.effective_chat.id if update.effective_chat else 0
+        custom = db.get_rules(chat_id) if chat_id else None
+        if custom:
+            rules_text = (
+                f"📜 *GROUP RULES*\n"
+                f"{'─'*30}\n\n"
+                f"{custom}\n\n"
+                f"{'─'*30}\n"
+                f"_Follow the rules to avoid punishment._"
+            )
+        else:
+            rules_text = (
+                f"📜 *GROUP RULES*\n"
+                f"{'─'*30}\n\n"
+                f"🚫 *NOT ALLOWED:*\n\n"
+                f"  1️⃣  🤖 External bot usernames\n"
+                f"  2️⃣  🔗 Links & URLs\n"
+                f"  3️⃣  ↩️ Forwarded messages\n"
+                f"       ✅ _Linked channel: allowed_\n"
+                f"  4️⃣  🔞 Adult emojis (2+)\n"
+                f"  5️⃣  🗣️ Abusive language\n"
+                f"  6️⃣  ⛔ Blacklisted words\n"
+                f"  7️⃣  🌊 Spamming / Flooding\n\n"
+                f"{'─'*30}\n\n"
+                f"⚠️ *PUNISHMENT SCALE:*\n"
+                f"  • 1st offense → 35s mute\n"
+                f"  • 2nd offense → 60s mute\n"
+                f"  • 3rd offense → 120s mute\n"
+                f"  • 4th offense → 1 WEEK (ALL groups!)\n\n"
+                f"{'─'*30}\n"
+                f"✅ _Respect the rules & enjoy the group!_"
+            )
         await query.answer()
         await query.message.reply_text(rules_text, parse_mode='Markdown')
         return
@@ -898,6 +913,22 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif data == "show_id":
         u = query.from_user
         await query.answer(f"Your ID: {u.id}", show_alert=True)
+        return
+
+    elif data.startswith("unban_"):
+        parts = data.split("_")
+        if len(parts) >= 3:
+            try:
+                c_id = int(parts[1])
+                u_id = int(parts[2])
+                if await is_adm(ctx, c_id, query.from_user.id) or query.from_user.id == OWNER_ID:
+                    await do_unban(ctx, c_id, u_id)
+                    await query.answer("✅ User unbanned!", show_alert=True)
+                    await query.message.edit_reply_markup(reply_markup=None)
+                else:
+                    await query.answer("❌ Admins only!", show_alert=True)
+            except:
+                await query.answer("❌ Error!", show_alert=True)
         return
 
     elif data.startswith("unmute_"):
@@ -975,7 +1006,54 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ─── /help ──────────────────────────────────────────────────
 async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await start_cmd(update, ctx)
+    u = update.effective_user
+    is_group = update.effective_chat.type != "private"
+
+    text = (
+        f"🛡️ *SUHANI BOT — HELP MENU*\n"
+        f"{'─'*35}\n\n"
+        f"👤 *User Commands:*\n"
+        f"  `/help` — This menu\n"
+        f"  `/rules` — View group rules\n"
+        f"  `/warnings` — Check your warnings\n"
+        f"  `/id` — Your Telegram ID\n\n"
+        f"👮 *Admin Commands:*\n"
+        f"  `/mute [sec]` — Mute a user (reply)\n"
+        f"  `/unmute` — Unmute a user (reply)\n"
+        f"  `/ban [reason]` — Ban a user (reply)\n"
+        f"  `/unban <id>` — Unban a user\n"
+        f"  `/warn [reason]` — Warn a user (reply)\n"
+        f"  `/resetwarnings` — Reset user warnings (reply)\n"
+        f"  `/del` — Delete a message (reply)\n"
+        f"  `/purge` — Bulk delete from message (reply)\n"
+        f"  `/testmute` — Test 35s mute (reply)\n\n"
+        f"👑 *Immortal System:*\n"
+        f"  `/immortal <id>` — Grant rule immunity\n"
+        f"  `/unimmortal <id>` — Remove immunity\n"
+        f"  `/immortals` — List immune users\n\n"
+        f"⚙️ *Group Settings:*\n"
+        f"  `/setrules <text>` — Set custom rules\n"
+        f"  `/setlinked` — Set linked channel\n"
+        f"  `/captcha on|off` — Toggle captcha\n"
+        f"  `/sticker_delete <min>` — Sticker auto-delete\n"
+        f"  `/autodelete <min>` — Auto-delete all messages\n\n"
+        f"⛔ *Blacklist / Whitelist:*\n"
+        f"  `/addblacklist <word>` — Ban a word\n"
+        f"  `/removeblacklist <word>` — Remove ban\n"
+        f"  `/blacklist` — Show banned words\n"
+        f"  `/addwhitelist <word>` — Whitelist a word\n"
+        f"  `/removewhitelist <word>` — Remove whitelist\n"
+        f"  `/whitelist` — Show whitelisted words\n\n"
+        f"{'─'*35}\n"
+        f"⚠️ *Warn Scale:* W1→35s | W2→60s | W3→120s | W4→1wk global\n"
+        f"🛡️ *Auto-protection always ON for non-admins*"
+    )
+
+    await update.message.reply_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=kb_main_menu()
+    )
 
 
 # ─── /rule ──────────────────────────────────────────────────
@@ -1543,9 +1621,7 @@ async def ban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"👤 {user_name(tgt)}\n"
             f"📋 Reason: _{reason}_",
             parse_mode='Markdown',
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔓 Unban", callback_data=f"unmute_{ch.id}_{tgt.id}")]
-            ])
+            reply_markup=kb_unban_button(ch.id, tgt.id)
         )
     else:
         await update.message.reply_text("❌ Failed to ban. Make bot an admin!")
@@ -1977,7 +2053,7 @@ def main():
 
     # ── Callback Queries ─────────────────────────────────────
     app.add_handler(CallbackQueryHandler(captcha_callback, pattern=r"^captcha_"))
-    app.add_handler(CallbackQueryHandler(menu_callback,    pattern=r"^(menu_|show_|unmute_|dismiss_)"))
+    app.add_handler(CallbackQueryHandler(menu_callback,    pattern=r"^(menu_|show_|unmute_|unban_|dismiss_)"))
 
     # ── Message Handlers ─────────────────────────────────────
     app.add_handler(MessageHandler(
