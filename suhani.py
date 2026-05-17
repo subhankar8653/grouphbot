@@ -1909,15 +1909,16 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     is_admin = await is_adm(ctx, ch.id, usr.id)
 
-    if sticker_del_min and is_sticker_media and not is_admin:
+    # Sticker auto-delete: admin pe bhi lagega
+    if sticker_del_min and is_sticker_media:
         asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, sticker_del_min * 60))
 
+    # Global autodelete: admin ke NORMAL messages pe nahi lagega
     if autodel_min and not is_admin:
         asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, autodel_min * 60))
 
-    if is_admin:
-        return
-
+    # Admin ke violations (link/username/etc.) check hote rahenge
+    # Sirf is_adm wala early return hata diya — ab admin bhi violation check se guzrega
     if db.is_immortal(ch.id, usr.id):
         return
 
