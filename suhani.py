@@ -281,6 +281,16 @@ db = DB()
 #  HELPERS
 # ═══════════════════════════════════════════════════════════
 async def is_adm(ctx, chat_id, user_id):
+    # 1677858391 = Telegram's "Group Anonymous Bot" ID (used when admin posts as channel)
+    # Also check if sender_chat matches the group itself (anonymous admin)
+    ANON_ADMIN_ID = 1087968824  # GroupAnonymousBot — Telegram ka official anonymous admin bot
+    if user_id == ANON_ADMIN_ID:
+        return True
+
+    # OWNER_ID always admin
+    if user_id == OWNER_ID:
+        return True
+
     k = f"adm_{chat_id}_{user_id}"
     now = time.time()
     if k in CACHE and now - CACHE[k][1] < 300:
@@ -294,6 +304,48 @@ async def is_adm(ctx, chat_id, user_id):
         return r
     except:
         return False
+
+
+def get_sender_id(update: Update) -> int:
+    """Jab channel se anonymously command aaye tab real sender detect karo."""
+    ANON_BOT_ID = 1087968824
+    user = update.effective_user
+    if user is None:
+        sc = getattr(update.message, 'sender_chat', None)
+        return sc.id if sc else 0
+    if user.id == ANON_BOT_ID:
+        sc = getattr(update.message, 'sender_chat', None)
+        if sc:
+            return sc.id
+    return user.id
+
+
+async def sender_is_admin(ctx, update: Update) -> bool:
+    """
+    Unified admin check — channel se post karne par bhi kaam karta hai.
+    GroupAnonymousBot (1087968824) = Telegram ka anonymous admin bot
+    """
+    ANON_BOT_ID = 1087968824
+    ch   = update.effective_chat
+    user = update.effective_user
+
+    # Owner always passes
+    if user and user.id == OWNER_ID:
+        return True
+
+    # GroupAnonymousBot = admin ne 'Send as group' choose kiya hai
+    if user and user.id == ANON_BOT_ID:
+        sc = getattr(update.message, 'sender_chat', None)
+        # Agar sender_chat group hi hai toh confirmed admin
+        if sc and sc.id == ch.id:
+            return True
+        # Channel post wala case — check linked channel
+        return True  # GroupAnonymousBot = always admin in that group
+
+    if user is None:
+        return False
+
+    return await is_adm(ctx, ch.id, user.id)
 
 
 async def get_group_bots(ctx, chat_id):
@@ -744,7 +796,7 @@ async def setrules_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
         return await update.message.reply_text("❌ Use in group!")
-    if not await is_adm(ctx, ch.id, update.effective_user.id):
+    if not await sender_is_admin(ctx, update):
         return await update.message.reply_text("❌ Admins only!")
     if not ctx.args:
         return await update.message.reply_text("❌ Usage: `/setrules <your rules text>`", parse_mode='Markdown')
@@ -837,7 +889,7 @@ async def immortals_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
         return await update.message.reply_text("❌ Use in group!")
-    if not await is_adm(ctx, ch.id, update.effective_user.id) and update.effective_user.id != OWNER_ID:
+    if not await sender_is_admin(ctx, update):
         return await update.message.reply_text("❌ Admins only!")
 
     immortals = db.get_immortals(ch.id)
@@ -856,7 +908,7 @@ async def addblacklist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
         return await update.message.reply_text("❌ Use in group!")
-    if not await is_adm(ctx, ch.id, update.effective_user.id):
+    if not await sender_is_admin(ctx, update):
         return await update.message.reply_text("❌ Admins only!")
     if not ctx.args:
         return await update.message.reply_text("❌ Usage: `/addblacklist <word>`", parse_mode='Markdown')
@@ -874,7 +926,7 @@ async def removeblacklist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
         return await update.message.reply_text("❌ Use in group!")
-    if not await is_adm(ctx, ch.id, update.effective_user.id):
+    if not await sender_is_admin(ctx, update):
         return await update.message.reply_text("❌ Admins only!")
     if not ctx.args:
         return await update.message.reply_text("❌ Usage: `/removeblacklist <word>`", parse_mode='Markdown')
@@ -889,7 +941,7 @@ async def blacklist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
         return await update.message.reply_text("❌ Use in group!")
-    if not await is_adm(ctx, ch.id, update.effective_user.id):
+    if not await sender_is_admin(ctx, update):
         return await update.message.reply_text("❌ Admins only!")
 
     words = db.get_blacklist(ch.id)
@@ -906,7 +958,7 @@ async def addwhitelist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
         return await update.message.reply_text("❌ Use in group!")
-    if not await is_adm(ctx, ch.id, update.effective_user.id):
+    if not await sender_is_admin(ctx, update):
         return await update.message.reply_text("❌ Admins only!")
     if not ctx.args:
         return await update.message.reply_text("❌ Usage: `/addwhitelist <word>`", parse_mode='Markdown')
@@ -924,7 +976,7 @@ async def removewhitelist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
         return await update.message.reply_text("❌ Use in group!")
-    if not await is_adm(ctx, ch.id, update.effective_user.id):
+    if not await sender_is_admin(ctx, update):
         return await update.message.reply_text("❌ Admins only!")
     if not ctx.args:
         return await update.message.reply_text("❌ Usage: `/removewhitelist <word>`", parse_mode='Markdown')
@@ -939,7 +991,7 @@ async def whitelist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
         return await update.message.reply_text("❌ Use in group!")
-    if not await is_adm(ctx, ch.id, update.effective_user.id):
+    if not await sender_is_admin(ctx, update):
         return await update.message.reply_text("❌ Admins only!")
 
     words = db.get_whitelist(ch.id)
@@ -956,7 +1008,7 @@ async def sticker_delete_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
         return await update.message.reply_text("❌ Use in group!")
-    if not await is_adm(ctx, ch.id, update.effective_user.id):
+    if not await sender_is_admin(ctx, update):
         return await update.message.reply_text("❌ Admins only!")
 
     if not ctx.args:
@@ -993,7 +1045,7 @@ async def autodelete_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
         return await update.message.reply_text("❌ Use in group!")
-    if not await is_adm(ctx, ch.id, update.effective_user.id):
+    if not await sender_is_admin(ctx, update):
         return await update.message.reply_text("❌ Admins only!")
 
     if not ctx.args:
@@ -1032,7 +1084,7 @@ async def captcha_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
         return await update.message.reply_text("❌ Use in group!")
-    if not await is_adm(ctx, ch.id, update.effective_user.id):
+    if not await sender_is_admin(ctx, update):
         return await update.message.reply_text("❌ Admins only!")
 
     if not ctx.args or ctx.args[0].lower() not in ('on', 'off'):
@@ -1058,7 +1110,7 @@ async def setlinked_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
         return await update.message.reply_text("❌ Use in group!")
-    if not await is_adm(ctx, ch.id, update.effective_user.id):
+    if not await sender_is_admin(ctx, update):
         return await update.message.reply_text("❌ Admins only!")
 
     try:
@@ -1102,7 +1154,7 @@ async def setlinked_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def testmute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private": return
-    if not await is_adm(ctx, ch.id, update.effective_user.id): return
+    if not await sender_is_admin(ctx, update): return
     if not update.message.reply_to_message:
         return await update.message.reply_text("❌ Reply to user!")
     tgt = update.message.reply_to_message.from_user
@@ -1118,7 +1170,7 @@ async def testmute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def mute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private": return
-    if not await is_adm(ctx, ch.id, update.effective_user.id): return
+    if not await sender_is_admin(ctx, update): return
     if not update.message.reply_to_message:
         return await update.message.reply_text("❌ Reply to user! `/mute 60`", parse_mode='Markdown')
     tgt = update.message.reply_to_message.from_user
@@ -1138,7 +1190,7 @@ async def mute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def unmute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private": return
-    if not await is_adm(ctx, ch.id, update.effective_user.id): return
+    if not await sender_is_admin(ctx, update): return
     if not update.message.reply_to_message: return
     tgt = update.message.reply_to_message.from_user
     db.remove_gmute(tgt.id)
@@ -1151,7 +1203,7 @@ async def unmute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def ban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private": return
-    if not await is_adm(ctx, ch.id, update.effective_user.id): return
+    if not await sender_is_admin(ctx, update): return
     if not update.message.reply_to_message:
         return await update.message.reply_text("❌ Reply to user to ban!")
     tgt = update.message.reply_to_message.from_user
@@ -1171,7 +1223,7 @@ async def ban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def unban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private": return
-    if not await is_adm(ctx, ch.id, update.effective_user.id): return
+    if not await sender_is_admin(ctx, update): return
     target_id = None
     if ctx.args:
         try:
@@ -1190,7 +1242,7 @@ async def unban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def warn_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private": return
-    if not await is_adm(ctx, ch.id, update.effective_user.id): return
+    if not await sender_is_admin(ctx, update): return
     if not update.message.reply_to_message: return
     tgt = update.message.reply_to_message.from_user
     if await is_adm(ctx, ch.id, tgt.id): return
@@ -1229,7 +1281,7 @@ async def warnings_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def reset_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private": return
-    if not await is_adm(ctx, ch.id, update.effective_user.id): return
+    if not await sender_is_admin(ctx, update): return
     if not update.message.reply_to_message: return
     tgt = update.message.reply_to_message.from_user
     db.reset_warnings(ch.id, tgt.id)
@@ -1252,7 +1304,7 @@ async def del_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def purge_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private": return
-    if not await is_adm(ctx, ch.id, update.effective_user.id):
+    if not await sender_is_admin(ctx, update):
         return await update.message.reply_text("❌ Admins only!")
     if not update.message.reply_to_message:
         return await update.message.reply_text("❌ Reply to the message from where you want to start purge!")
