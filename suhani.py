@@ -451,7 +451,7 @@ async def check_username(text, wl_words, ctx, chat_id):
     Exempt:
       - EXEMPT_USERNAMES (admin/owner/request/sbnime)
       - Whitelisted usernames
-      - Users who are actual members of this group
+      - Users who are actual members of this group (not left/kicked/banned)
     """
     for match in USERNAME_RE.findall(text):
         uname = match.lower()
@@ -461,16 +461,21 @@ async def check_username(text, wl_words, ctx, chat_id):
         # Skip if admin whitelisted this username
         if wl_words and uname in [w.lower() for w in wl_words]:
             continue
+
         # Check if this @username is a member of the group
+        is_member = False
         try:
             member = await ctx.bot.get_chat_member(chat_id, f"@{uname}")
-            # If member is present (not left/kicked), allow
-            if member.status not in ("left", "kicked"):
-                continue
+            # Allow only active members
+            if member.status in ("member", "administrator", "creator", "restricted"):
+                is_member = True
         except Exception:
-            # User not found in group → block
-            pass
-        return True
+            # Exception = user not found in group → treat as outsider
+            is_member = False
+
+        if not is_member:
+            return True  # Block this message
+
     return False
 
 
