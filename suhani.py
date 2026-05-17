@@ -338,6 +338,21 @@ class DB:
         doc = self.gblacklist.find_one({"_id": "global"})
         return doc.get("words", []) if doc else []
 
+    # ── Global Whitelist (owner only, exempt in ALL groups) ──
+    def add_gwhitelist(self, word):
+        self.gblacklist.update_one(
+            {"_id": "global"},
+            {"$addToSet": {"whitelist": word.lower()}},
+            upsert=True
+        )
+
+    def remove_gwhitelist(self, word):
+        self.gblacklist.update_one({"_id": "global"}, {"$pull": {"whitelist": word.lower()}})
+
+    def get_gwhitelist(self):
+        doc = self.gblacklist.find_one({"_id": "global"})
+        return doc.get("whitelist", []) if doc else []
+
     def set_rules(self, chat_id, text):
         self.update_group(chat_id, {"rules": text})
 
@@ -690,7 +705,11 @@ async def check_violations(msg, group_bots, ctx, chat_id):
     if gbl_words and text:
         gbl_re = build_blacklist_re(gbl_words)
         if gbl_re and gbl_re.search(text):
-            return "blacklist"
+            # Check global whitelist before blocking
+            gwl_words = db.get_gwhitelist()
+            gwl_re = build_blacklist_re(gwl_words) if gwl_words else None
+            if not (gwl_re and gwl_re.search(text)):
+                return "blacklist"
 
     default_re = build_blacklist_re(DEFAULT_ADULT_WORDS)
     if default_re and default_re.search(text):
@@ -1971,6 +1990,80 @@ async def gblacklist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
 
 
+# ─── /gwhitelist ────────────────────────────────────────────
+async def gwhitelist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Owner only — global whitelist, exempt from gblacklist in ALL groups"""
+    if update.effective_user.id != OWNER_ID:
+        return await update.message.reply_text("❌ Owner only command!")
+
+    if not ctx.args:
+        words = db.get_gwhitelist()
+        if not words:
+            return await update.message.reply_text(
+                "📋 *Global Whitelist* is empty.\n\n"
+                "Usage:\n"
+                "`/gwhitelist add <word>` — Allow word globally\n"
+                "`/gwhitelist remove <word>` — Remove\n"
+                "`/gwhitelist list` — Show all",
+                parse_mode='Markdown'
+            )
+        word_list = "\n".join(f"  • `{w}`" for w in words)
+        return await update.message.reply_text(
+            f"🌐 *Global Whitelist* ({len(words)} words)\n"
+            f"{'─'*28}\n\n"
+            f"{word_list}\n\n"
+            f"_These words are allowed even if in global blacklist._",
+            parse_mode='Markdown'
+        )
+
+    action = ctx.args[0].lower()
+
+    if action == "list":
+        words = db.get_gwhitelist()
+        if not words:
+            return await update.message.reply_text("📋 Global whitelist is empty.")
+        word_list = "\n".join(f"  • `{w}`" for w in words)
+        return await update.message.reply_text(
+            f"🌐 *Global Whitelist* ({len(words)} words)\n"
+            f"{'─'*28}\n\n"
+            f"{word_list}",
+            parse_mode='Markdown'
+        )
+
+    if action in ("add", "remove") and len(ctx.args) < 2:
+        return await update.message.reply_text(
+            f"❌ Usage: `/gwhitelist {action} <word>`",
+            parse_mode='Markdown'
+        )
+
+    word = " ".join(ctx.args[1:]).lower().strip()
+
+    if action == "add":
+        db.add_gwhitelist(word)
+        await update.message.reply_text(
+            f"✅ *Global Whitelist* — Added!\n\n"
+            f"✔️ `{word}`\n\n"
+            f"_This word is now allowed in ALL groups._",
+            parse_mode='Markdown'
+        )
+    elif action == "remove":
+        db.remove_gwhitelist(word)
+        await update.message.reply_text(
+            f"✅ *Global Whitelist* — Removed!\n\n"
+            f"🗑️ `{word}`",
+            parse_mode='Markdown'
+        )
+    else:
+        await update.message.reply_text(
+            "❌ Unknown action!\n\n"
+            "Usage:\n"
+            "`/gwhitelist add <word>`\n"
+            "`/gwhitelist remove <word>`\n"
+            "`/gwhitelist list`",
+            parse_mode='Markdown'
+        )
+
+
 async def stats_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     s = db.get_stats()
@@ -2201,6 +2294,7 @@ def main():
     app.add_handler(CommandHandler("globalmutes",      globalmutes_cmd))
     app.add_handler(CommandHandler("unglobalmute",     unglobalmute_cmd))
     app.add_handler(CommandHandler("gblacklist",       gblacklist_cmd))
+    app.add_handler(CommandHandler("gwhitelist",       gwhitelist_cmd))
     app.add_handler(CommandHandler("stats",            stats_cmd))
 
     # ── Callback Queries ─────────────────────────────────────
