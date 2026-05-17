@@ -445,11 +445,13 @@ def check_link(text):
     return False
 
 
-def check_username(text, wl_words):
+async def check_username(text, wl_words, ctx, chat_id):
     """
     Returns True if text contains a @username that should be blocked.
-    Exempt: EXEMPT_USERNAMES (admin/owner/request/sbnime) and any
-    username that appears in the group's whitelist words.
+    Exempt:
+      - EXEMPT_USERNAMES (admin/owner/request/sbnime)
+      - Whitelisted usernames
+      - Users who are actual members of this group
     """
     for match in USERNAME_RE.findall(text):
         uname = match.lower()
@@ -459,6 +461,15 @@ def check_username(text, wl_words):
         # Skip if admin whitelisted this username
         if wl_words and uname in [w.lower() for w in wl_words]:
             continue
+        # Check if this @username is a member of the group
+        try:
+            member = await ctx.bot.get_chat_member(chat_id, f"@{uname}")
+            # If member is present (not left/kicked), allow
+            if member.status not in ("left", "kicked"):
+                continue
+        except Exception:
+            # User not found in group → block
+            pass
         return True
     return False
 
@@ -660,7 +671,7 @@ async def check_violations(msg, group_bots, ctx, chat_id):
     if check_link(text):
         return "url"
 
-    if check_username(text, wl_words):
+    if await check_username(text, wl_words, ctx, chat_id):
         return "username"
 
     found_bots = BOT_RE.findall(text)
