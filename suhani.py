@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-🛡️ SUHANI GROUP PROTECTION BOT - v8.0
-⚡ MongoDB Persistent Database
-🔗 Advanced Link Detection
-✅ Linked Channel Forwards Allowed
-👑 Immortal Users System
-🗑️ Sticker/Media Auto Delete
-📝 Custom Blacklist & Whitelist Words
-🌊 Anti-Flood / Anti-Raid
-🎭 Captcha Verification
+╔══════════════════════════════════════════════════╗
+║   🛡️  SUHANI GROUP PROTECTION BOT  v9.0         ║
+║   ⚡  MongoDB Persistent Database                ║
+║   🔗  Advanced Link Detection                    ║
+║   ✅  Linked Channel Forwards Allowed            ║
+║   👑  Immortal Users System                      ║
+║   🗑️  Sticker/Media Auto Delete                 ║
+║   📝  Custom Blacklist & Whitelist               ║
+║   🌊  Anti-Flood / Anti-Raid                     ║
+║   🎭  Captcha Verification                       ║
+╚══════════════════════════════════════════════════╝
 """
 
 import re, os, asyncio, time, random, string
@@ -33,23 +35,82 @@ if not OWNER_ID:
     raise ValueError("❌ OWNER_ID environment variable not set!")
 
 # ═══════════════════════════════════════════════════════════
-#  WARNING MESSAGES
+#  DESIGN CONSTANTS — Premium Message Templates
+# ═══════════════════════════════════════════════════════════
+
+# Top-level decorative borders
+BORDER_TOP    = "╔" + "═" * 40 + "╗"
+BORDER_MID    = "╠" + "═" * 40 + "╣"
+BORDER_BOT    = "╚" + "═" * 40 + "╝"
+BORDER_LINE   = "║  "
+THIN_DIV      = "┄" * 42
+DASH_DIV      = "─" * 42
+
+# Status icons
+ICON_ON       = "🟢"
+ICON_OFF      = "🔴"
+ICON_WARN     = "⚠️"
+ICON_SHIELD   = "🛡️"
+ICON_CROWN    = "👑"
+ICON_LOCK     = "🔐"
+ICON_CHECK    = "✅"
+ICON_CROSS    = "❌"
+ICON_FIRE     = "🔥"
+ICON_STAR     = "⭐"
+ICON_ROBOT    = "🤖"
+ICON_CHART    = "📊"
+ICON_GEAR     = "⚙️"
+ICON_SWORD    = "⚔️"
+ICON_BOLT     = "⚡"
+ICON_DIAMOND  = "💎"
+
+# ═══════════════════════════════════════════════════════════
+#  WARNING MESSAGES — Redesigned
 # ═══════════════════════════════════════════════════════════
 WARN_MSG = {
-    1: "🚫 **Warning 1/4**\n\nRule violation detected!\n⏱️ Muted: 35s",
-    2: "😤 **Warning 2/4**\n\nStop breaking rules!\n⏱️ Muted: 60s",
-    3: "🔴 **Warning 3/4 - LAST CHANCE!**\n\nNext = 1 WEEK mute in ALL groups!\n⏱️ Muted: 120s",
-    4: "💀 **GLOBAL MUTE!**\n\n🗓️ 1 WEEK mute in ALL groups!\n🔐 Only admin can unmute!"
+    1: (
+        "╔══ ⚠️ WARNING 1 / 4 ══╗\n"
+        "║\n"
+        "║  Rule violation detected!\n"
+        "║  ⏱ Muted for **35 seconds**\n"
+        "║\n"
+        "╚══ Be careful! ══════════╝"
+    ),
+    2: (
+        "╔══ 😤 WARNING 2 / 4 ══╗\n"
+        "║\n"
+        "║  Stop breaking the rules!\n"
+        "║  ⏱ Muted for **60 seconds**\n"
+        "║\n"
+        "╚══ Last chances left: 2 ═╝"
+    ),
+    3: (
+        "╔══ 🔴 WARNING 3 / 4 ══╗\n"
+        "║\n"
+        "║  ⚡ LAST CHANCE!\n"
+        "║  Next = 1 WEEK mute in ALL groups!\n"
+        "║  ⏱ Muted for **120 seconds**\n"
+        "║\n"
+        "╚══ Final Warning! ════════╝"
+    ),
+    4: (
+        "╔══ 💀 GLOBAL MUTE ════╗\n"
+        "║\n"
+        "║  🗓 **1 WEEK** ban — ALL Groups!\n"
+        "║  🔐 Only admin can unmute.\n"
+        "║\n"
+        "╚══ You crossed the line. ═╝"
+    ),
 }
 
 VIOLATION_MSG = {
-    "bot":          "🤖 External bot username not allowed!",
-    "url":          "🔗 Links/URLs not allowed!",
+    "bot":          "🤖 External bot username detected!",
+    "url":          "🔗 Links/URLs are not allowed here!",
     "forward":      "↩️ Forwarded messages not allowed!",
-    "adult_emoji":  "🔞 Adult emojis not allowed!",
-    "adult_word":   "🚫 Inappropriate language not allowed!",
-    "blacklist":    "⛔ Blacklisted word detected!",
-    "flood":        "🌊 Slow down! Too many messages!",
+    "adult_emoji":  "🔞 Adult emojis are strictly banned!",
+    "adult_word":   "🚫 Inappropriate language detected!",
+    "blacklist":    "⛔ Blacklisted word used!",
+    "flood":        "🌊 Slow down! Anti-flood triggered!",
 }
 
 MUTE_TIME  = {1: 35, 2: 60, 3: 120, 4: 604800}
@@ -97,16 +158,14 @@ WHITELIST_ABBREVIATIONS = [
     'Mr.','Mrs.','Dr.','Sr.','Jr.','a.m.','p.m.','A.M.','P.M.','e.g.','i.e.','etc.'
 ]
 
-# Flood control: {chat_id: {user_id: [timestamps]}}
+# Flood control
 FLOOD_DATA = {}
-FLOOD_LIMIT   = 5   # messages
-FLOOD_WINDOW  = 8   # seconds
+FLOOD_LIMIT   = 5
+FLOOD_WINDOW  = 8
 
-# Cache
 CACHE     = {}
 MAX_CACHE = 100
 
-# Pending captchas: {chat_id: {user_id: {"msg_id": int, "answer": str, "expire": float}}}
 CAPTCHA_PENDING = {}
 
 # ═══════════════════════════════════════════════════════════
@@ -122,33 +181,29 @@ class DB:
         except ConnectionFailure as e:
             raise RuntimeError(f"❌ MongoDB connection failed: {e}")
 
-        # Collections
-        self.users    = self.db["users"]       # warnings per user per group
-        self.groups   = self.db["groups"]      # group settings
-        self.gmutes   = self.db["gmutes"]      # globally muted users
-        self.stats_c  = self.db["stats"]       # global stats
-        self.immortal = self.db["immortal"]    # immortal users per group
-        self.blacklist= self.db["blacklist"]   # blacklist/whitelist per group
+        self.users    = self.db["users"]
+        self.groups   = self.db["groups"]
+        self.gmutes   = self.db["gmutes"]
+        self.stats_c  = self.db["stats"]
+        self.immortal = self.db["immortal"]
+        self.blacklist= self.db["blacklist"]
 
-        # Ensure stats doc exists
         if not self.stats_c.find_one({"_id": "global"}):
             self.stats_c.insert_one({"_id": "global", "warnings": 0, "mutes": 0, "scanned": 0, "gmutes": 0})
 
-    # ── Stats ────────────────────────────────────────────────
     def inc_stat(self, field):
         self.stats_c.update_one({"_id": "global"}, {"$inc": {field: 1}})
 
     def get_stats(self):
         return self.stats_c.find_one({"_id": "global"}) or {}
 
-    # ── Groups ───────────────────────────────────────────────
     def add_group(self, chat_id):
         self.groups.update_one({"_id": chat_id}, {"$setOnInsert": {
             "_id": chat_id,
             "linked_channel": None,
             "rules": None,
-            "sticker_delete_min": None,   # minutes, None = disabled
-            "autodelete_min": None,        # minutes, None = disabled
+            "sticker_delete_min": None,
+            "autodelete_min": None,
             "captcha": False,
         }}, upsert=True)
 
@@ -164,7 +219,6 @@ class DB:
     def get_all_groups(self):
         return [g["_id"] for g in self.groups.find({}, {"_id": 1})]
 
-    # ── Linked Channel ───────────────────────────────────────
     def set_linked_channel(self, chat_id, channel_id):
         self.update_group(chat_id, {"linked_channel": channel_id})
 
@@ -172,7 +226,6 @@ class DB:
         g = self.get_group(chat_id)
         return g.get("linked_channel")
 
-    # ── Warnings ─────────────────────────────────────────────
     def get_warnings(self, chat_id, user_id):
         k = f"{chat_id}_{user_id}"
         doc = self.users.find_one({"_id": k})
@@ -190,7 +243,6 @@ class DB:
     def add_warning(self, chat_id, user_id):
         k = f"{chat_id}_{user_id}"
         now = time.time()
-        # First clean expired
         current = self.get_warnings(chat_id, user_id)
         new_count = current + 1
         exp = None if new_count >= 4 else now + WARN_EXP.get(new_count, 21600)
@@ -207,7 +259,6 @@ class DB:
         k = f"{chat_id}_{user_id}"
         self.users.delete_one({"_id": k})
 
-    # ── Global Mutes ─────────────────────────────────────────
     def add_gmute(self, user_id):
         self.gmutes.update_one({"_id": user_id}, {"$set": {"_id": user_id}}, upsert=True)
         self.inc_stat("gmutes")
@@ -221,7 +272,6 @@ class DB:
     def get_all_gmutes(self):
         return [g["_id"] for g in self.gmutes.find()]
 
-    # ── Immortal Users ───────────────────────────────────────
     def add_immortal(self, chat_id, user_id):
         k = f"{chat_id}_{user_id}"
         self.immortal.update_one({"_id": k}, {"$set": {"chat_id": chat_id, "user_id": user_id}}, upsert=True)
@@ -237,7 +287,6 @@ class DB:
     def get_immortals(self, chat_id):
         return [doc["user_id"] for doc in self.immortal.find({"chat_id": chat_id})]
 
-    # ── Blacklist / Whitelist ─────────────────────────────────
     def add_blacklist(self, chat_id, word):
         self.blacklist.update_one(
             {"_id": chat_id},
@@ -266,7 +315,6 @@ class DB:
         doc = self.blacklist.find_one({"_id": chat_id})
         return doc.get("whitelist", []) if doc else []
 
-    # ── Custom Rules ─────────────────────────────────────────
     def set_rules(self, chat_id, text):
         self.update_group(chat_id, {"rules": text})
 
@@ -281,16 +329,11 @@ db = DB()
 #  HELPERS
 # ═══════════════════════════════════════════════════════════
 async def is_adm(ctx, chat_id, user_id):
-    # 1677858391 = Telegram's "Group Anonymous Bot" ID (used when admin posts as channel)
-    # Also check if sender_chat matches the group itself (anonymous admin)
-    ANON_ADMIN_ID = 1087968824  # GroupAnonymousBot — Telegram ka official anonymous admin bot
+    ANON_ADMIN_ID = 1087968824
     if user_id == ANON_ADMIN_ID:
         return True
-
-    # OWNER_ID always admin
     if user_id == OWNER_ID:
         return True
-
     k = f"adm_{chat_id}_{user_id}"
     now = time.time()
     if k in CACHE and now - CACHE[k][1] < 300:
@@ -307,7 +350,6 @@ async def is_adm(ctx, chat_id, user_id):
 
 
 def get_sender_id(update: Update) -> int:
-    """Jab channel se anonymously command aaye tab real sender detect karo."""
     ANON_BOT_ID = 1087968824
     user = update.effective_user
     if user is None:
@@ -321,30 +363,18 @@ def get_sender_id(update: Update) -> int:
 
 
 async def sender_is_admin(ctx, update: Update) -> bool:
-    """
-    Unified admin check — channel se post karne par bhi kaam karta hai.
-    GroupAnonymousBot (1087968824) = Telegram ka anonymous admin bot
-    """
     ANON_BOT_ID = 1087968824
     ch   = update.effective_chat
     user = update.effective_user
-
-    # Owner always passes
     if user and user.id == OWNER_ID:
         return True
-
-    # GroupAnonymousBot = admin ne 'Send as group' choose kiya hai
     if user and user.id == ANON_BOT_ID:
         sc = getattr(update.message, 'sender_chat', None)
-        # Agar sender_chat group hi hai toh confirmed admin
         if sc and sc.id == ch.id:
             return True
-        # Channel post wala case — check linked channel
-        return True  # GroupAnonymousBot = always admin in that group
-
+        return True
     if user is None:
         return False
-
     return await is_adm(ctx, ch.id, user.id)
 
 
@@ -421,7 +451,6 @@ def check_flood(chat_id, user_id):
         FLOOD_DATA[chat_id] = {}
     if user_id not in FLOOD_DATA[chat_id]:
         FLOOD_DATA[chat_id][user_id] = []
-    # Clean old
     FLOOD_DATA[chat_id][user_id] = [t for t in FLOOD_DATA[chat_id][user_id] if now - t < FLOOD_WINDOW]
     FLOOD_DATA[chat_id][user_id].append(now)
     return len(FLOOD_DATA[chat_id][user_id]) > FLOOD_LIMIT
@@ -500,51 +529,107 @@ async def global_mute_user(ctx, user_id, display_name=None):
 
 
 # ═══════════════════════════════════════════════════════════
+#  INLINE KEYBOARD BUILDERS
+# ═══════════════════════════════════════════════════════════
+def kb_main_menu():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("👤 User Cmds", callback_data="menu_user"),
+            InlineKeyboardButton("👮 Admin Cmds", callback_data="menu_admin"),
+        ],
+        [
+            InlineKeyboardButton("🛡️ Protections", callback_data="menu_protection"),
+            InlineKeyboardButton("⚙️ Settings", callback_data="menu_settings"),
+        ],
+        [
+            InlineKeyboardButton("⚠️ Warn System", callback_data="menu_warns"),
+            InlineKeyboardButton("📊 Stats", callback_data="menu_stats"),
+        ],
+    ])
+
+def kb_back():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("◀️ Back to Menu", callback_data="menu_main")]
+    ])
+
+def kb_rules():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📜 View Rules", callback_data="show_rules")],
+        [InlineKeyboardButton("🆔 My ID", callback_data="show_id")],
+    ])
+
+def kb_warn_actions(chat_id, user_id):
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔊 Unmute", callback_data=f"unmute_{chat_id}_{user_id}"),
+            InlineKeyboardButton("🗑️ Dismiss", callback_data=f"dismiss_warn"),
+        ]
+    ])
+
+def kb_captcha(chat_id, user_id, options):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(opt, callback_data=f"captcha_{chat_id}_{user_id}_{opt}") for opt in options[:2]],
+        [InlineKeyboardButton(opt, callback_data=f"captcha_{chat_id}_{user_id}_{opt}") for opt in options[2:]],
+    ])
+
+def kb_join_welcome():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📜 Rules", callback_data="show_rules"),
+            InlineKeyboardButton("🆘 Help", callback_data="menu_user"),
+        ]
+    ])
+
+def kb_bot_added():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📋 Commands", callback_data="menu_admin"),
+            InlineKeyboardButton("⚙️ Setup", callback_data="menu_settings"),
+        ],
+        [
+            InlineKeyboardButton("🛡️ Protections", callback_data="menu_protection"),
+        ]
+    ])
+
+
+# ═══════════════════════════════════════════════════════════
 #  VIOLATION CHECK
 # ═══════════════════════════════════════════════════════════
 async def check_violations(msg, group_bots, ctx, chat_id):
     text = msg.text or msg.caption or ""
 
-    # 1. Flood
     if check_flood(chat_id, msg.from_user.id):
         return "flood"
 
-    # 2. Forwarded message (linked channel exception)
     if msg.forward_date or msg.forward_from or msg.forward_from_chat:
         if msg.forward_from_chat:
             lc = await fetch_linked_channel(ctx, chat_id)
             if lc and msg.forward_from_chat.id == lc:
-                pass  # allowed
+                pass
             else:
                 return "forward"
         else:
             return "forward"
 
-    # 3. Adult emojis (2+)
     if count_adult_emojis(text) >= 2:
         return "adult_emoji"
 
-    # 4. Custom blacklist words (per group)
     bl_words = db.get_blacklist(chat_id)
     wl_words  = db.get_whitelist(chat_id)
     if bl_words and text:
         bl_re = build_blacklist_re(bl_words)
         if bl_re and bl_re.search(text):
-            # check whitelist override
             wl_re = build_blacklist_re(wl_words) if wl_words else None
             if not (wl_re and wl_re.search(text)):
                 return "blacklist"
 
-    # 5. Default adult/bad words
     default_re = build_blacklist_re(DEFAULT_ADULT_WORDS)
     if default_re and default_re.search(text):
         return "adult_word"
 
-    # 6. URLs/Links
     if check_link(text):
         return "url"
 
-    # 7. External bot usernames
     found_bots = BOT_RE.findall(text)
     for b in found_bots:
         if b.lower() not in group_bots:
@@ -557,7 +642,6 @@ async def check_violations(msg, group_bots, ctx, chat_id):
 #  CAPTCHA
 # ═══════════════════════════════════════════════════════════
 def generate_captcha():
-    """Simple math captcha"""
     a = random.randint(1, 15)
     b = random.randint(1, 15)
     op = random.choice(['+', '-', '*'])
@@ -569,7 +653,6 @@ def generate_captcha():
     else:
         ans = a * b
     question = f"{a} {op} {b} = ?"
-    # Generate wrong options
     options = {str(ans)}
     while len(options) < 4:
         wrong = ans + random.randint(-5, 5)
@@ -582,21 +665,20 @@ def generate_captcha():
 
 async def send_captcha(ctx, chat_id, user_id, user_display):
     question, answer, options = generate_captcha()
-    keyboard = [
-        [InlineKeyboardButton(opt, callback_data=f"captcha_{chat_id}_{user_id}_{opt}") for opt in options[:2]],
-        [InlineKeyboardButton(opt, callback_data=f"captcha_{chat_id}_{user_id}_{opt}") for opt in options[2:]],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    # Mute until captcha solved
+    reply_markup = kb_captcha(chat_id, user_id, options)
     await do_mute(ctx, chat_id, user_id)
 
     msg = await ctx.bot.send_message(
         chat_id,
-        f"👋 Welcome {user_display}!\n\n"
-        f"🔐 **Solve to verify you're human:**\n\n"
-        f"🧮 `{question}`\n\n"
-        f"⏱️ You have 60 seconds!",
+        f"🔐 *VERIFICATION REQUIRED*\n"
+        f"{'─' * 30}\n\n"
+        f"👤 Welcome, {user_display}!\n\n"
+        f"🧮 Solve this to join the chat:\n"
+        f"┌─────────────────┐\n"
+        f"│  `{question}`       │\n"
+        f"└─────────────────┘\n\n"
+        f"⏱ You have **60 seconds** to answer!\n"
+        f"❌ Wrong answer = kick!",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
@@ -609,8 +691,6 @@ async def send_captcha(ctx, chat_id, user_id, user_display):
         "answer": answer,
         "expire": expire
     }
-
-    # Auto-kick after 60s if not solved
     asyncio.create_task(captcha_timeout(ctx, chat_id, user_id, msg.message_id, expire))
 
 
@@ -623,11 +703,13 @@ async def captcha_timeout(ctx, chat_id, user_id, msg_id, expire):
             await asyncio.sleep(1)
             await ctx.bot.unban_chat_member(chat_id, user_id)
             await ctx.bot.delete_message(chat_id, msg_id)
-            await ctx.bot.send_message(
+            msg = await ctx.bot.send_message(
                 chat_id,
-                f"🚫 User {user_id} was kicked for failing captcha!",
+                f"⛔ *Captcha Failed*\n\n"
+                f"User `{user_id}` was kicked for not completing verification!",
                 parse_mode='Markdown'
             )
+            asyncio.create_task(delete_after(ctx, chat_id, msg.message_id, 10))
         except:
             pass
         CAPTCHA_PENDING[chat_id].pop(user_id, None)
@@ -635,7 +717,7 @@ async def captcha_timeout(ctx, chat_id, user_id, msg_id, expire):
 
 async def captcha_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    data  = query.data  # captcha_{chat_id}_{user_id}_{answer}
+    data  = query.data
     parts = data.split("_")
     if len(parts) < 4:
         return
@@ -644,7 +726,6 @@ async def captcha_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = int(chat_id_s)
     user_id = int(user_id_s)
 
-    # Only the correct user can answer
     if query.from_user.id != user_id:
         await query.answer("❌ This captcha is not for you!", show_alert=True)
         return
@@ -658,13 +739,195 @@ async def captcha_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         CAPTCHA_PENDING[chat_id].pop(user_id, None)
         await do_unmute(ctx, chat_id, user_id)
         await query.message.delete()
-        await ctx.bot.send_message(
+        msg = await ctx.bot.send_message(
             chat_id,
-            f"✅ Welcome! Captcha solved successfully! You can now chat.",
+            f"✅ *Verification Passed!*\n\n"
+            f"Welcome to the group! You can now chat freely. 🎉",
+            parse_mode='Markdown'
         )
-        await query.answer("✅ Correct!")
+        asyncio.create_task(delete_after(ctx, chat_id, msg.message_id, 15))
+        await query.answer("✅ Correct! Welcome!")
     else:
         await query.answer("❌ Wrong answer! Try again.", show_alert=True)
+
+
+# ═══════════════════════════════════════════════════════════
+#  MENU CALLBACK HANDLER
+# ═══════════════════════════════════════════════════════════
+async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data  = query.data
+
+    if data == "menu_main":
+        text = (
+            f"╔{'═'*38}╗\n"
+            f"║  🛡️  *SUHANI BOT v9.0*  ⚡  ║\n"
+            f"║  {'─'*36}  ║\n"
+            f"║  Premium Group Protection System  ║\n"
+            f"╚{'═'*38}╝\n\n"
+            f"Choose a category below 👇"
+        )
+        await query.edit_message_text(text, reply_markup=kb_main_menu(), parse_mode='Markdown')
+
+    elif data == "menu_user":
+        text = (
+            f"👤 *USER COMMANDS*\n"
+            f"{'─'*30}\n\n"
+            f"📌 `/warnings` — Check your warnings\n"
+            f"📌 `/help` — Show help menu\n"
+            f"📌 `/rule` — View group rules\n"
+            f"📌 `/id` — Your Telegram ID\n\n"
+            f"{'─'*30}\n"
+            f"_These commands work for all members._"
+        )
+        await query.edit_message_text(text, reply_markup=kb_back(), parse_mode='Markdown')
+
+    elif data == "menu_admin":
+        text = (
+            f"👮 *ADMIN COMMANDS*\n"
+            f"{'─'*30}\n\n"
+            f"🔇 `/mute [sec]` — Mute a user\n"
+            f"🔊 `/unmute` — Unmute a user\n"
+            f"🔨 `/ban` — Ban a user\n"
+            f"🔓 `/unban <id>` — Unban a user\n"
+            f"⚠️ `/warn` — Give a warning\n"
+            f"♻️ `/resetwarnings` — Reset warnings\n"
+            f"🗑️ `/del` — Delete replied message\n"
+            f"🧹 `/purge` — Bulk delete messages\n"
+            f"🧪 `/testmute` — Test 35s mute\n"
+            f"👑 `/immortal <id>` — Grant immunity\n"
+            f"💀 `/unimmortal <id>` — Remove immunity\n"
+            f"📋 `/immortals` — List immune users\n"
+        )
+        await query.edit_message_text(text, reply_markup=kb_back(), parse_mode='Markdown')
+
+    elif data == "menu_protection":
+        text = (
+            f"🛡️ *AUTO PROTECTIONS*\n"
+            f"{'─'*30}\n\n"
+            f"🤖 External bot usernames\n"
+            f"🔗 All Links & URLs\n"
+            f"↩️ Forwarded messages\n"
+            f"   ✅ _(Linked channel: allowed)_\n"
+            f"🔞 Adult emojis (2+ triggers)\n"
+            f"🚫 Bad words — Hindi + English\n"
+            f"⛔ Custom blacklist words\n"
+            f"🌊 Anti-Flood system\n"
+            f"🎭 Captcha for new members\n"
+            f"🗑️ Sticker/GIF auto-delete\n"
+        )
+        await query.edit_message_text(text, reply_markup=kb_back(), parse_mode='Markdown')
+
+    elif data == "menu_settings":
+        text = (
+            f"⚙️ *GROUP SETTINGS*\n"
+            f"{'─'*30}\n\n"
+            f"🔗 `/setlinked` — Set linked channel\n"
+            f"📜 `/setrules <text>` — Set group rules\n"
+            f"⛔ `/addblacklist <word>` — Add banned word\n"
+            f"✅ `/addwhitelist <word>` — Whitelist word\n"
+            f"📋 `/blacklist` — Show banned words\n"
+            f"📋 `/whitelist` — Show allowed words\n"
+            f"🗑️ `/sticker_delete <min>` — Sticker auto-del\n"
+            f"⏱️ `/autodelete <min>` — Auto-delete all\n"
+            f"🎭 `/captcha on|off` — Toggle captcha\n"
+        )
+        await query.edit_message_text(text, reply_markup=kb_back(), parse_mode='Markdown')
+
+    elif data == "menu_warns":
+        text = (
+            f"⚠️ *WARNING SYSTEM*\n"
+            f"{'─'*30}\n\n"
+            f"🟡 *W1* → 35s mute\n"
+            f"   ⏱ Expires in 6 hours\n\n"
+            f"🟠 *W2* → 60s mute\n"
+            f"   ⏱ Expires in 16 hours\n\n"
+            f"🔴 *W3* → 120s mute\n"
+            f"   ⏱ Expires in 27 hours\n\n"
+            f"💀 *W4* → 1 WEEK ban\n"
+            f"   🌐 Applied in ALL groups!\n"
+            f"   🔐 Admin must manually unmute.\n"
+        )
+        await query.edit_message_text(text, reply_markup=kb_back(), parse_mode='Markdown')
+
+    elif data == "menu_stats":
+        s = db.get_stats()
+        groups = db.get_all_groups()
+        gmutes = db.get_all_gmutes()
+        text = (
+            f"📊 *BOT STATISTICS*\n"
+            f"{'─'*30}\n\n"
+            f"👥 Groups Active: `{len(groups)}`\n"
+            f"⚠️ Warnings Given: `{s.get('warnings', 0)}`\n"
+            f"🔇 Mutes Executed: `{s.get('mutes', 0)}`\n"
+            f"📨 Messages Scanned: `{s.get('scanned', 0)}`\n"
+            f"🗓️ Global Mutes: `{len(gmutes)}`\n\n"
+            f"{'─'*30}\n"
+            f"🛡️ Status: {ICON_ON} *Active*\n"
+            f"🗄️ Database: {ICON_ON} *MongoDB*"
+        )
+        await query.edit_message_text(text, reply_markup=kb_back(), parse_mode='Markdown')
+
+    elif data == "show_rules":
+        # Try to get chat rules — fallback to defaults
+        rules_text = (
+            f"📜 *GROUP RULES*\n"
+            f"{'─'*30}\n\n"
+            f"🚫 *NOT ALLOWED:*\n\n"
+            f"  1️⃣  🤖 External bot usernames\n"
+            f"  2️⃣  🔗 Links & URLs\n"
+            f"  3️⃣  ↩️ Forwarded messages\n"
+            f"       ✅ _Linked channel: allowed_\n"
+            f"  4️⃣  🔞 Adult emojis (2+)\n"
+            f"  5️⃣  🗣️ Abusive language\n"
+            f"  6️⃣  ⛔ Blacklisted words\n"
+            f"  7️⃣  🌊 Spamming / Flooding\n\n"
+            f"{'─'*30}\n\n"
+            f"⚠️ *PUNISHMENT SCALE:*\n"
+            f"  • 1st offense → 35s mute\n"
+            f"  • 2nd offense → 60s mute\n"
+            f"  • 3rd offense → 120s mute\n"
+            f"  • 4th offense → 1 WEEK (ALL groups!)\n\n"
+            f"{'─'*30}\n"
+            f"✅ _Respect the rules & enjoy the group!_"
+        )
+        await query.answer()
+        await query.message.reply_text(rules_text, parse_mode='Markdown')
+        return
+
+    elif data == "show_id":
+        u = query.from_user
+        await query.answer(f"Your ID: {u.id}", show_alert=True)
+        return
+
+    elif data.startswith("unmute_"):
+        # unmute_{chat_id}_{user_id}
+        parts = data.split("_")
+        if len(parts) >= 3:
+            try:
+                c_id = int(parts[1])
+                u_id = int(parts[2])
+                if await is_adm(ctx, c_id, query.from_user.id) or query.from_user.id == OWNER_ID:
+                    await do_unmute(ctx, c_id, u_id)
+                    await query.answer("✅ User unmuted!", show_alert=True)
+                    await query.message.edit_reply_markup(reply_markup=None)
+                else:
+                    await query.answer("❌ Admins only!", show_alert=True)
+            except:
+                await query.answer("❌ Error!", show_alert=True)
+        return
+
+    elif data == "dismiss_warn":
+        if await is_adm(ctx, update.effective_chat.id if update.effective_chat else 0, query.from_user.id) or query.from_user.id == OWNER_ID:
+            try:
+                await query.message.delete()
+            except:
+                pass
+        else:
+            await query.answer("❌ Admins only!", show_alert=True)
+        return
+
+    await query.answer()
 
 
 # ═══════════════════════════════════════════════════════════
@@ -675,75 +938,39 @@ async def captcha_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     if update.effective_chat.type != "private":
-        return await update.message.reply_text("🤖 Bot Active! /help")
+        msg = await update.message.reply_text(
+            f"🛡️ *Suhani Bot* is active in this group!\n"
+            f"Use /help to see all commands.",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📋 Commands", callback_data="menu_admin"),
+                 InlineKeyboardButton("🛡️ Protections", callback_data="menu_protection")]
+            ])
+        )
+        return
 
     is_owner = u.id == OWNER_ID
-    owner_section = """
-👑 Owner Only:
-/broadcast <msg> — Broadcast to all groups
-/groups — Total groups count
-/stats — Bot statistics
-/globalmutes — Global mute list count
-/unglobalmute <id> — Remove global mute
-""" if is_owner else ""
+    owner_badge = f"\n👑 *Owner Panel*\n`/broadcast` `/groups` `/stats` `/globalmutes`\n" if is_owner else ""
 
-    text = f"""🛡️ **SUHANI GROUP PROTECTION BOT v8.0**
+    text = (
+        f"╔{'═'*38}╗\n"
+        f"║  🛡️  *SUHANI GROUP BOT v9.0*      ║\n"
+        f"╠{'═'*38}╣\n"
+        f"║  ⚡ MongoDB  •  Anti-Flood         ║\n"
+        f"║  🔗 Link Guard  •  👑 Immortal     ║\n"
+        f"║  🎭 Captcha  •  🗑️ Auto Delete    ║\n"
+        f"╚{'═'*38}╝\n\n"
+        f"Hey {u.first_name}! 👋\n"
+        f"I'm your *premium group protection bot*.\n\n"
+        f"Select a category to explore commands 👇"
+        f"{owner_badge}"
+    )
 
-━━━━━━━━━━━━━━━━━━━━━
-
-📋 **Commands:**
-
-👤 User:
-/warnings — Check warnings
-/help — Help menu
-/rule — Group rules
-/id — Your Telegram ID
-
-👮 Admin:
-/mute [sec] — Mute user (reply)
-/unmute — Unmute user (reply)
-/ban — Ban user (reply)
-/unban — Unban user (reply)
-/warn — Give warning (reply)
-/resetwarnings — Reset warnings (reply)
-/del — Delete message (reply)
-/purge — Delete messages from reply to now
-/testmute — Test 35s mute (reply)
-/setlinked — Set linked channel
-/setrules <text> — Set custom group rules
-/immortal <user_id> — Make user immune to rules
-/unimmortal <user_id> — Remove immortal status
-/immortals — List immortal users
-/addblacklist <word> — Add blacklist word
-/removeblacklist <word> — Remove blacklist word
-/blacklist — Show blacklist words
-/addwhitelist <word> — Add whitelist word
-/removewhitelist <word> — Remove whitelist
-/whitelist — Show whitelist
-/sticker_delete <min> — Auto delete stickers/GIF/emoji (0 = off)
-/autodelete <min> — Auto delete ALL messages (0 = off)
-/captcha on|off — Toggle captcha for new members
-{owner_section}
-━━━━━━━━━━━━━━━━━━━━━
-
-⚠️ **Warning System:**
-• W1 → 35s mute (6h expire)
-• W2 → 60s mute (16h expire)
-• W3 → 120s mute (27h expire)
-• W4 → 1 week (ALL Groups)
-
-🛡️ **Auto Protection:**
-• 🤖 External bot usernames
-• 🔗 ALL Links/URLs
-• ↩️ Forwards (except linked channel)
-• 🔞 Adult emojis (2+)
-• 🚫 Bad words (Hindi + English)
-• ⛔ Custom blacklist words
-• 🌊 Anti-Flood protection
-• 🎭 Captcha verification (optional)
-• 🗑️ Sticker/GIF auto-delete (optional)"""
-
-    await update.message.reply_text(text, parse_mode='Markdown')
+    await update.message.reply_text(
+        text,
+        reply_markup=kb_main_menu(),
+        parse_mode='Markdown'
+    )
 
 
 # ─── /help ──────────────────────────────────────────────────
@@ -755,40 +982,45 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def rule_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     custom = db.get_rules(chat_id)
+
     if custom:
-        await update.message.reply_text(
-            f"📜 **GROUP RULES**\n\n{custom}",
-            parse_mode='Markdown'
+        text = (
+            f"📜 *GROUP RULES*\n"
+            f"{'─'*30}\n\n"
+            f"{custom}\n\n"
+            f"{'─'*30}\n"
+            f"_Follow the rules to avoid punishment._"
         )
-        return
+    else:
+        text = (
+            f"📜 *GROUP RULES*\n"
+            f"{'─'*30}\n\n"
+            f"🚫 *NOT ALLOWED:*\n\n"
+            f"  1️⃣  🤖 External bot usernames\n"
+            f"  2️⃣  🔗 Links & URLs\n"
+            f"  3️⃣  ↩️ Forwarded messages\n"
+            f"       ✅ _Linked channel: allowed_\n"
+            f"  4️⃣  🔞 Adult emojis (2+)\n"
+            f"  5️⃣  🗣️ Abusive language\n"
+            f"  6️⃣  ⛔ Blacklisted words\n"
+            f"  7️⃣  🌊 Spamming / Flooding\n\n"
+            f"{'─'*30}\n\n"
+            f"⚠️ *PUNISHMENTS:*\n"
+            f"  🟡 1st → 35 sec mute\n"
+            f"  🟠 2nd → 60 sec mute\n"
+            f"  🔴 3rd → 120 sec mute\n"
+            f"  💀 4th → 1 WEEK (ALL groups!)\n\n"
+            f"{'─'*30}\n"
+            f"✅ _Respect the rules & enjoy!_"
+        )
 
-    text = """📜 **GROUP RULES**
-
-━━━━━━━━━━━━━━━━━━━━━
-
-🚫 **NOT ALLOWED:**
-
-1️⃣ 🤖 External bot usernames
-2️⃣ 🔗 ALL Links/URLs
-3️⃣ ↩️ Forwarded Messages
-   ✅ Linked channel forwards allowed
-4️⃣ 🔞 Adult Emojis (2+)
-5️⃣ 🗣️ Bad Language
-6️⃣ ⛔ Blacklisted words
-7️⃣ 🌊 Flooding / Spamming
-
-━━━━━━━━━━━━━━━━━━━━━
-
-⚠️ **PUNISHMENT:**
-• 1st → 35s mute
-• 2nd → 60s mute
-• 3rd → 120s mute
-• 4th → 1 WEEK (ALL GROUPS)
-
-━━━━━━━━━━━━━━━━━━━━━
-
-✅ Follow rules & enjoy!"""
-    await update.message.reply_text(text, parse_mode='Markdown')
+    await update.message.reply_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚠️ Warn System", callback_data="menu_warns")]
+        ])
+    )
 
 
 # ─── /setrules ───────────────────────────────────────────────
@@ -799,10 +1031,17 @@ async def setrules_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await sender_is_admin(ctx, update):
         return await update.message.reply_text("❌ Admins only!")
     if not ctx.args:
-        return await update.message.reply_text("❌ Usage: `/setrules <your rules text>`", parse_mode='Markdown')
+        return await update.message.reply_text(
+            "❌ Usage: `/setrules <your rules text>`",
+            parse_mode='Markdown'
+        )
     rules_text = ' '.join(ctx.args)
     db.set_rules(ch.id, rules_text)
-    await update.message.reply_text("✅ **Custom rules saved!**\n\nUse /rule to view.", parse_mode='Markdown')
+    await update.message.reply_text(
+        f"✅ *Custom rules saved!*\n\n"
+        f"Use /rule to view them anytime.",
+        parse_mode='Markdown'
+    )
 
 
 # ─── /id ────────────────────────────────────────────────────
@@ -810,11 +1049,16 @@ async def id_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     ch = update.effective_chat
     target = update.message.reply_to_message.from_user if update.message.reply_to_message else u
-    text = f"👤 **User Info**\n\n🆔 ID: `{target.id}`\n👤 Name: {target.first_name or ''}"
+    text = (
+        f"🆔 *User Information*\n"
+        f"{'─'*25}\n\n"
+        f"👤 Name: `{target.first_name or ''}`\n"
+        f"🔑 ID: `{target.id}`\n"
+    )
     if target.username:
-        text += f"\n🔗 Username: @{target.username}"
+        text += f"🔗 Username: @{target.username}\n"
     if ch.type != "private":
-        text += f"\n\n💬 **Group ID:** `{ch.id}`"
+        text += f"\n💬 *Group ID:* `{ch.id}`"
     await update.message.reply_text(text, parse_mode='Markdown')
 
 
@@ -827,7 +1071,6 @@ async def immortal_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await is_adm(ctx, ch.id, user.id) and user.id != OWNER_ID:
         return await update.message.reply_text("❌ Admins only!")
 
-    # Get target user_id from args or reply
     target_id = None
     target_name = None
 
@@ -835,7 +1078,10 @@ async def immortal_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         try:
             target_id = int(ctx.args[0])
         except ValueError:
-            return await update.message.reply_text("❌ Invalid user ID!\nUsage: `/immortal 1234567890`", parse_mode='Markdown')
+            return await update.message.reply_text(
+                "❌ Invalid user ID!\nUsage: `/immortal 1234567890`",
+                parse_mode='Markdown'
+            )
     elif update.message.reply_to_message:
         target_id = update.message.reply_to_message.from_user.id
         target_name = user_name(update.message.reply_to_message.from_user)
@@ -847,12 +1093,14 @@ async def immortal_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     db.add_immortal(ch.id, target_id)
     await update.message.reply_text(
-        f"👑 **IMMORTAL STATUS GRANTED!**\n\n"
-        f"🆔 User: `{target_id}`{f' ({target_name})' if target_name else ''}\n\n"
-        f"✅ This user is now exempt from ALL group rules!\n"
-        f"• Can send links, forwards, any content\n"
+        f"👑 *IMMORTAL STATUS GRANTED*\n"
+        f"{'─'*30}\n\n"
+        f"🆔 User: `{target_id}`"
+        f"{f'  ({target_name})' if target_name else ''}\n\n"
+        f"✅ This user is now *immune* to all rules!\n"
+        f"• Links, forwards, any content — allowed\n"
         f"• Bot will never act on their messages\n\n"
-        f"Use `/unimmortal {target_id}` to remove.",
+        f"Use `/unimmortal {target_id}` to revoke.",
         parse_mode='Markdown'
     )
 
@@ -875,11 +1123,15 @@ async def unimmortal_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif update.message.reply_to_message:
         target_id = update.message.reply_to_message.from_user.id
     else:
-        return await update.message.reply_text("❌ Usage: `/unimmortal <user_id>`", parse_mode='Markdown')
+        return await update.message.reply_text(
+            "❌ Usage: `/unimmortal <user_id>`",
+            parse_mode='Markdown'
+        )
 
     db.remove_immortal(ch.id, target_id)
     await update.message.reply_text(
-        f"✅ Immortal status removed for `{target_id}`.",
+        f"✅ Immortal status *removed* for `{target_id}`.\n"
+        f"They are now subject to group rules.",
         parse_mode='Markdown'
     )
 
@@ -896,9 +1148,12 @@ async def immortals_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not immortals:
         return await update.message.reply_text("👑 No immortal users in this group.")
 
-    lines = [f"• `{uid}`" for uid in immortals]
+    lines = [f"  • `{uid}`" for uid in immortals]
     await update.message.reply_text(
-        f"👑 **Immortal Users ({len(immortals)}):**\n\n" + "\n".join(lines),
+        f"👑 *IMMORTAL USERS*\n"
+        f"{'─'*25}\n\n"
+        + "\n".join(lines) +
+        f"\n\n_Total: {len(immortals)} user(s)_",
         parse_mode='Markdown'
     )
 
@@ -911,12 +1166,15 @@ async def addblacklist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await sender_is_admin(ctx, update):
         return await update.message.reply_text("❌ Admins only!")
     if not ctx.args:
-        return await update.message.reply_text("❌ Usage: `/addblacklist <word>`", parse_mode='Markdown')
-
+        return await update.message.reply_text(
+            "❌ Usage: `/addblacklist <word>`",
+            parse_mode='Markdown'
+        )
     word = ' '.join(ctx.args).lower().strip()
     db.add_blacklist(ch.id, word)
     await update.message.reply_text(
-        f"⛔ **Blacklisted:** `{word}`\n\nAnyone using this word will be warned!",
+        f"⛔ *Blacklisted:* `{word}`\n\n"
+        f"Anyone using this word will be *warned automatically*.",
         parse_mode='Markdown'
     )
 
@@ -929,11 +1187,16 @@ async def removeblacklist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await sender_is_admin(ctx, update):
         return await update.message.reply_text("❌ Admins only!")
     if not ctx.args:
-        return await update.message.reply_text("❌ Usage: `/removeblacklist <word>`", parse_mode='Markdown')
-
+        return await update.message.reply_text(
+            "❌ Usage: `/removeblacklist <word>`",
+            parse_mode='Markdown'
+        )
     word = ' '.join(ctx.args).lower().strip()
     db.remove_blacklist(ch.id, word)
-    await update.message.reply_text(f"✅ Removed from blacklist: `{word}`", parse_mode='Markdown')
+    await update.message.reply_text(
+        f"✅ Removed from blacklist: `{word}`",
+        parse_mode='Markdown'
+    )
 
 
 # ─── /blacklist ─────────────────────────────────────────────
@@ -946,9 +1209,14 @@ async def blacklist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     words = db.get_blacklist(ch.id)
     if not words:
-        return await update.message.reply_text("⛔ No custom blacklist words set.\n\nUse `/addblacklist <word>` to add.", parse_mode='Markdown')
+        return await update.message.reply_text(
+            "⛔ No custom blacklist words set.\n\nUse `/addblacklist <word>` to add.",
+            parse_mode='Markdown'
+        )
     await update.message.reply_text(
-        f"⛔ **Blacklisted Words ({len(words)}):**\n\n" + "\n".join(f"• `{w}`" for w in words),
+        f"⛔ *BLACKLISTED WORDS* ({len(words)})\n"
+        f"{'─'*25}\n\n"
+        + "\n".join(f"  • `{w}`" for w in words),
         parse_mode='Markdown'
     )
 
@@ -961,12 +1229,15 @@ async def addwhitelist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await sender_is_admin(ctx, update):
         return await update.message.reply_text("❌ Admins only!")
     if not ctx.args:
-        return await update.message.reply_text("❌ Usage: `/addwhitelist <word>`", parse_mode='Markdown')
-
+        return await update.message.reply_text(
+            "❌ Usage: `/addwhitelist <word>`",
+            parse_mode='Markdown'
+        )
     word = ' '.join(ctx.args).lower().strip()
     db.add_whitelist(ch.id, word)
     await update.message.reply_text(
-        f"✅ **Whitelisted:** `{word}`\n\nThis word will bypass blacklist detection.",
+        f"✅ *Whitelisted:* `{word}`\n\n"
+        f"This word will bypass blacklist detection.",
         parse_mode='Markdown'
     )
 
@@ -979,11 +1250,16 @@ async def removewhitelist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await sender_is_admin(ctx, update):
         return await update.message.reply_text("❌ Admins only!")
     if not ctx.args:
-        return await update.message.reply_text("❌ Usage: `/removewhitelist <word>`", parse_mode='Markdown')
-
+        return await update.message.reply_text(
+            "❌ Usage: `/removewhitelist <word>`",
+            parse_mode='Markdown'
+        )
     word = ' '.join(ctx.args).lower().strip()
     db.remove_whitelist(ch.id, word)
-    await update.message.reply_text(f"✅ Removed from whitelist: `{word}`", parse_mode='Markdown')
+    await update.message.reply_text(
+        f"✅ Removed from whitelist: `{word}`",
+        parse_mode='Markdown'
+    )
 
 
 # ─── /whitelist ─────────────────────────────────────────────
@@ -996,9 +1272,14 @@ async def whitelist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     words = db.get_whitelist(ch.id)
     if not words:
-        return await update.message.reply_text("✅ No whitelist words set.", parse_mode='Markdown')
+        return await update.message.reply_text(
+            "✅ No whitelist words set.",
+            parse_mode='Markdown'
+        )
     await update.message.reply_text(
-        f"✅ **Whitelisted Words ({len(words)}):**\n\n" + "\n".join(f"• `{w}`" for w in words),
+        f"✅ *WHITELISTED WORDS* ({len(words)})\n"
+        f"{'─'*25}\n\n"
+        + "\n".join(f"  • `{w}`" for w in words),
         parse_mode='Markdown'
     )
 
@@ -1014,28 +1295,36 @@ async def sticker_delete_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.args:
         g = db.get_group(ch.id)
         cur = g.get("sticker_delete_min")
-        status = f"{cur} min" if cur else "OFF"
+        status = f"{ICON_ON} {cur} min" if cur else f"{ICON_OFF} OFF"
         return await update.message.reply_text(
-            f"🗑️ **Sticker/GIF/Emoji Auto-Delete**\n\n"
-            f"Current: **{status}**\n\n"
-            f"Usage: `/sticker_delete 2` (2 min)\n"
-            f"To disable: `/sticker_delete 0`",
+            f"🗑️ *Sticker / GIF Auto-Delete*\n"
+            f"{'─'*30}\n\n"
+            f"Status: {status}\n\n"
+            f"Usage: `/sticker_delete 2` → enable (2 min)\n"
+            f"Disable: `/sticker_delete 0`",
             parse_mode='Markdown'
         )
 
     try:
         minutes = int(ctx.args[0].replace('min','').strip())
     except ValueError:
-        return await update.message.reply_text("❌ Usage: `/sticker_delete 2`", parse_mode='Markdown')
+        return await update.message.reply_text(
+            "❌ Usage: `/sticker_delete 2`",
+            parse_mode='Markdown'
+        )
 
     if minutes <= 0:
         db.update_group(ch.id, {"sticker_delete_min": None})
-        await update.message.reply_text("✅ Sticker auto-delete **disabled**.", parse_mode='Markdown')
+        await update.message.reply_text(
+            f"✅ Sticker auto-delete *disabled*.",
+            parse_mode='Markdown'
+        )
     else:
         db.update_group(ch.id, {"sticker_delete_min": minutes})
         await update.message.reply_text(
-            f"✅ **Sticker/GIF/Emoji auto-delete enabled!**\n\n"
-            f"⏱️ Stickers, GIFs, animated emojis will be deleted after **{minutes} min**.",
+            f"✅ *Sticker / GIF auto-delete enabled!*\n\n"
+            f"⏱ Stickers, GIFs & animated emojis\n"
+            f"will be deleted after *{minutes} min*.",
             parse_mode='Markdown'
         )
 
@@ -1051,29 +1340,36 @@ async def autodelete_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.args:
         g = db.get_group(ch.id)
         cur = g.get("autodelete_min")
-        status = f"{cur} min" if cur else "OFF"
+        status = f"{ICON_ON} {cur} min" if cur else f"{ICON_OFF} OFF"
         return await update.message.reply_text(
-            f"🗑️ **Auto-Delete ALL Messages**\n\n"
-            f"Current: **{status}**\n\n"
-            f"Usage: `/autodelete 5` (5 min)\n"
-            f"To disable: `/autodelete 0`\n\n"
-            f"⚠️ This deletes EVERY message after the set time!",
+            f"🗑️ *Auto-Delete ALL Messages*\n"
+            f"{'─'*30}\n\n"
+            f"Status: {status}\n\n"
+            f"Usage: `/autodelete 5` → enable (5 min)\n"
+            f"Disable: `/autodelete 0`\n\n"
+            f"⚠️ This deletes EVERY message!",
             parse_mode='Markdown'
         )
 
     try:
         minutes = int(ctx.args[0].replace('min','').strip())
     except ValueError:
-        return await update.message.reply_text("❌ Usage: `/autodelete 5`", parse_mode='Markdown')
+        return await update.message.reply_text(
+            "❌ Usage: `/autodelete 5`",
+            parse_mode='Markdown'
+        )
 
     if minutes <= 0:
         db.update_group(ch.id, {"autodelete_min": None})
-        await update.message.reply_text("✅ Auto-delete ALL messages **disabled**.", parse_mode='Markdown')
+        await update.message.reply_text(
+            f"✅ Auto-delete *disabled*.",
+            parse_mode='Markdown'
+        )
     else:
         db.update_group(ch.id, {"autodelete_min": minutes})
         await update.message.reply_text(
-            f"✅ **Auto-delete ALL messages enabled!**\n\n"
-            f"⏱️ Every message in this group will be deleted after **{minutes} min**.\n\n"
+            f"✅ *Auto-delete ALL messages enabled!*\n\n"
+            f"⏱ Every message will be deleted after *{minutes} min*.\n"
             f"⚠️ This keeps the group completely clean!",
             parse_mode='Markdown'
         )
@@ -1089,17 +1385,21 @@ async def captcha_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if not ctx.args or ctx.args[0].lower() not in ('on', 'off'):
         g = db.get_group(ch.id)
-        status = "ON ✅" if g.get("captcha") else "OFF ❌"
+        status = f"{ICON_ON} ON" if g.get("captcha") else f"{ICON_OFF} OFF"
         return await update.message.reply_text(
-            f"🎭 **Captcha Verification**\n\nCurrent: **{status}**\n\nUsage: `/captcha on` or `/captcha off`",
+            f"🎭 *Captcha Verification*\n"
+            f"{'─'*25}\n\n"
+            f"Status: {status}\n\n"
+            f"Toggle: `/captcha on` or `/captcha off`",
             parse_mode='Markdown'
         )
 
     val = ctx.args[0].lower() == 'on'
     db.update_group(ch.id, {"captcha": val})
-    state = "enabled ✅" if val else "disabled ❌"
+    state_icon = ICON_ON if val else ICON_OFF
+    state_text = "enabled" if val else "disabled"
     await update.message.reply_text(
-        f"🎭 Captcha verification **{state}**!\n\n"
+        f"🎭 Captcha {state_icon} *{state_text}!*\n\n"
         f"{'New members must solve a math question to chat.' if val else 'New members can chat freely.'}",
         parse_mode='Markdown'
     )
@@ -1123,16 +1423,21 @@ async def setlinked_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             except:
                 ch_name = str(chat.linked_chat_id)
             await update.message.reply_text(
-                f"✅ **Linked Channel Set!**\n\n📢 {ch_name}\n🆔 `{chat.linked_chat_id}`",
+                f"✅ *Linked Channel Set!*\n\n"
+                f"📢 {ch_name}\n"
+                f"🆔 `{chat.linked_chat_id}`\n\n"
+                f"_Forwards from this channel are now allowed._",
                 parse_mode='Markdown'
             )
         else:
-            # Manual set
             if ctx.args:
                 try:
                     cid = int(ctx.args[0])
                     db.set_linked_channel(ch.id, cid)
-                    await update.message.reply_text(f"✅ Linked channel set: `{cid}`", parse_mode='Markdown')
+                    await update.message.reply_text(
+                        f"✅ Linked channel set: `{cid}`",
+                        parse_mode='Markdown'
+                    )
                 except:
                     await update.message.reply_text("❌ Invalid channel ID!")
             else:
@@ -1145,7 +1450,10 @@ async def setlinked_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             try:
                 cid = int(ctx.args[0])
                 db.set_linked_channel(ch.id, cid)
-                await update.message.reply_text(f"✅ Linked channel set: `{cid}`", parse_mode='Markdown')
+                await update.message.reply_text(
+                    f"✅ Linked channel set: `{cid}`",
+                    parse_mode='Markdown'
+                )
             except:
                 await update.message.reply_text("❌ Invalid channel ID!")
 
@@ -1156,14 +1464,18 @@ async def testmute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if ch.type == "private": return
     if not await sender_is_admin(ctx, update): return
     if not update.message.reply_to_message:
-        return await update.message.reply_text("❌ Reply to user!")
+        return await update.message.reply_text("❌ Reply to a user!")
     tgt = update.message.reply_to_message.from_user
     if await is_adm(ctx, ch.id, tgt.id):
-        return await update.message.reply_text("❌ Can't mute admin!")
+        return await update.message.reply_text("❌ Can't mute an admin!")
     if await do_mute(ctx, ch.id, tgt.id, 35):
-        await update.message.reply_text(f"✅ {user_name(tgt)} muted 35s (test)")
+        await update.message.reply_text(
+            f"🧪 *Test Mute Applied*\n\n"
+            f"👤 {user_name(tgt)} — muted for *35 seconds*.",
+            parse_mode='Markdown'
+        )
     else:
-        await update.message.reply_text("❌ Failed! Make bot admin!")
+        await update.message.reply_text("❌ Failed! Make sure bot has admin rights.")
 
 
 # ─── /mute ──────────────────────────────────────────────────
@@ -1172,10 +1484,13 @@ async def mute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if ch.type == "private": return
     if not await sender_is_admin(ctx, update): return
     if not update.message.reply_to_message:
-        return await update.message.reply_text("❌ Reply to user! `/mute 60`", parse_mode='Markdown')
+        return await update.message.reply_text(
+            "❌ Reply to a user!\nUsage: `/mute 60`",
+            parse_mode='Markdown'
+        )
     tgt = update.message.reply_to_message.from_user
     if await is_adm(ctx, ch.id, tgt.id):
-        return await update.message.reply_text("❌ Can't mute admin!")
+        return await update.message.reply_text("❌ Can't mute an admin!")
     sec = 35
     if ctx.args:
         try:
@@ -1183,7 +1498,15 @@ async def mute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except:
             pass
     if await do_mute(ctx, ch.id, tgt.id, sec):
-        await update.message.reply_text(f"🔇 {user_name(tgt)} muted for {sec}s")
+        await update.message.reply_text(
+            f"🔇 *Muted!*\n\n"
+            f"👤 {user_name(tgt)}\n"
+            f"⏱ Duration: *{sec} seconds*",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔊 Unmute", callback_data=f"unmute_{ch.id}_{tgt.id}")]
+            ])
+        )
 
 
 # ─── /unmute ────────────────────────────────────────────────
@@ -1196,7 +1519,10 @@ async def unmute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     db.remove_gmute(tgt.id)
     if await do_unmute(ctx, ch.id, tgt.id):
         db.reset_warnings(ch.id, tgt.id)
-        await update.message.reply_text(f"🔊 {user_name(tgt)} unmuted!")
+        await update.message.reply_text(
+            f"🔊 *Unmuted!*\n\n👤 {user_name(tgt)} can now send messages.",
+            parse_mode='Markdown'
+        )
 
 
 # ─── /ban ───────────────────────────────────────────────────
@@ -1205,18 +1531,24 @@ async def ban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if ch.type == "private": return
     if not await sender_is_admin(ctx, update): return
     if not update.message.reply_to_message:
-        return await update.message.reply_text("❌ Reply to user to ban!")
+        return await update.message.reply_text("❌ Reply to a user to ban!")
     tgt = update.message.reply_to_message.from_user
     if await is_adm(ctx, ch.id, tgt.id):
-        return await update.message.reply_text("❌ Can't ban admin!")
-    reason = ' '.join(ctx.args) if ctx.args else "No reason given"
+        return await update.message.reply_text("❌ Can't ban an admin!")
+    reason = ' '.join(ctx.args) if ctx.args else "No reason provided"
     if await do_ban(ctx, ch.id, tgt.id):
         await update.message.reply_text(
-            f"🔨 **{user_name(tgt)} has been banned!**\n📋 Reason: {reason}",
-            parse_mode='Markdown'
+            f"🔨 *User Banned!*\n"
+            f"{'─'*25}\n\n"
+            f"👤 {user_name(tgt)}\n"
+            f"📋 Reason: _{reason}_",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔓 Unban", callback_data=f"unmute_{ch.id}_{tgt.id}")]
+            ])
         )
     else:
-        await update.message.reply_text("❌ Failed to ban. Make bot admin!")
+        await update.message.reply_text("❌ Failed to ban. Make bot an admin!")
 
 
 # ─── /unban ─────────────────────────────────────────────────
@@ -1229,13 +1561,19 @@ async def unban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         try:
             target_id = int(ctx.args[0])
         except:
-            return await update.message.reply_text("❌ Usage: `/unban <user_id>`", parse_mode='Markdown')
+            return await update.message.reply_text(
+                "❌ Usage: `/unban <user_id>`",
+                parse_mode='Markdown'
+            )
     elif update.message.reply_to_message:
         target_id = update.message.reply_to_message.from_user.id
     else:
-        return await update.message.reply_text("❌ Reply to user or give user ID!")
+        return await update.message.reply_text("❌ Reply to user or provide user ID!")
     if await do_unban(ctx, ch.id, target_id):
-        await update.message.reply_text(f"✅ `{target_id}` has been unbanned!", parse_mode='Markdown')
+        await update.message.reply_text(
+            f"✅ `{target_id}` has been *unbanned!*",
+            parse_mode='Markdown'
+        )
 
 
 # ─── /warn ──────────────────────────────────────────────────
@@ -1252,9 +1590,18 @@ async def warn_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await global_mute_user(ctx, tgt.id, user_name(tgt))
         return
     await do_mute(ctx, ch.id, tgt.id, MUTE_TIME[cnt])
+
+    # Build warning bar
+    bars = "🟥" * cnt + "⬜" * (4 - cnt)
     msg = await update.message.reply_text(
-        f"👤 {user_name(tgt)}\n\n📋 Reason: {reason}\n\n{WARN_MSG[cnt]}",
-        parse_mode='Markdown'
+        f"⚠️ *WARNING ISSUED*\n"
+        f"{'─'*25}\n\n"
+        f"👤 {user_name(tgt)}\n"
+        f"📋 Reason: _{reason}_\n\n"
+        f"Progress: {bars} `{cnt}/4`\n\n"
+        f"{WARN_MSG[cnt]}",
+        parse_mode='Markdown',
+        reply_markup=kb_warn_actions(ch.id, tgt.id)
     )
     asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 90))
 
@@ -1266,13 +1613,18 @@ async def warnings_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     tgt = update.message.reply_to_message.from_user if update.message.reply_to_message else update.effective_user
     if db.is_gmuted(tgt.id):
         return await update.message.reply_text(
-            f"👤 {user_name(tgt)}\n\n🗓️ **GLOBALLY MUTED** (1 week)",
+            f"👤 {user_name(tgt)}\n\n"
+            f"💀 *GLOBALLY MUTED* — 1 week ban active.",
             parse_mode='Markdown'
         )
     w = db.get_warnings(ch.id, tgt.id)
-    bar = "🟥" * w + "⬜" * (4 - w)
+    bars = "🟥" * w + "⬜" * (4 - w)
     await update.message.reply_text(
-        f"👤 {user_name(tgt)}\n📊 **{w}/4 warnings**\n{bar}",
+        f"📊 *Warning Status*\n"
+        f"{'─'*20}\n\n"
+        f"👤 {user_name(tgt)}\n"
+        f"Count: `{w}/4`\n"
+        f"Scale: {bars}",
         parse_mode='Markdown'
     )
 
@@ -1285,7 +1637,10 @@ async def reset_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not update.message.reply_to_message: return
     tgt = update.message.reply_to_message.from_user
     db.reset_warnings(ch.id, tgt.id)
-    await update.message.reply_text(f"✅ {user_name(tgt)} warnings reset!")
+    await update.message.reply_text(
+        f"✅ *Warnings reset!*\n\n👤 {user_name(tgt)} now has 0 warnings.",
+        parse_mode='Markdown'
+    )
 
 
 # ─── /del ───────────────────────────────────────────────────
@@ -1307,14 +1662,13 @@ async def purge_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await sender_is_admin(ctx, update):
         return await update.message.reply_text("❌ Admins only!")
     if not update.message.reply_to_message:
-        return await update.message.reply_text("❌ Reply to the message from where you want to start purge!")
+        return await update.message.reply_text("❌ Reply to the starting message!")
 
     from_msg_id = update.message.reply_to_message.message_id
     to_msg_id   = update.message.message_id
     deleted = 0
     failed  = 0
 
-    # Delete in batches
     ids_to_delete = list(range(from_msg_id, to_msg_id + 1))
     for i in range(0, len(ids_to_delete), 100):
         batch = ids_to_delete[i:i+100]
@@ -1326,7 +1680,13 @@ async def purge_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 failed += 1
         await asyncio.sleep(0.1)
 
-    msg = await ctx.bot.send_message(ch.id, f"🗑️ Purged **{deleted}** messages!", parse_mode='Markdown')
+    msg = await ctx.bot.send_message(
+        ch.id,
+        f"🧹 *Purge Complete!*\n\n"
+        f"🗑️ Deleted: `{deleted}` messages\n"
+        f"⚠️ Skipped: `{failed}` messages",
+        parse_mode='Markdown'
+    )
     asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 5))
 
 
@@ -1339,24 +1699,38 @@ async def broadcast_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     s = f = 0
     for gid in db.get_all_groups():
         try:
-            await ctx.bot.send_message(gid, f"📢 {msg_text}")
+            await ctx.bot.send_message(
+                gid,
+                f"📢 *BROADCAST*\n{'─'*20}\n\n{msg_text}",
+                parse_mode='Markdown'
+            )
             s += 1
             await asyncio.sleep(0.1)
         except:
             f += 1
-    await update.message.reply_text(f"✅ Sent: {s} | ❌ Failed: {f}")
+    await update.message.reply_text(
+        f"📢 *Broadcast Complete!*\n\n"
+        f"✅ Sent: `{s}`\n❌ Failed: `{f}`",
+        parse_mode='Markdown'
+    )
 
 
 async def groups_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     groups = db.get_all_groups()
-    await update.message.reply_text(f"📋 Total Groups: **{len(groups)}**", parse_mode='Markdown')
+    await update.message.reply_text(
+        f"👥 *Active Groups:* `{len(groups)}`",
+        parse_mode='Markdown'
+    )
 
 
 async def globalmutes_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     mutes = db.get_all_gmutes()
-    await update.message.reply_text(f"🗓️ Global Mutes: **{len(mutes)}**", parse_mode='Markdown')
+    await update.message.reply_text(
+        f"🗓️ *Global Mutes:* `{len(mutes)}`",
+        parse_mode='Markdown'
+    )
 
 
 async def unglobalmute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1366,7 +1740,10 @@ async def unglobalmute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         uid = int(ctx.args[0])
         db.remove_gmute(uid)
-        await update.message.reply_text(f"✅ `{uid}` removed from global mute!", parse_mode='Markdown')
+        await update.message.reply_text(
+            f"✅ `{uid}` removed from global mute!",
+            parse_mode='Markdown'
+        )
     except:
         await update.message.reply_text("❌ Invalid ID!")
 
@@ -1376,16 +1753,18 @@ async def stats_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     s = db.get_stats()
     groups = db.get_all_groups()
     gmutes = db.get_all_gmutes()
-    text = f"""📊 **BOT STATISTICS**
-
-👥 Groups: {len(groups)}
-⚠️ Warnings Given: {s.get('warnings', 0)}
-🔇 Mutes Done: {s.get('mutes', 0)}
-📨 Messages Scanned: {s.get('scanned', 0)}
-🗓️ Global Mutes: {len(gmutes)}
-
-🛡️ Status: Active ✅
-🗄️ Database: MongoDB ✅"""
+    text = (
+        f"📊 *BOT STATISTICS*\n"
+        f"{'═'*30}\n\n"
+        f"👥  Groups Active:       `{len(groups)}`\n"
+        f"⚠️  Warnings Given:     `{s.get('warnings', 0)}`\n"
+        f"🔇  Mutes Executed:     `{s.get('mutes', 0)}`\n"
+        f"📨  Messages Scanned:   `{s.get('scanned', 0)}`\n"
+        f"🗓️  Global Mutes:       `{len(gmutes)}`\n\n"
+        f"{'─'*30}\n"
+        f"🛡️ Status:  {ICON_ON} *Active*\n"
+        f"🗄️ Database: {ICON_ON} *MongoDB Connected*"
+    )
     await update.message.reply_text(text, parse_mode='Markdown')
 
 
@@ -1401,14 +1780,11 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if ch.type == "private": return
 
-    # Register group
     db.add_group(ch.id)
 
-    # Skip commands
     txt = msg.text or msg.caption or ""
     if txt.startswith('/'): return
 
-    # ── Sticker / GIF / Animated Emoji auto-delete ──────────
     g_settings = db.get_group(ch.id)
     sticker_del_min = g_settings.get("sticker_delete_min")
     autodel_min     = g_settings.get("autodelete_min")
@@ -1416,36 +1792,29 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     is_sticker_media = (
         msg.sticker or
         msg.animation or
-        (msg.text and any(ord(c) > 127000 for c in txt))  # animated emoji range
+        (msg.text and any(ord(c) > 127000 for c in txt))
     )
 
     if sticker_del_min and is_sticker_media:
         asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, sticker_del_min * 60))
 
-    # ── Auto-delete ALL messages ─────────────────────────────
     if autodel_min:
         asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, autodel_min * 60))
 
-    # ── Global mute check ────────────────────────────────────
     if db.is_gmuted(usr.id):
         asyncio.create_task(msg.delete())
         asyncio.create_task(do_mute(ctx, ch.id, usr.id, 604800))
         return
 
-    # ── Admin bypass ─────────────────────────────────────────
     if await is_adm(ctx, ch.id, usr.id):
         return
 
-    # ── Immortal user bypass ─────────────────────────────────
     if db.is_immortal(ch.id, usr.id):
         return
 
     db.inc_stat("scanned")
 
-    # ── Get group bots ───────────────────────────────────────
     group_bots = await get_group_bots(ctx, ch.id)
-
-    # ── Check violations ─────────────────────────────────────
     violation = await check_violations(msg, group_bots, ctx, ch.id)
 
     if violation:
@@ -1458,10 +1827,18 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         await do_mute(ctx, ch.id, usr.id, MUTE_TIME[cnt])
         viol_txt = VIOLATION_MSG.get(violation, "Rule violation!")
+        bars = "🟥" * cnt + "⬜" * (4 - cnt)
+
         notice = await ctx.bot.send_message(
             ch.id,
-            f"👤 {user_name(usr)}\n\n{viol_txt}\n\n{WARN_MSG[cnt]}",
-            parse_mode='Markdown'
+            f"⚠️ *RULE VIOLATION*\n"
+            f"{'─'*25}\n\n"
+            f"👤 {user_name(usr)}\n"
+            f"🚨 {viol_txt}\n\n"
+            f"Progress: {bars} `{cnt}/4`\n\n"
+            f"{WARN_MSG[cnt]}",
+            parse_mode='Markdown',
+            reply_markup=kb_warn_actions(ch.id, usr.id)
         )
         asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 90))
 
@@ -1472,7 +1849,6 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     for member in update.message.new_chat_members:
         if member.id == ctx.bot.id:
-            # Bot added to group
             db.add_group(update.effective_chat.id)
             try:
                 chat = await ctx.bot.get_chat(update.effective_chat.id)
@@ -1481,21 +1857,27 @@ async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             except:
                 pass
             await update.message.reply_text(
-                "🛡️ **Suhani Bot Active!**\n\n"
-                "⚠️ Make me admin with Delete & Restrict permissions!\n\n"
-                "🛡️ **Protection:**\n"
-                "• 🤖 External bots\n"
-                "• 🔗 ALL Links\n"
-                "• ↩️ Forwards (except linked channel)\n"
-                "• 🔞 Adult content\n"
-                "• ⛔ Blacklist words\n"
-                "• 🌊 Anti-flood\n"
-                "• 🎭 Captcha (optional)\n\n"
-                "📜 /rule | 🆔 /id | 📚 /help",
-                parse_mode='Markdown'
+                f"╔{'═'*38}╗\n"
+                f"║  🛡️  *SUHANI BOT ACTIVATED!*      ║\n"
+                f"╚{'═'*38}╝\n\n"
+                f"⚡ I'm now protecting this group!\n\n"
+                f"📋 *Please give me admin rights with:*\n"
+                f"  • Delete Messages\n"
+                f"  • Restrict Members\n\n"
+                f"{'─'*38}\n\n"
+                f"🛡️ *Auto Protection Active:*\n"
+                f"  🤖 External bots\n"
+                f"  🔗 ALL Links & URLs\n"
+                f"  ↩️ Forwarded messages\n"
+                f"  🔞 Adult content\n"
+                f"  ⛔ Blacklist words\n"
+                f"  🌊 Anti-Flood\n"
+                f"  🎭 Captcha _(optional)_\n\n"
+                f"Use /help to see all commands!",
+                parse_mode='Markdown',
+                reply_markup=kb_bot_added()
             )
         else:
-            # New human member
             g = db.get_group(update.effective_chat.id)
             if g.get("captcha"):
                 asyncio.create_task(
@@ -1503,15 +1885,20 @@ async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 )
             else:
                 msg = await update.message.reply_text(
-                    f"👋 Welcome {user_name(member)}!\n\n📜 Please read /rule"
+                    f"👋 *Welcome!*\n\n"
+                    f"Hey {user_name(member)}, glad to have you here!\n"
+                    f"Please read the group rules below. 👇",
+                    parse_mode='Markdown',
+                    reply_markup=kb_join_welcome()
                 )
-                asyncio.create_task(delete_after(ctx, update.effective_chat.id, msg.message_id, 30))
+                asyncio.create_task(
+                    delete_after(ctx, update.effective_chat.id, msg.message_id, 30)
+                )
 
 
 async def on_leave(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.message.left_chat_member.id == ctx.bot.id:
-        # Remove group from DB
-        pass  # Keep group data, just in case bot re-added
+        pass
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1521,7 +1908,7 @@ web_app = Flask(__name__)
 
 @web_app.route('/')
 def home():
-    return "🛡️ Suhani Bot v8.0 is running!"
+    return "🛡️ Suhani Bot v9.0 — Active!"
 
 @web_app.route('/health')
 def health():
@@ -1536,17 +1923,19 @@ def run_web():
 #  MAIN
 # ═══════════════════════════════════════════════════════════
 def main():
-    print("🛡️ Suhani Group Protection Bot v8.0")
-    print("⚡ MongoDB Database")
-    print("👑 Immortal Users System")
-    print("🎭 Captcha Verification")
-    print("🗑️ Sticker/Media Auto-Delete")
-    print("⛔ Custom Blacklist/Whitelist")
-    print("🌊 Anti-Flood Protection")
-    print("━" * 45)
+    print("╔" + "═"*43 + "╗")
+    print("║   🛡️  SUHANI GROUP PROTECTION BOT v9.0   ║")
+    print("╠" + "═"*43 + "╣")
+    print("║   ⚡ MongoDB Database Active              ║")
+    print("║   👑 Immortal Users System                ║")
+    print("║   🎭 Captcha Verification                 ║")
+    print("║   🗑️  Sticker/Media Auto-Delete           ║")
+    print("║   ⛔ Custom Blacklist/Whitelist           ║")
+    print("║   🌊 Anti-Flood Protection                ║")
+    print("╚" + "═"*43 + "╝")
     print(f"👑 Owner ID: {OWNER_ID}")
     print(f"🌐 Web Port: {os.environ.get('PORT', 8080)}")
-    print("━" * 45)
+    print("─" * 45)
 
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -1588,6 +1977,7 @@ def main():
 
     # ── Callback Queries ─────────────────────────────────────
     app.add_handler(CallbackQueryHandler(captcha_callback, pattern=r"^captcha_"))
+    app.add_handler(CallbackQueryHandler(menu_callback,    pattern=r"^(menu_|show_|unmute_|dismiss_)"))
 
     # ── Message Handlers ─────────────────────────────────────
     app.add_handler(MessageHandler(
@@ -1597,7 +1987,7 @@ def main():
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_join))
     app.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER,  on_leave))
 
-    print("✅ Bot Started!")
+    print("✅ Bot Started! Polling...")
     app.run_polling(drop_pending_updates=True)
 
 
