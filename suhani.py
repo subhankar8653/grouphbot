@@ -16,7 +16,7 @@
 ╚══════════════════════════════════════════════════╝
 """
 
-import re, os, asyncio, time, random, string
+import re, os, asyncio, time, random, string, json
 from datetime import datetime, timedelta
 from telegram import Update, ChatPermissions, ChatMember, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
@@ -24,13 +24,15 @@ from threading import Thread
 from flask import Flask
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
+import aiohttp
 
 # ═══════════════════════════════════════════════════════════
 #  CONFIG — Railway Environment Variables
 # ═══════════════════════════════════════════════════════════
-BOT_TOKEN   = os.environ.get("BOT_TOKEN", "")
-OWNER_ID    = int(os.environ.get("OWNER_ID", "0"))
-MONGO_URL   = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
+BOT_TOKEN        = os.environ.get("BOT_TOKEN", "")
+OWNER_ID         = int(os.environ.get("OWNER_ID", "0"))
+MONGO_URL        = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
+AI_API_KEY       = os.environ.get("AI_API_KEY", "")   # optional — AI moderation
 
 if not BOT_TOKEN:
     raise ValueError("❌ BOT_TOKEN environment variable not set!")
@@ -117,6 +119,7 @@ VIOLATION_MSG = {
     "flood":        "🌊 Slow down! Anti-flood triggered!",
     "stylish_font": "✍️ Stylish/fancy fonts are NOT allowed in this group!",
     "hidden_link":  "🔗 Hidden links in text are NOT allowed here!",
+    "ai_promo":     "🤖 AI detected promotional/spam content!",
 }
 
 # Usernames that are always exempt from @mention filtering
@@ -212,6 +215,170 @@ MAX_CACHE = 100
 CAPTCHA_PENDING = {}
 
 # ═══════════════════════════════════════════════════════════
+#  AI ENGINE — Groq (llama-3.1-8b-instant)
+# ═══════════════════════════════════════════════════════════
+
+AI_COOLDOWN: dict[int, float] = {}
+AI_COOLDOWN_SEC = 45   # per-user cooldown seconds
+
+# Per-chat repeat tracker: {chat_id: {user_id: {text: count}}}
+REPEAT_TRACKER: dict[int, dict[int, dict[str, int]]] = {}
+
+_AI_SESSION: aiohttp.ClientSession | None = None
+
+async def get_ai_session() -> aiohttp.ClientSession:
+    global _AI_SESSION
+    if _AI_SESSION is None or _AI_SESSION.closed:
+        _AI_SESSION = aiohttp.ClientSession()
+    return _AI_SESSION
+
+# ── Popular anime names — AI check se exempt ────────────────
+ANIME_NAMES = {
+    "naruto","boruto","bleach","onepiece","one piece","dragonball","dragon ball",
+    "attackontitan","attack on titan","aot","demonslayer","demon slayer","kimetsu",
+    "mha","myheroacademia","my hero academia","jujutsukaisen","jujutsu kaisen","jjk",
+    "fullmetal","fullmetal alchemist","fma","tokyoghoul","tokyo ghoul","sao",
+    "swordartonline","sword art online","blackclover","black clover","fairytail",
+    "fairy tail","hunterxhunter","hunter x hunter","hxh","deathnote","death note",
+    "onepunchman","one punch man","opm","rezero","re zero","re:zero","overlord",
+    "noragami","vinlandSaga","vinland saga","chainsawman","chainsaw man","csm",
+    "spy x family","spyxfamily","bocchi","bocchitherocket","bocchi the rock",
+    "bluelock","blue lock","tokyorevengers","tokyo revengers","acecombat",
+    "neongenesisevangelion","evangelion","eva","cowboybebop","cowboy bebop",
+    "steinsgate","steins gate","steins;gate","gurrenlagann","gurren lagann",
+    "madoka","puellamamadoka","codegeass","code geass","kaguya","kaguyasama",
+    "shimoneta","oregairu","monogatari","haikyuu","kuroko","kuroko no basket",
+    "aonoexorcist","ao no exorcist","blueexorcist","blue exorcist","inuyasha",
+    "ranma","drslump","toriko","yu-gi-oh","yugioh","beyblade","digimon",
+    "pokemon","pokémon","sailor moon","sailormoon","cardcaptorsakura","cardcaptor",
+    "dbs","super","dragonballsuper","dragonballz","dbz","toaru","toarumajutsu",
+    "noblesse","tower of god","towerofgod","solo leveling","sololeveling","sl",
+    "omniscient reader","omniscientreader","orv","a returners magic","returner",
+    "mushokutensei","mushoku tensei","tensura","tenseishitara slime","slime",
+    "konosuba","megumin","aqua","darkness","rezero","subaru","emilia","rem","ram",
+    "shield hero","shieldhero","tatenoYusha","rising shield hero","rising of the shield hero",
+}
+
+def is_anime_message(text: str) -> bool:
+    """Return True if message is mainly just an anime name — skip AI check."""
+    clean = text.lower().strip()
+    # Short message (<=30 chars) containing a known anime name
+    if len(clean) <= 30:
+        for name in ANIME_NAMES:
+            if name in clean:
+                return True
+    return False
+
+# ── Suhani system prompt ────────────────────────────────────
+SUHANI_SYSTEM = """You are Suhani, a friendly Telegram group protection bot.
+
+Your identity:
+- Name: Suhani
+- Created by: Lucky
+- Owner/Partners: @Suhanibots and @sbanime
+- You are a group protection bot AND an anime lover
+- You speak in Hinglish (Hindi + English mix) naturally, like a desi friend
+
+Your personality:
+- Friendly, helpful, slightly playful
+- Anime enthusiast — you know and love anime deeply
+- You help people who are confused or in trouble
+- You keep responses SHORT (2-4 lines max) — this is a chat, not an essay
+
+What you do:
+1. MODERATION: Detect if a message is promotional spam
+2. ANIME: Answer anime questions enthusiastically
+3. HELP: Help users who seem confused or ask questions
+4. IDENTITY: Answer questions about who you are
+
+When asked about your AI/technology — NEVER mention Groq, LLaMA, or any AI company. Say you are Suhani, made by Lucky.
+
+Response format — you must ALWAYS respond with JSON only:
+{
+  "action": "PROMO" | "SAFE" | "REPLY",
+  "reply": "your message here (only if action is REPLY, else empty string)"
+}
+
+action meanings:
+- PROMO: message is promotional/spam/advertising → will be deleted + warned
+- SAFE: normal message, ignore it
+- REPLY: message needs a response (question, anime topic, help needed, confusion, same anime name repeated)
+
+For REPLY, write in Hinglish, keep it short and friendly."""
+
+async def ai_check(text: str, user_id: int, chat_id: int, username: str = "") -> dict:
+    """
+    Returns dict: {"action": "PROMO"/"SAFE"/"REPLY", "reply": "..."}
+    Uses Groq API (llama-3.1-8b-instant).
+    """
+    if not AI_API_KEY:
+        return {"action": "SAFE", "reply": ""}
+
+    if not text or len(text.strip()) < 3:
+        return {"action": "SAFE", "reply": ""}
+
+    # Anime-only message — skip AI entirely
+    if is_anime_message(text):
+        # But still check repeat
+        return {"action": "SAFE", "reply": ""}
+
+    # Cooldown check
+    now = time.time()
+    last = AI_COOLDOWN.get(user_id, 0)
+    if now - last < AI_COOLDOWN_SEC:
+        return {"action": "SAFE", "reply": ""}
+    AI_COOLDOWN[user_id] = now
+
+    try:
+        session = await get_ai_session()
+        payload = {
+            "model": "llama-3.1-8b-instant",
+            "max_tokens": 120,
+            "temperature": 0.3,
+            "messages": [
+                {"role": "system", "content": SUHANI_SYSTEM},
+                {"role": "user", "content": text[:600]}
+            ],
+            "response_format": {"type": "json_object"}
+        }
+        async with session.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {AI_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=6)
+        ) as resp:
+            if resp.status != 200:
+                return {"action": "SAFE", "reply": ""}
+            data = await resp.json()
+            raw = data["choices"][0]["message"]["content"].strip()
+            result = json.loads(raw)
+            action = result.get("action", "SAFE").upper()
+            if action not in ("PROMO", "SAFE", "REPLY"):
+                action = "SAFE"
+            return {"action": action, "reply": result.get("reply", "")}
+    except Exception:
+        return {"action": "SAFE", "reply": ""}
+
+# ── Repeat message tracker ───────────────────────────────────
+def track_repeat(chat_id: int, user_id: int, text: str) -> int:
+    """Returns how many times this user sent same/similar text in this chat."""
+    clean = text.lower().strip()[:60]
+    if chat_id not in REPEAT_TRACKER:
+        REPEAT_TRACKER[chat_id] = {}
+    if user_id not in REPEAT_TRACKER[chat_id]:
+        REPEAT_TRACKER[chat_id][user_id] = {}
+    tracker = REPEAT_TRACKER[chat_id][user_id]
+    tracker[clean] = tracker.get(clean, 0) + 1
+    # cleanup old keys if too many
+    if len(tracker) > 20:
+        oldest = list(tracker.keys())[0]
+        del tracker[oldest]
+    return tracker[clean]
+
+# ═══════════════════════════════════════════════════════════
 #  MONGODB DATABASE
 # ═══════════════════════════════════════════════════════════
 class DB:
@@ -233,6 +400,7 @@ class DB:
         self.gblacklist = self.db["global_blacklist"]
         self.fbans    = self.db["fbans"]          # fban list
         self.powered  = self.db["powered_users"]  # users with /fban power
+        self.ad_exempt = self.db["autodel_exempt"] # bots exempt from autodelete
 
         if not self.stats_c.find_one({"_id": "global"}):
             self.stats_c.insert_one({"_id": "global", "warnings": 0, "mutes": 0, "scanned": 0, "gmutes": 0})
@@ -251,6 +419,7 @@ class DB:
             "sticker_delete_min": None,
             "autodelete_min": None,
             "captcha": False,
+            "aimod": True,    # AI moderation default ON (kaam tabhi karega jab API key ho)
         }}, upsert=True)
 
     def remove_group(self, chat_id):
@@ -443,6 +612,22 @@ class DB:
 
     def is_powered(self, user_id):
         return self.powered.find_one({"_id": user_id}) is not None
+
+    # ── Autodelete Exempt Bots (global) ──────────────────────
+    def add_ad_exempt(self, bot_id):
+        """Globally exempt a bot/user ID from autodelete."""
+        self.ad_exempt.update_one(
+            {"_id": bot_id}, {"$set": {"_id": bot_id}}, upsert=True
+        )
+
+    def remove_ad_exempt(self, bot_id):
+        self.ad_exempt.delete_one({"_id": bot_id})
+
+    def is_ad_exempt(self, bot_id):
+        return self.ad_exempt.find_one({"_id": bot_id}) is not None
+
+    def get_all_ad_exempt(self):
+        return [doc["_id"] for doc in self.ad_exempt.find()]
 
     def set_rules(self, chat_id, text):
         self.update_group(chat_id, {"rules": text})
@@ -1271,6 +1456,8 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"📢 `/broadcast <msg>` — Message all groups\n"
             f"👥 `/groups` `/stats` — Bot stats\n"
             f"🌐 `/gblacklist` `/gwhitelist` — Global word lists\n"
+            f"🤖 `/adexempt <id>` — Exempt bot from autodelete\n"
+            f"❌ `/unadexempt <id>` — Remove exemption\n"
         )
 
     admin_text += (
@@ -2472,6 +2659,141 @@ async def gunban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# ─── /adexempt ──────────────────────────────────────────────
+# ─── /aimod ─────────────────────────────────────────────────
+async def aimod_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Admin — toggle AI moderation on/off for this group."""
+    ch = update.effective_chat
+    if ch.type == "private":
+        return await update.message.reply_text("❌ Use in group!")
+    if not await sender_is_admin(ctx, update):
+        return await update.message.reply_text("❌ Admins only!")
+
+    if not AI_API_KEY:
+        return await update.message.reply_text(
+            "⚠️ *AI Moderation not configured!*\n\n"
+            "Owner needs to set `AI_API_KEY` environment variable on Railway.",
+            parse_mode='Markdown'
+        )
+
+    if not ctx.args or ctx.args[0].lower() not in ('on', 'off'):
+        g = db.get_group(ch.id)
+        status = "🟢 ON" if g.get("aimod", True) else "🔴 OFF"
+        return await update.message.reply_text(
+            f"🤖 *AI Moderation*\n"
+            f"{'─'*25}\n\n"
+            f"Status: {status}\n\n"
+            f"Toggle: `/aimod on` or `/aimod off`\n\n"
+            f"_AI detects promotional/spam messages that bypass normal filters._",
+            parse_mode='Markdown'
+        )
+
+    val = ctx.args[0].lower() == 'on'
+    db.update_group(ch.id, {"aimod": val})
+    state = "🟢 *enabled*" if val else "🔴 *disabled*"
+    await update.message.reply_text(
+        f"🤖 AI Moderation {state}!\n\n"
+        f"{'_AI will now detect promotions & spam automatically._' if val else '_AI checks are off for this group._'}",
+        parse_mode='Markdown'
+    )
+
+
+async def adexempt_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Owner only — globally exempt a bot/channel from autodelete.
+    Usage: /adexempt <user_id | @username>
+           /adexempt list
+    """
+    if update.effective_user.id != OWNER_ID:
+        return await update.message.reply_text("❌ Owner only command!")
+
+    if not ctx.args or ctx.args[0].lower() == "list":
+        exempts = db.get_all_ad_exempt()
+        if not exempts:
+            return await update.message.reply_text(
+                "📋 *Autodelete Exempt List* is empty.\n\n"
+                "Usage: `/adexempt <id | @username>` — add exempt\n"
+                "`/unadexempt <id>` — remove exempt\n"
+                "`/adexempt list` — show all",
+                parse_mode='Markdown'
+            )
+        lines = "\n".join(f"  • `{eid}`" for eid in exempts)
+        return await update.message.reply_text(
+            f"🤖 *Autodelete Exempt* ({len(exempts)})\n"
+            f"{'─'*28}\n\n"
+            f"{lines}\n\n"
+            f"_These bots/channels are NEVER auto-deleted._",
+            parse_mode='Markdown'
+        )
+
+    raw = ctx.args[0]
+    target_id = None
+
+    # Reply se bhi le sakte ho
+    if update.message.reply_to_message:
+        r = update.message.reply_to_message
+        target_id = r.from_user.id if r.from_user else (r.sender_chat.id if r.sender_chat else None)
+    else:
+        try:
+            target_id = int(raw)
+        except ValueError:
+            uname = raw.lstrip('@')
+            try:
+                chat_obj = await ctx.bot.get_chat(f"@{uname}")
+                target_id = chat_obj.id
+            except Exception:
+                return await update.message.reply_text(
+                    f"❌ Cannot find: `{raw}`", parse_mode='Markdown'
+                )
+
+    if not target_id:
+        return await update.message.reply_text("❌ Could not resolve ID!")
+
+    db.add_ad_exempt(target_id)
+    await update.message.reply_text(
+        f"✅ *Autodelete Exempt Added!*\n\n"
+        f"🤖 ID `{target_id}` — messages will *never* be auto-deleted.\n"
+        f"Use `/unadexempt {target_id}` to remove.",
+        parse_mode='Markdown'
+    )
+
+
+# ─── /unadexempt ────────────────────────────────────────────
+async def unadexempt_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Owner only — remove autodelete exemption."""
+    if update.effective_user.id != OWNER_ID:
+        return await update.message.reply_text("❌ Owner only command!")
+
+    target_id = None
+
+    if update.message.reply_to_message:
+        r = update.message.reply_to_message
+        target_id = r.from_user.id if r.from_user else (r.sender_chat.id if r.sender_chat else None)
+    elif ctx.args:
+        try:
+            target_id = int(ctx.args[0])
+        except ValueError:
+            uname = ctx.args[0].lstrip('@')
+            try:
+                chat_obj = await ctx.bot.get_chat(f"@{uname}")
+                target_id = chat_obj.id
+            except Exception:
+                return await update.message.reply_text(
+                    f"❌ Cannot find: `{ctx.args[0]}`", parse_mode='Markdown'
+                )
+    else:
+        return await update.message.reply_text(
+            "❌ Usage: `/unadexempt <id>`", parse_mode='Markdown'
+        )
+
+    db.remove_ad_exempt(target_id)
+    await update.message.reply_text(
+        f"✅ Exemption removed for `{target_id}`.\n"
+        f"_Their messages will now be auto-deleted normally._",
+        parse_mode='Markdown'
+    )
+
+
 async def stats_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     s = db.get_stats()
@@ -2514,6 +2836,48 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     txt = msg.text or msg.caption or ""
     if txt.startswith('/'): return
 
+    # ── "Suhani ban" natural language command ──────────────
+    # Admin group mein "suhani ban @user" ya "suhani ban userid" likh sakta hai
+    txt_lower = txt.lower().strip()
+    if txt_lower.startswith("suhani ban"):
+        caller_is_admin = await is_adm(ctx, ch.id, usr.id) or usr.id == OWNER_ID
+        if caller_is_admin:
+            target_id = None
+            target_name = None
+            # Reply se target lo
+            if msg.reply_to_message and msg.reply_to_message.from_user:
+                target_id = msg.reply_to_message.from_user.id
+                target_name = user_name(msg.reply_to_message.from_user)
+            else:
+                # "suhani ban @username" ya "suhani ban 123456"
+                parts = txt.split()
+                if len(parts) >= 3:
+                    raw = parts[2]
+                    try:
+                        target_id = int(raw)
+                    except ValueError:
+                        uname = raw.lstrip('@')
+                        try:
+                            chat_obj = await ctx.bot.get_chat(f"@{uname}")
+                            target_id = chat_obj.id
+                            target_name = uname
+                        except Exception:
+                            pass
+            if target_id and target_id != ctx.bot.id and target_id != OWNER_ID:
+                if not await is_adm(ctx, ch.id, target_id):
+                    await do_ban(ctx, ch.id, target_id)
+                    try:
+                        await msg.delete()
+                    except Exception:
+                        pass
+                    notice = await ctx.bot.send_message(
+                        ch.id,
+                        f"🔨 *Banned!*\n👤 {target_name or target_id} has been removed.",
+                        parse_mode='Markdown'
+                    )
+                    asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 15))
+            return
+
     g_settings = db.get_group(ch.id)
     sticker_del_min = g_settings.get("sticker_delete_min")
     autodel_min     = db.get_effective_autodelete(ch.id)   # global default ya per-group override
@@ -2537,12 +2901,25 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     is_admin = await is_adm(ctx, ch.id, usr.id)
 
-    # Sticker auto-delete: admin pe bhi lagega
-    if sticker_del_min and is_sticker_media:
+    # ── Autodelete logic ────────────────────────────────────
+    # Sender ID resolve karo — normal user ya channel/bot sender_chat
+    sender_id = usr.id if usr else None
+    sender_chat = getattr(msg, 'sender_chat', None)
+    if sender_chat:
+        sender_id = sender_chat.id
+
+    # Autodelete exempt check — globally exempted bot/channel IDs
+    ad_exempted = sender_id and db.is_ad_exempt(sender_id)
+
+    # Sticker auto-delete: sabpe lagega (admin bhi), sirf exempt nahi
+    if sticker_del_min and is_sticker_media and not ad_exempted:
         asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, sticker_del_min * 60))
 
-    # Global autodelete: admin ke NORMAL messages pe nahi lagega
-    if autodel_min and not is_admin:
+    # Global/per-group autodelete:
+    # - Admin ke messages delete NAHI honge (unka kaam hota hai)
+    # - Exempt bots/channels ke messages delete nahi honge
+    # - Baaki sab delete honge
+    if autodel_min and not is_admin and not ad_exempted:
         asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, autodel_min * 60))
 
     # Admin ke violations (link/username/etc.) check hote rahenge
@@ -2554,6 +2931,28 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     group_bots = await get_group_bots(ctx, ch.id)
     violation = await check_violations(msg, group_bots, ctx, ch.id)
+
+    # ── AI Engine — sirf tab jab local checks pass ho gaye ──
+    txt_for_ai = msg.text or msg.caption or ""
+    ai_result = {"action": "SAFE", "reply": ""}
+
+    if not violation and AI_API_KEY and g_settings.get("aimod", True) and not is_admin:
+        if txt_for_ai:
+            # Repeat tracker — ek hi cheez baar baar likh raha hai?
+            repeat_count = track_repeat(ch.id, usr.id, txt_for_ai)
+
+            # Anime name repeat — seedha reply, AI call nahi
+            if repeat_count >= 3 and is_anime_message(txt_for_ai):
+                anime_name = txt_for_ai.strip()
+                ai_result = {
+                    "action": "REPLY",
+                    "reply": f"Bhai {user_name(usr)}, *{anime_name}* baar baar likhne se kuch nahi hoga 😄 Ye anime available hai toh group mein already pata hoga!"
+                }
+            else:
+                ai_result = await ai_check(txt_for_ai, usr.id, ch.id, getattr(usr, 'username', '') or '')
+
+        if ai_result["action"] == "PROMO":
+            violation = "ai_promo"
 
     if violation:
         asyncio.create_task(msg.delete())
@@ -2580,6 +2979,19 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             reply_markup=kb_warn_actions(ch.id, usr.id)
         )
         asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 90))
+        return
+
+    # ── AI REPLY — question/help/anime/confusion ──
+    if ai_result["action"] == "REPLY" and ai_result.get("reply"):
+        try:
+            reply_msg = await msg.reply_text(
+                ai_result["reply"],
+                parse_mode='Markdown'
+            )
+            # Auto delete reply after 2 min to keep chat clean
+            asyncio.create_task(delete_after(ctx, ch.id, reply_msg.message_id, 120))
+        except Exception:
+            pass
 
 
 # ═══════════════════════════════════════════════════════════
@@ -2719,6 +3131,9 @@ def main():
     app.add_handler(CommandHandler("unpower",          unpower_cmd))
     app.add_handler(CommandHandler("fban",             fban_cmd))
     app.add_handler(CommandHandler("gunban",           gunban_cmd))
+    app.add_handler(CommandHandler("adexempt",         adexempt_cmd))
+    app.add_handler(CommandHandler("unadexempt",       unadexempt_cmd))
+    app.add_handler(CommandHandler("aimod",            aimod_cmd))
 
     # ── Callback Queries ─────────────────────────────────────
     app.add_handler(CallbackQueryHandler(captcha_callback, pattern=r"^captcha_"))
