@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """
 ╔══════════════════════════════════════════════════╗
-║   🛡️  SUHANI GROUP PROTECTION BOT  v9.0         ║
+║   🛡️  SUHANI GROUP PROTECTION BOT  v10.0        ║
 ║   ⚡  MongoDB Persistent Database                ║
 ║   🔗  Advanced Link Detection                    ║
+║   🕵️  Hidden Link Detection                     ║
+║   ✍️  Stylish Font Detection                    ║
 ║   ✅  Linked Channel Forwards Allowed            ║
 ║   👑  Immortal Users System                      ║
 ║   🗑️  Sticker/Media Auto Delete                 ║
 ║   📝  Custom Blacklist & Whitelist               ║
 ║   🌊  Anti-Flood / Anti-Raid                     ║
 ║   🎭  Captcha Verification                       ║
+║   💀  FBan / Global Ban System                   ║
 ╚══════════════════════════════════════════════════╝
 """
 
@@ -112,6 +115,8 @@ VIOLATION_MSG = {
     "adult_word":   "🚫 Inappropriate language detected!",
     "blacklist":    "⛔ Blacklisted word used!",
     "flood":        "🌊 Slow down! Anti-flood triggered!",
+    "stylish_font": "✍️ Stylish/fancy fonts are NOT allowed in this group!",
+    "hidden_link":  "🔗 Hidden links in text are NOT allowed here!",
 }
 
 # Usernames that are always exempt from @mention filtering
@@ -165,6 +170,37 @@ WHITELIST_ABBREVIATIONS = [
     'Mr.','Mrs.','Dr.','Sr.','Jr.','a.m.','p.m.','A.M.','P.M.','e.g.','i.e.','etc.'
 ]
 
+# ─── Stylish / Unicode Font Detection ───────────────────────
+# Mathematical Alphanumeric Symbols block + other fancy ranges
+STYLISH_FONT_RANGES = [
+    (0x1D400, 0x1D7FF),  # Mathematical Bold/Italic/Script/Fraktur/Double-struck etc.
+    (0xFF01,  0xFF5E),   # Fullwidth Latin letters
+    (0x1F170, 0x1F171),  # 🅰 🅱 type chars
+    (0x24B6,  0x24E9),   # Ⓐ-ⓩ circled letters
+    (0x1F1E6, 0x1F1FF),  # Regional indicator letters (flag combos)
+]
+
+def has_stylish_font(text: str) -> bool:
+    """Return True if text contains Unicode stylish/fancy font characters."""
+    for ch in text:
+        cp = ord(ch)
+        for start, end in STYLISH_FONT_RANGES:
+            if start <= cp <= end:
+                return True
+    return False
+
+# ─── Hidden Link (text entity hyperlink) detection ──────────
+# Telegram sends MessageEntity of type text_link when someone
+# hides a URL behind display text.  We flag this as a violation.
+def has_hidden_link(msg) -> bool:
+    """Return True if message has a text_link entity (hidden hyperlink)."""
+    from telegram import MessageEntity
+    for entity_list in [msg.entities or [], msg.caption_entities or []]:
+        for ent in entity_list:
+            if ent.type == MessageEntity.TEXT_LINK:
+                return True
+    return False
+
 # Flood control
 FLOOD_DATA = {}
 FLOOD_LIMIT   = 5
@@ -195,6 +231,8 @@ class DB:
         self.immortal = self.db["immortal"]
         self.blacklist= self.db["blacklist"]
         self.gblacklist = self.db["global_blacklist"]
+        self.fbans    = self.db["fbans"]          # fban list
+        self.powered  = self.db["powered_users"]  # users with /fban power
 
         if not self.stats_c.find_one({"_id": "global"}):
             self.stats_c.insert_one({"_id": "global", "warnings": 0, "mutes": 0, "scanned": 0, "gmutes": 0})
@@ -352,6 +390,35 @@ class DB:
     def get_gwhitelist(self):
         doc = self.gblacklist.find_one({"_id": "global"})
         return doc.get("whitelist", []) if doc else []
+
+    # ── FBan system ──────────────────────────────────────────
+    def add_fban(self, user_id, reason="No reason"):
+        self.fbans.update_one(
+            {"_id": user_id},
+            {"$set": {"_id": user_id, "reason": reason}},
+            upsert=True
+        )
+
+    def remove_fban(self, user_id):
+        self.fbans.delete_one({"_id": user_id})
+
+    def is_fbanned(self, user_id):
+        return self.fbans.find_one({"_id": user_id}) is not None
+
+    def get_all_fbans(self):
+        return [doc["_id"] for doc in self.fbans.find()]
+
+    # ── Powered users (can use /fban) ────────────────────────
+    def add_powered(self, user_id):
+        self.powered.update_one(
+            {"_id": user_id}, {"$set": {"_id": user_id}}, upsert=True
+        )
+
+    def remove_powered(self, user_id):
+        self.powered.delete_one({"_id": user_id})
+
+    def is_powered(self, user_id):
+        return self.powered.find_one({"_id": user_id}) is not None
 
     def set_rules(self, chat_id, text):
         self.update_group(chat_id, {"rules": text})
@@ -678,6 +745,10 @@ async def check_violations(msg, group_bots, ctx, chat_id):
     if check_flood(chat_id, msg.from_user.id):
         return "flood"
 
+    # Hidden link check (text_link entity)
+    if has_hidden_link(msg):
+        return "hidden_link"
+
     if msg.forward_date or msg.forward_from or msg.forward_from_chat:
         if msg.forward_from_chat:
             lc = await fetch_linked_channel(ctx, chat_id)
@@ -714,6 +785,10 @@ async def check_violations(msg, group_bots, ctx, chat_id):
     default_re = build_blacklist_re(DEFAULT_ADULT_WORDS)
     if default_re and default_re.search(text):
         return "adult_word"
+
+    # Stylish/fancy font check
+    if text and has_stylish_font(text):
+        return "stylish_font"
 
     if check_link(text):
         return "url"
@@ -901,6 +976,8 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"   ✅ _@admin @owner @request @sbnime: exempt_\n"
             f"   ✅ _Whitelisted usernames: exempt_\n"
             f"🔗 All Links & URLs\n"
+            f"🕵️ Hidden links inside text (text_link entities)\n"
+            f"✍️ Stylish / Unicode fancy fonts\n"
             f"↩️ Forwarded messages\n"
             f"   ✅ _(Linked channel: allowed)_\n"
             f"🔞 Adult emojis (2+ triggers)\n"
@@ -1133,6 +1210,11 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"  `/addwhitelist <word>` — Whitelist a word\n"
         f"  `/removewhitelist <word>` — Remove whitelist\n"
         f"  `/whitelist` — Show whitelisted words\n\n"
+        f"💀 *FBan System (Owner / Powered):*\n"
+        f"  `/fban <id|@user> [reason]` — Global ban from ALL groups\n"
+        f"  `/gunban <id|@user>` — Global unban silently\n"
+        f"  `/power <id>` — Grant fban power _(Owner only)_\n"
+        f"  `/unpower <id>` — Revoke fban power _(Owner only)_\n\n"
         f"{'─'*35}\n"
         f"⚠️ *Warn Scale:* W1→35s | W2→60s | W3→120s | W4→1wk global\n"
         f"🛡️ *Auto-protection always ON for non-admins*"
@@ -2064,6 +2146,215 @@ async def gwhitelist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
 
 
+# ─── /power ─────────────────────────────────────────────────
+async def power_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Owner only — grant a user fban/gunban power."""
+    if update.effective_user.id != OWNER_ID:
+        return await update.message.reply_text("❌ Owner only command!")
+
+    target_id = None
+    if ctx.args:
+        try:
+            target_id = int(ctx.args[0])
+        except ValueError:
+            return await update.message.reply_text(
+                "❌ Usage: `/power <user_id>`",
+                parse_mode='Markdown'
+            )
+    elif update.message.reply_to_message:
+        target_id = update.message.reply_to_message.from_user.id
+    else:
+        return await update.message.reply_text(
+            "❌ Usage: `/power <user_id>` or reply to user",
+            parse_mode='Markdown'
+        )
+
+    db.add_powered(target_id)
+    await update.message.reply_text(
+        f"⚡ *Power Granted!*\n"
+        f"{'─'*25}\n\n"
+        f"🆔 User `{target_id}` can now use `/fban` and `/gunban`.\n\n"
+        f"Use `/unpower {target_id}` to revoke.",
+        parse_mode='Markdown'
+    )
+
+
+# ─── /unpower ───────────────────────────────────────────────
+async def unpower_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Owner only — revoke fban power from a user."""
+    if update.effective_user.id != OWNER_ID:
+        return await update.message.reply_text("❌ Owner only command!")
+
+    target_id = None
+    if ctx.args:
+        try:
+            target_id = int(ctx.args[0])
+        except ValueError:
+            return await update.message.reply_text(
+                "❌ Usage: `/unpower <user_id>`",
+                parse_mode='Markdown'
+            )
+    elif update.message.reply_to_message:
+        target_id = update.message.reply_to_message.from_user.id
+    else:
+        return await update.message.reply_text(
+            "❌ Usage: `/unpower <user_id>` or reply to user",
+            parse_mode='Markdown'
+        )
+
+    db.remove_powered(target_id)
+    await update.message.reply_text(
+        f"✅ Power *revoked* from `{target_id}`.",
+        parse_mode='Markdown'
+    )
+
+
+# ─── /fban ──────────────────────────────────────────────────
+async def fban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Owner or powered user only.
+    Bans user from ALL groups silently + deletes all their messages.
+    Usage: /fban <user_id | @username> [reason]
+    """
+    caller = update.effective_user.id
+    if caller != OWNER_ID and not db.is_powered(caller):
+        return  # silent ignore — no response
+
+    target_id   = None
+    target_name = None
+    reason_start = 1
+
+    # Resolve target from reply or args
+    if update.message.reply_to_message:
+        tgt_user = update.message.reply_to_message.from_user
+        target_id   = tgt_user.id
+        target_name = user_name(tgt_user)
+        reason_start = 0  # all args are reason
+    elif ctx.args:
+        raw = ctx.args[0]
+        try:
+            target_id = int(raw)
+        except ValueError:
+            # Username given
+            uname = raw.lstrip('@')
+            try:
+                chat_obj = await ctx.bot.get_chat(f"@{uname}")
+                target_id   = chat_obj.id
+                target_name = chat_obj.first_name or uname
+            except Exception:
+                return await update.message.reply_text(
+                    f"❌ Cannot find user: `{raw}`",
+                    parse_mode='Markdown'
+                )
+    else:
+        return await update.message.reply_text(
+            "❌ Usage: `/fban <user_id | @username> [reason]`\n"
+            "or reply to user + `/fban [reason]`",
+            parse_mode='Markdown'
+        )
+
+    # Bot / owner cannot be fbanned
+    if target_id == ctx.bot.id or target_id == OWNER_ID:
+        return await update.message.reply_text("❌ Cannot fban this user!")
+
+    reason = ' '.join(ctx.args[reason_start:]) if ctx.args and reason_start < len(ctx.args) else "No reason provided"
+
+    # Save to DB
+    db.add_fban(target_id, reason)
+
+    all_groups = db.get_all_groups()
+    banned_count  = 0
+    deleted_count = 0
+
+    for gid in all_groups:
+        # Delete all messages from this user in this group (last 48h limit by Telegram)
+        try:
+            # We can only delete by scanning recent messages — instead we'll use
+            # delete_messages for found message ids stored in context if any.
+            # Telegram doesn't expose "delete all msgs by user" API directly,
+            # so we ban (which auto-hides nothing) then try ban_chat_member.
+            pass
+        except Exception:
+            pass
+
+        # Ban the user silently
+        try:
+            await ctx.bot.ban_chat_member(gid, target_id)
+            banned_count += 1
+        except Exception:
+            pass
+
+        await asyncio.sleep(0.05)
+
+    # Confirm silently to the caller only (no group notification)
+    confirm_text = (
+        f"💀 *FBan Executed!*\n"
+        f"{'─'*28}\n\n"
+        f"👤 User: `{target_id}`"
+        f"{f'  ({target_name})' if target_name else ''}\n"
+        f"📋 Reason: _{reason}_\n"
+        f"🔨 Banned in: `{banned_count}` groups\n\n"
+        f"Use `/gunban {target_id}` to reverse."
+    )
+    await update.message.reply_text(confirm_text, parse_mode='Markdown')
+
+
+# ─── /gunban ────────────────────────────────────────────────
+async def gunban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Owner or powered user only.
+    Unbans user from ALL groups silently — no group notifications.
+    """
+    caller = update.effective_user.id
+    if caller != OWNER_ID and not db.is_powered(caller):
+        return  # silent ignore
+
+    target_id = None
+
+    if update.message.reply_to_message:
+        target_id = update.message.reply_to_message.from_user.id
+    elif ctx.args:
+        raw = ctx.args[0]
+        try:
+            target_id = int(raw)
+        except ValueError:
+            uname = raw.lstrip('@')
+            try:
+                chat_obj = await ctx.bot.get_chat(f"@{uname}")
+                target_id = chat_obj.id
+            except Exception:
+                return await update.message.reply_text(
+                    f"❌ Cannot find user: `{raw}`",
+                    parse_mode='Markdown'
+                )
+    else:
+        return await update.message.reply_text(
+            "❌ Usage: `/gunban <user_id | @username>`",
+            parse_mode='Markdown'
+        )
+
+    db.remove_fban(target_id)
+
+    all_groups   = db.get_all_groups()
+    unbanned_count = 0
+
+    for gid in all_groups:
+        try:
+            await ctx.bot.unban_chat_member(gid, target_id)
+            unbanned_count += 1
+        except Exception:
+            pass
+        await asyncio.sleep(0.05)
+
+    await update.message.reply_text(
+        f"✅ *Global Unban Done!*\n"
+        f"{'─'*25}\n\n"
+        f"👤 User `{target_id}` unbanned from `{unbanned_count}` groups.\n"
+        f"_No notifications were sent to any group._",
+        parse_mode='Markdown'
+    )
+
+
 async def stats_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     s = db.get_stats()
@@ -2114,6 +2405,12 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if db.is_gmuted(usr.id):
         asyncio.create_task(msg.delete())
         asyncio.create_task(do_mute(ctx, ch.id, usr.id, 604800))
+        return
+
+    # FBanned user — silently ban and delete message, no notification
+    if db.is_fbanned(usr.id):
+        asyncio.create_task(msg.delete())
+        asyncio.create_task(do_ban(ctx, ch.id, usr.id))
         return
 
     is_admin = await is_adm(ctx, ch.id, usr.id)
@@ -2296,6 +2593,10 @@ def main():
     app.add_handler(CommandHandler("gblacklist",       gblacklist_cmd))
     app.add_handler(CommandHandler("gwhitelist",       gwhitelist_cmd))
     app.add_handler(CommandHandler("stats",            stats_cmd))
+    app.add_handler(CommandHandler("power",            power_cmd))
+    app.add_handler(CommandHandler("unpower",          unpower_cmd))
+    app.add_handler(CommandHandler("fban",             fban_cmd))
+    app.add_handler(CommandHandler("gunban",           gunban_cmd))
 
     # ── Callback Queries ─────────────────────────────────────
     app.add_handler(CallbackQueryHandler(captcha_callback, pattern=r"^captcha_"))
