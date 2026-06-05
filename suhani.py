@@ -265,6 +265,30 @@ class DB:
     def get_all_groups(self):
         return [g["_id"] for g in self.groups.find({}, {"_id": 1})]
 
+    # ── Global default autodelete (owner sets in DM) ──────────
+    def set_global_autodelete(self, minutes):
+        """Set default autodelete for ALL groups (owner DM command)."""
+        self.stats_c.update_one(
+            {"_id": "global"},
+            {"$set": {"global_autodelete_min": minutes}},
+            upsert=True
+        )
+
+    def get_global_autodelete(self):
+        doc = self.stats_c.find_one({"_id": "global"})
+        return doc.get("global_autodelete_min") if doc else None
+
+    def get_effective_autodelete(self, chat_id):
+        """
+        Per-group override > global default.
+        Returns None if both are unset.
+        """
+        group = self.get_group(chat_id)
+        per_group = group.get("autodelete_min")
+        if per_group is not None:
+            return per_group          # group admin ne set kiya
+        return self.get_global_autodelete()  # owner ka global default
+
     def set_linked_channel(self, chat_id, channel_id):
         self.update_group(chat_id, {"linked_channel": channel_id})
 
@@ -742,6 +766,9 @@ def kb_bot_added():
 async def check_violations(msg, group_bots, ctx, chat_id):
     text = msg.text or msg.caption or ""
 
+    if not msg.from_user:
+        return None
+
     if check_flood(chat_id, msg.from_user.id):
         return "flood"
 
@@ -926,29 +953,29 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if data == "menu_main":
         text = (
-            f"╔{'═'*38}╗\n"
-            f"║  🛡️  *SUHANI BOT v9.0*  ⚡  ║\n"
-            f"║  {'─'*36}  ║\n"
-            f"║  Premium Group Protection System  ║\n"
-            f"╚{'═'*38}╝\n\n"
+            f"🛡️ *SUHANI BOT v10.0*\n\n"
             f"Choose a category below 👇"
         )
         await query.edit_message_text(text, reply_markup=kb_main_menu(), parse_mode='Markdown')
 
     elif data == "menu_user":
         text = (
-            f"👤 *USER COMMANDS*\n"
-            f"{'─'*30}\n\n"
-            f"📌 `/warnings` — Check your warnings\n"
-            f"📌 `/help` — Show help menu\n"
-            f"📌 `/rule` — View group rules\n"
-            f"📌 `/id` — Your Telegram ID\n\n"
-            f"{'─'*30}\n"
+            f"👤 *YOUR COMMANDS*\n"
+            f"{'─'*28}\n\n"
+            f"📜 `/rules` — View group rules\n"
+            f"⚠️ `/warnings` — Check your warnings\n"
+            f"🆔 `/id` — Your Telegram ID\n\n"
+            f"{'─'*28}\n"
             f"_These commands work for all members._"
         )
         await query.edit_message_text(text, reply_markup=kb_back(), parse_mode='Markdown')
 
     elif data == "menu_admin":
+        # Only admins / owner can see this panel
+        ch_id = update.effective_chat.id if update.effective_chat else 0
+        if query.from_user.id != OWNER_ID and not await is_adm(ctx, ch_id, query.from_user.id):
+            await query.answer("❌ Admins only!", show_alert=True)
+            return
         text = (
             f"👮 *ADMIN COMMANDS*\n"
             f"{'─'*30}\n\n"
@@ -1133,98 +1160,125 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ─── /start ─────────────────────────────────────────────────
 async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    u = update.effective_user
-    if update.effective_chat.type != "private":
-        msg = await update.message.reply_text(
-            f"🛡️ *Suhani Bot* is active in this group!\n"
-            f"Use /help to see all commands.",
-            parse_mode='Markdown',
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📋 Commands", callback_data="menu_admin"),
-                 InlineKeyboardButton("🛡️ Protections", callback_data="menu_protection")]
-            ])
+    u  = update.effective_user
+    ch = update.effective_chat
+
+    # Group me /start → sirf ek line
+    if ch.type != "private":
+        await update.message.reply_text(
+            f"🛡️ *Suhani Bot* is active! Use /help for commands.",
+            parse_mode='Markdown'
         )
         return
 
-    is_owner = u.id == OWNER_ID
-    owner_badge = f"\n👑 *Owner Panel*\n`/broadcast` `/groups` `/stats` `/globalmutes`\n" if is_owner else ""
+    # DM — Owner panel
+    if u.id == OWNER_ID:
+        text = (
+            f"╔{'═'*36}╗\n"
+            f"║  🛡️  *SUHANI GROUP BOT v10.0*    ║\n"
+            f"╚{'═'*36}╝\n\n"
+            f"👑 *Owner Panel*\n"
+            f"{'─'*30}\n\n"
+            f"🌐 `/autodelete <min>` — Global auto-delete default\n"
+            f"📢 `/broadcast <msg>` — Message all groups\n"
+            f"👥 `/groups` — Active group count\n"
+            f"📊 `/stats` — Full bot stats\n"
+            f"🗓️ `/globalmutes` — Global mute list\n"
+            f"💀 `/fban <id> [reason]` — Global ban\n"
+            f"✅ `/gunban <id>` — Global unban\n"
+            f"⚡ `/power <id>` — Grant fban power\n"
+            f"🔻 `/unpower <id>` — Revoke fban power\n"
+            f"🌐 `/gblacklist` — Global blacklist\n"
+            f"✅ `/gwhitelist` — Global whitelist\n"
+        )
+        await update.message.reply_text(text, parse_mode='Markdown')
+        return
 
+    # DM — Regular user: sirf unke kaam ki cheezein
     text = (
-        f"╔{'═'*38}╗\n"
-        f"║  🛡️  *SUHANI GROUP BOT v9.0*      ║\n"
-        f"╠{'═'*38}╣\n"
-        f"║  ⚡ MongoDB  •  Anti-Flood         ║\n"
-        f"║  🔗 Link Guard  •  👑 Immortal     ║\n"
-        f"║  🎭 Captcha  •  🗑️ Auto Delete    ║\n"
-        f"╚{'═'*38}╝\n\n"
-        f"Hey {u.first_name}! 👋\n"
-        f"I'm your *premium group protection bot*.\n\n"
-        f"Select a category to explore commands 👇"
-        f"{owner_badge}"
+        f"👋 *Hey {u.first_name}!*\n\n"
+        f"I protect Telegram groups. Here's what you can do:\n\n"
+        f"{'─'*28}\n"
+        f"📜 `/rules` — View group rules\n"
+        f"⚠️ `/warnings` — Check your warnings\n"
+        f"🆔 `/id` — Your Telegram ID\n"
+        f"{'─'*28}\n\n"
+        f"_Add me to your group and make me admin to get started!_"
     )
-
-    await update.message.reply_text(
-        text,
-        reply_markup=kb_main_menu(),
-        parse_mode='Markdown'
-    )
+    await update.message.reply_text(text, parse_mode='Markdown')
 
 
 # ─── /help ──────────────────────────────────────────────────
 async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    u = update.effective_user
-    is_group = update.effective_chat.type != "private"
+    u  = update.effective_user
+    ch = update.effective_chat
 
-    text = (
-        f"🛡️ *SUHANI BOT — HELP MENU*\n"
-        f"{'─'*35}\n\n"
-        f"👤 *User Commands:*\n"
-        f"  `/help` — This menu\n"
-        f"  `/rules` — View group rules\n"
-        f"  `/warnings` — Check your warnings\n"
-        f"  `/id` — Your Telegram ID\n\n"
-        f"👮 *Admin Commands:*\n"
-        f"  `/mute [sec]` — Mute a user (reply)\n"
-        f"  `/unmute` — Unmute a user (reply)\n"
-        f"  `/ban [reason]` — Ban a user (reply)\n"
-        f"  `/unban <id>` — Unban a user\n"
-        f"  `/warn [reason]` — Warn a user (reply)\n"
-        f"  `/resetwarnings` — Reset user warnings (reply)\n"
-        f"  `/del` — Delete a message (reply)\n"
-        f"  `/purge` — Bulk delete from message (reply)\n"
-        f"  `/testmute` — Test 35s mute (reply)\n\n"
-        f"👑 *Immortal System:*\n"
-        f"  `/immortal <id>` — Grant rule immunity\n"
-        f"  `/unimmortal <id>` — Remove immunity\n"
-        f"  `/immortals` — List immune users\n\n"
-        f"⚙️ *Group Settings:*\n"
-        f"  `/setrules <text>` — Set custom rules\n"
-        f"  `/setlinked` — Set linked channel\n"
-        f"  `/captcha on|off` — Toggle captcha\n"
-        f"  `/sticker_delete <min>` — Sticker auto-delete\n"
-        f"  `/autodelete <min>` — Auto-delete all messages\n\n"
-        f"⛔ *Blacklist / Whitelist:*\n"
-        f"  `/addblacklist <word>` — Ban a word\n"
-        f"  `/removeblacklist <word>` — Remove ban\n"
-        f"  `/blacklist` — Show banned words\n"
-        f"  `/addwhitelist <word>` — Whitelist a word\n"
-        f"  `/removewhitelist <word>` — Remove whitelist\n"
-        f"  `/whitelist` — Show whitelisted words\n\n"
-        f"💀 *FBan System (Owner / Powered):*\n"
-        f"  `/fban <id|@user> [reason]` — Global ban from ALL groups\n"
-        f"  `/gunban <id|@user>` — Global unban silently\n"
-        f"  `/power <id>` — Grant fban power _(Owner only)_\n"
-        f"  `/unpower <id>` — Revoke fban power _(Owner only)_\n\n"
-        f"{'─'*35}\n"
-        f"⚠️ *Warn Scale:* W1→35s | W2→60s | W3→120s | W4→1wk global\n"
-        f"🛡️ *Auto-protection always ON for non-admins*"
+    # Check if caller is admin (in group) or owner
+    is_owner = u.id == OWNER_ID
+    in_group = ch.type != "private"
+    caller_is_admin = is_owner or (in_group and await is_adm(ctx, ch.id, u.id))
+
+    # ── User-only help (non-admins) ──────────────────────────
+    if not caller_is_admin:
+        text = (
+            f"ℹ️ *Commands you can use:*\n"
+            f"{'─'*28}\n\n"
+            f"📜 `/rules` — View group rules\n"
+            f"⚠️ `/warnings` — Check your warnings\n"
+            f"🆔 `/id` — Your Telegram ID\n\n"
+            f"{'─'*28}\n"
+            f"_Violations auto-detected. Stay within rules!_"
+        )
+        return await update.message.reply_text(text, parse_mode='Markdown')
+
+    # ── Admin / Owner full help ──────────────────────────────
+    admin_text = (
+        f"👮 *ADMIN COMMANDS*\n"
+        f"{'─'*30}\n\n"
+        f"🔇 `/mute [sec]` — Mute user (reply)\n"
+        f"🔊 `/unmute` — Unmute user (reply)\n"
+        f"🔨 `/ban [reason]` — Ban user (reply)\n"
+        f"🔓 `/unban <id>` — Unban user\n"
+        f"⚠️ `/warn [reason]` — Warn user (reply)\n"
+        f"♻️ `/resetwarnings` — Reset warnings (reply)\n"
+        f"🗑️ `/del` — Delete message (reply)\n"
+        f"🧹 `/purge` — Bulk delete from reply\n"
+        f"🧪 `/testmute` — Test 35s mute (reply)\n"
+        f"👑 `/immortal <id>` — Grant immunity\n"
+        f"💀 `/unimmortal <id>` — Remove immunity\n\n"
+        f"⚙️ *SETTINGS*\n"
+        f"{'─'*30}\n\n"
+        f"📜 `/setrules <text>` — Set rules\n"
+        f"🔗 `/setlinked` — Set linked channel\n"
+        f"🎭 `/captcha on|off` — Toggle captcha\n"
+        f"🗑️ `/sticker_delete <min>` — Sticker auto-del\n"
+        f"⏱️ `/autodelete <min>` — Auto-delete messages\n"
+        f"   _`/autodelete reset` to restore global default_\n"
+        f"⛔ `/addblacklist <word>` — Ban a word\n"
+        f"✅ `/addwhitelist <word>` — Whitelist word\n"
+        f"📋 `/blacklist` `/whitelist` — View lists\n"
     )
 
-    await update.message.reply_text(
-        text,
-        parse_mode='Markdown',
-        reply_markup=kb_main_menu()
+    if is_owner:
+        admin_text += (
+            f"\n👑 *OWNER ONLY*\n"
+            f"{'─'*30}\n\n"
+            f"🌐 `/autodelete <min>` _(in DM)_ — Global default\n"
+            f"💀 `/fban <id> [reason]` — Global ban all groups\n"
+            f"✅ `/gunban <id>` — Global unban\n"
+            f"⚡ `/power <id>` — Grant fban power\n"
+            f"🔻 `/unpower <id>` — Revoke fban power\n"
+            f"📢 `/broadcast <msg>` — Message all groups\n"
+            f"👥 `/groups` `/stats` — Bot stats\n"
+            f"🌐 `/gblacklist` `/gwhitelist` — Global word lists\n"
+        )
+
+    admin_text += (
+        f"\n{'─'*30}\n"
+        f"⚠️ *Warn:* W1→35s | W2→60s | W3→120s | W4→1wk all groups"
     )
+
+    await update.message.reply_text(admin_text, parse_mode='Markdown')
 
 
 # ─── /rule ──────────────────────────────────────────────────
@@ -1580,46 +1634,109 @@ async def sticker_delete_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ─── /autodelete ────────────────────────────────────────────
 async def autodelete_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    ch = update.effective_chat
+    ch   = update.effective_chat
+    user = update.effective_user
+
+    # ── DM use — Owner only, sets GLOBAL default ────────────
     if ch.type == "private":
-        return await update.message.reply_text("❌ Use in group!")
+        if user.id != OWNER_ID:
+            return await update.message.reply_text("❌ Owner only command in DM!")
+
+        cur_global = db.get_global_autodelete()
+
+        if not ctx.args:
+            status = f"🟢 {cur_global} min" if cur_global else "🔴 OFF"
+            return await update.message.reply_text(
+                f"🌐 *Global Auto-Delete Default*\n"
+                f"{'─'*30}\n\n"
+                f"Current: {status}\n\n"
+                f"Usage: `/autodelete 5` → set default 5 min for ALL groups\n"
+                f"Disable: `/autodelete 0`\n\n"
+                f"_Group admins can override this per-group._",
+                parse_mode='Markdown'
+            )
+
+        try:
+            minutes = int(ctx.args[0].replace('min', '').strip())
+        except ValueError:
+            return await update.message.reply_text("❌ Usage: `/autodelete <minutes>`", parse_mode='Markdown')
+
+        if minutes <= 0:
+            db.set_global_autodelete(None)
+            await update.message.reply_text(
+                "✅ *Global auto-delete disabled.*\n\n"
+                "_Groups with their own setting will keep it._",
+                parse_mode='Markdown'
+            )
+        else:
+            db.set_global_autodelete(minutes)
+            await update.message.reply_text(
+                f"✅ *Global Auto-Delete Set!*\n\n"
+                f"⏱ Default: *{minutes} min* for ALL groups\n"
+                f"_Group admins can still override per-group._",
+                parse_mode='Markdown'
+            )
+        return
+
+    # ── Group use — Group admin, sets per-group override ────
     if not await sender_is_admin(ctx, update):
         return await update.message.reply_text("❌ Admins only!")
 
     if not ctx.args:
-        g = db.get_group(ch.id)
-        cur = g.get("autodelete_min")
-        status = f"{ICON_ON} {cur} min" if cur else f"{ICON_OFF} OFF"
+        per_group = db.get_group(ch.id).get("autodelete_min")
+        global_val = db.get_global_autodelete()
+        effective  = per_group if per_group is not None else global_val
+
+        lines = []
+        if per_group is not None:
+            lines.append(f"📌 Group setting: *{per_group} min*")
+        else:
+            lines.append(f"📌 Group setting: _not set_")
+        if global_val:
+            lines.append(f"🌐 Global default: *{global_val} min*")
+        else:
+            lines.append(f"🌐 Global default: _OFF_")
+        lines.append(f"⚡ *Active:* {'🟢 ' + str(effective) + ' min' if effective else '🔴 OFF'}")
+
         return await update.message.reply_text(
-            f"🗑️ *Auto-Delete ALL Messages*\n"
+            f"🗑️ *Auto-Delete — This Group*\n"
             f"{'─'*30}\n\n"
-            f"Status: {status}\n\n"
-            f"Usage: `/autodelete 5` → enable (5 min)\n"
-            f"Disable: `/autodelete 0`\n\n"
-            f"⚠️ This deletes EVERY message!",
+            + "\n".join(lines) +
+            f"\n\nUsage: `/autodelete 5` → override to 5 min\n"
+            f"Restore global: `/autodelete reset`",
             parse_mode='Markdown'
         )
 
-    try:
-        minutes = int(ctx.args[0].replace('min','').strip())
-    except ValueError:
-        return await update.message.reply_text(
-            "❌ Usage: `/autodelete 5`",
+    # Special: /autodelete reset → remove per-group override
+    if ctx.args[0].lower() == "reset":
+        db.update_group(ch.id, {"autodelete_min": None})
+        global_val = db.get_global_autodelete()
+        await update.message.reply_text(
+            f"✅ *Group override removed.*\n\n"
+            f"{'🌐 Now using global default: *' + str(global_val) + ' min*' if global_val else '🔴 Auto-delete is OFF (no global default set).'}",
             parse_mode='Markdown'
         )
+        return
+
+    try:
+        minutes = int(ctx.args[0].replace('min', '').strip())
+    except ValueError:
+        return await update.message.reply_text("❌ Usage: `/autodelete 5`", parse_mode='Markdown')
 
     if minutes <= 0:
         db.update_group(ch.id, {"autodelete_min": None})
+        global_val = db.get_global_autodelete()
         await update.message.reply_text(
-            f"✅ Auto-delete *disabled*.",
+            f"✅ Group auto-delete *override removed*.\n"
+            f"{'🌐 Falling back to global default: *' + str(global_val) + ' min*' if global_val else '🔴 Auto-delete is now OFF.'}",
             parse_mode='Markdown'
         )
     else:
         db.update_group(ch.id, {"autodelete_min": minutes})
         await update.message.reply_text(
-            f"✅ *Auto-delete ALL messages enabled!*\n\n"
-            f"⏱ Every message will be deleted after *{minutes} min*.\n"
-            f"⚠️ This keeps the group completely clean!",
+            f"✅ *Auto-delete set for this group!*\n\n"
+            f"⏱ Every message deleted after *{minutes} min*.\n"
+            f"_(This overrides the global default.)_",
             parse_mode='Markdown'
         )
 
@@ -2387,6 +2504,11 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if ch.type == "private": return
 
+    # GroupAnonymousBot — NEVER restrict, it handles linked channel posts
+    ANON_BOT_ID = 1087968824
+    if usr and usr.id == ANON_BOT_ID:
+        return
+
     db.add_group(ch.id)
 
     txt = msg.text or msg.caption or ""
@@ -2394,7 +2516,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     g_settings = db.get_group(ch.id)
     sticker_del_min = g_settings.get("sticker_delete_min")
-    autodel_min     = g_settings.get("autodelete_min")
+    autodel_min     = db.get_effective_autodelete(ch.id)   # global default ya per-group override
 
     is_sticker_media = (
         msg.sticker or
