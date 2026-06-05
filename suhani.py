@@ -306,10 +306,13 @@ action meanings:
 
 For REPLY, write in Hinglish, keep it short and friendly."""
 
-async def ai_check(text: str, user_id: int, chat_id: int, username: str = "") -> dict:
+async def ai_check(text: str, user_id: int, chat_id: int, username: str = "",
+                   reply_context: str = "", bypass_cooldown: bool = False) -> dict:
     """
     Returns dict: {"action": "PROMO"/"SAFE"/"REPLY", "reply": "..."}
     Uses Groq API (llama-3.1-8b-instant).
+    reply_context: bot ka previous message (agar user ne reply kiya ho)
+    bypass_cooldown: True karo jab user bot ke reply pe message kare
     """
     if not AI_API_KEY:
         return {"action": "SAFE", "reply": ""}
@@ -322,22 +325,33 @@ async def ai_check(text: str, user_id: int, chat_id: int, username: str = "") ->
         # But still check repeat
         return {"action": "SAFE", "reply": ""}
 
-    # Cooldown check
+    # Cooldown check — bypass karo agar bot ke reply pe message hai
     now = time.time()
-    last = AI_COOLDOWN.get(user_id, 0)
-    if now - last < AI_COOLDOWN_SEC:
-        return {"action": "SAFE", "reply": ""}
+    if not bypass_cooldown:
+        last = AI_COOLDOWN.get(user_id, 0)
+        if now - last < AI_COOLDOWN_SEC:
+            return {"action": "SAFE", "reply": ""}
     AI_COOLDOWN[user_id] = now
 
     try:
         session = await get_ai_session()
+
+        # Context-aware message — agar bot ke reply pe hai
+        if reply_context:
+            user_content = (
+                f"[Context: User is replying to your previous message: \"{reply_context}\"]\n"
+                f"User's reply: {text[:500]}"
+            )
+        else:
+            user_content = text[:600]
+
         payload = {
             "model": "llama-3.1-8b-instant",
             "max_tokens": 150,
             "temperature": 0.3,
             "messages": [
                 {"role": "system", "content": SUHANI_SYSTEM},
-                {"role": "user", "content": text[:600]}
+                {"role": "user", "content": user_content}
             ]
         }
         async with session.post(
@@ -1511,6 +1525,10 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"🌐 `/gblacklist` `/gwhitelist` — Global word lists\n"
             f"🤖 `/adexempt <id>` — Exempt bot from autodelete\n"
             f"❌ `/unadexempt <id>` — Remove exemption\n"
+            f"🤖 `/aiapprove` — Approve group for AI _(in group)_\n"
+            f"🤖 `/aiapprove <id>` — Approve group for AI _(in DM)_\n"
+            f"🔴 `/airevoke` — Revoke AI from group\n"
+            f"📋 `/aigroups` — List all AI-approved groups\n"
         )
 
     admin_text += (
@@ -2715,7 +2733,7 @@ async def gunban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ─── /adexempt ──────────────────────────────────────────────
 # ─── /aimod ─────────────────────────────────────────────────
 async def aimod_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Admin — toggle AI moderation on/off for this group."""
+    """Admin — toggle AI moderation on/off for this group (only if owner approved)."""
     ch = update.effective_chat
     if ch.type == "private":
         return await update.message.reply_text("❌ Use in group!")
@@ -2729,13 +2747,22 @@ async def aimod_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown'
         )
 
+    g = db.get_group(ch.id)
+    # Check owner approval
+    if not g.get("ai_approved", False):
+        return await update.message.reply_text(
+            "⚠️ *Is group ke liye AI approved nahi hai!*\n\n"
+            "_Bot owner se `/aiapprove` karwao pehle._",
+            parse_mode='Markdown'
+        )
+
     if not ctx.args or ctx.args[0].lower() not in ('on', 'off'):
-        g = db.get_group(ch.id)
-        status = "🟢 ON" if g.get("aimod", True) else "🔴 OFF"
+        status = "🟢 ON" if g.get("aimod", False) else "🔴 OFF"
         return await update.message.reply_text(
             f"🤖 *AI Moderation*\n"
             f"{'─'*25}\n\n"
-            f"Status: {status}\n\n"
+            f"Status: {status}\n"
+            f"Owner Approved: ✅\n\n"
             f"Toggle: `/aimod on` or `/aimod off`\n\n"
             f"_AI detects promotional/spam messages that bypass normal filters._",
             parse_mode='Markdown'
@@ -2747,6 +2774,110 @@ async def aimod_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"🤖 AI Moderation {state}!\n\n"
         f"{'_AI will now detect promotions & spam automatically._' if val else '_AI checks are off for this group._'}",
+        parse_mode='Markdown'
+    )
+
+
+# ─── /aiapprove ─────────────────────────────────────────────
+async def aiapprove_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Owner only — approve a group to use AI moderation.
+    Use in group: /aiapprove  → approves current group
+    Use in DM:    /aiapprove <chat_id>  → approves that group
+    """
+    caller = update.effective_user
+    if caller.id != OWNER_ID:
+        return  # silent ignore
+
+    ch = update.effective_chat
+
+    # DM mein use kiya with chat_id
+    if ch.type == "private":
+        if not ctx.args:
+            return await update.message.reply_text(
+                "❌ DM mein use: `/aiapprove <group_chat_id>`\n"
+                "Ya group mein ja ke seedha `/aiapprove` karo.",
+                parse_mode='Markdown'
+            )
+        try:
+            target_chat_id = int(ctx.args[0])
+        except ValueError:
+            return await update.message.reply_text("❌ Invalid chat ID!")
+    else:
+        # Group mein use kiya
+        target_chat_id = ch.id
+
+    db.update_group(target_chat_id, {"ai_approved": True, "aimod": True})
+    await update.message.reply_text(
+        f"✅ *AI Approved!*\n\n"
+        f"🤖 Group `{target_chat_id}` ke liye AI moderation *approved + ON* kar diya!\n\n"
+        f"_Ab group admin `/aimod on/off` se control kar sakte hain._",
+        parse_mode='Markdown'
+    )
+
+
+# ─── /airevoke ──────────────────────────────────────────────
+async def airevoke_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Owner only — revoke AI approval from a group.
+    Use in group: /airevoke
+    Use in DM:    /airevoke <chat_id>
+    """
+    caller = update.effective_user
+    if caller.id != OWNER_ID:
+        return  # silent ignore
+
+    ch = update.effective_chat
+
+    if ch.type == "private":
+        if not ctx.args:
+            return await update.message.reply_text(
+                "❌ DM mein use: `/airevoke <group_chat_id>`",
+                parse_mode='Markdown'
+            )
+        try:
+            target_chat_id = int(ctx.args[0])
+        except ValueError:
+            return await update.message.reply_text("❌ Invalid chat ID!")
+    else:
+        target_chat_id = ch.id
+
+    db.update_group(target_chat_id, {"ai_approved": False, "aimod": False})
+    await update.message.reply_text(
+        f"🔴 *AI Revoked!*\n\n"
+        f"Group `{target_chat_id}` se AI approval hata di.\n"
+        f"_AI wahan kaam nahi karega._",
+        parse_mode='Markdown'
+    )
+
+
+# ─── /aigroups ──────────────────────────────────────────────
+async def aigroups_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Owner only — list all AI-approved groups."""
+    if update.effective_user.id != OWNER_ID:
+        return
+
+    all_groups = db.get_all_groups()
+    approved = []
+    for gid in all_groups:
+        g = db.get_group(gid)
+        if g.get("ai_approved", False):
+            status = "🟢 ON" if g.get("aimod", False) else "🟡 Approved/OFF"
+            approved.append(f"  • `{gid}` — {status}")
+
+    if not approved:
+        return await update.message.reply_text(
+            "📋 *AI Approved Groups: 0*\n\n"
+            "_Kisi bhi group ko approve nahi kiya gaya abhi._\n"
+            "Use `/aiapprove` in a group or `/aiapprove <chat_id>` in DM.",
+            parse_mode='Markdown'
+        )
+
+    await update.message.reply_text(
+        f"🤖 *AI Approved Groups* ({len(approved)})\n"
+        f"{'─'*30}\n\n"
+        + "\n".join(approved) +
+        f"\n\n_Use `/airevoke <chat_id>` to remove._",
         parse_mode='Markdown'
     )
 
@@ -3099,10 +3230,17 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     txt_for_ai = msg.text or msg.caption or ""
     ai_result = {"action": "SAFE", "reply": ""}
 
-    if not violation and AI_API_KEY and g_settings.get("aimod", True) and not is_admin:
+    if not violation and AI_API_KEY and g_settings.get("aimod", False) and not is_admin:
         if txt_for_ai:
             # Repeat tracker — ek hi cheez baar baar likh raha hai?
             repeat_count = track_repeat(ch.id, usr.id, txt_for_ai)
+
+            # Check if user replied to bot's message — agar haan toh cooldown bypass karo
+            is_reply_to_bot = (
+                msg.reply_to_message and
+                msg.reply_to_message.from_user and
+                msg.reply_to_message.from_user.id == ctx.bot.id
+            )
 
             # Anime name repeat — seedha reply, AI call nahi
             if repeat_count >= 3 and is_anime_message(txt_for_ai):
@@ -3112,7 +3250,17 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     "reply": f"Bhai {user_name(usr)}, *{anime_name}* baar baar likhne se kuch nahi hoga 😄 Ye anime available hai toh group mein already pata hoga!"
                 }
             else:
-                ai_result = await ai_check(txt_for_ai, usr.id, ch.id, getattr(usr, 'username', '') or '')
+                # Agar bot ke message pe reply hai toh previous bot message ka context bhi bhejo
+                reply_context = ""
+                if is_reply_to_bot and msg.reply_to_message.text:
+                    reply_context = msg.reply_to_message.text[:300]
+
+                ai_result = await ai_check(
+                    txt_for_ai, usr.id, ch.id,
+                    getattr(usr, 'username', '') or '',
+                    reply_context=reply_context,
+                    bypass_cooldown=is_reply_to_bot
+                )
 
         if ai_result["action"] == "PROMO":
             violation = "ai_promo"
@@ -3331,6 +3479,9 @@ def main():
     app.add_handler(CommandHandler("adexempt",         adexempt_cmd))
     app.add_handler(CommandHandler("unadexempt",       unadexempt_cmd))
     app.add_handler(CommandHandler("aimod",            aimod_cmd))
+    app.add_handler(CommandHandler("aiapprove",        aiapprove_cmd))
+    app.add_handler(CommandHandler("airevoke",         airevoke_cmd))
+    app.add_handler(CommandHandler("aigroups",         aigroups_cmd))
     app.add_handler(CommandHandler("addteacher",       addteacher_cmd))
     app.add_handler(CommandHandler("removeteacher",    removeteacher_cmd))
     app.add_handler(CommandHandler("teachers",         teachers_cmd))
