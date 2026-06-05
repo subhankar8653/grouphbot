@@ -440,7 +440,8 @@ class DB:
             "sticker_delete_min": None,
             "autodelete_min": None,
             "captcha": False,
-            "aimod": True,    # AI moderation default ON (kaam tabhi karega jab API key ho)
+            "aimod": False,       # Default OFF — owner /aiapprove se enable karega
+            "ai_approved": False, # Owner approval required
         }}, upsert=True)
 
     def remove_group(self, chat_id):
@@ -2807,7 +2808,11 @@ async def aiapprove_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # Group mein use kiya
         target_chat_id = ch.id
 
-    db.update_group(target_chat_id, {"ai_approved": True, "aimod": True})
+    db.groups.update_one(
+        {"_id": target_chat_id},
+        {"$set": {"ai_approved": True, "aimod": True}},
+        upsert=True
+    )
     await update.message.reply_text(
         f"✅ *AI Approved!*\n\n"
         f"🤖 Group `{target_chat_id}` ke liye AI moderation *approved + ON* kar diya!\n\n"
@@ -3230,7 +3235,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     txt_for_ai = msg.text or msg.caption or ""
     ai_result = {"action": "SAFE", "reply": ""}
 
-    if not violation and AI_API_KEY and g_settings.get("aimod", False) and not is_admin:
+    if not violation and AI_API_KEY and g_settings.get("ai_approved", False) and g_settings.get("aimod", False) and not is_admin:
         if txt_for_ai:
             # Repeat tracker — ek hi cheez baar baar likh raha hai?
             repeat_count = track_repeat(ch.id, usr.id, txt_for_ai)
