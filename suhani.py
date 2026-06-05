@@ -214,6 +214,10 @@ MAX_CACHE = 100
 
 CAPTCHA_PENDING = {}
 
+# Provider bot reply tracker: {chat_id: {msg_id: timestamp}}
+# Jab koi bot kisi message pe reply karta hai, hum yahan track karte hain
+PROVIDER_BOT_REPLIES: dict[int, dict[int, float]] = {}
+
 # ═══════════════════════════════════════════════════════════
 #  AI ENGINE — Groq (llama-3.1-8b-instant)
 # ═══════════════════════════════════════════════════════════
@@ -270,7 +274,7 @@ def is_anime_message(text: str) -> bool:
     return False
 
 # ── Suhani system prompt ────────────────────────────────────
-SUHANI_SYSTEM = """You are Suhani, a friendly Telegram group protection bot.
+SUHANI_SYSTEM = """You are Suhani, a friendly Telegram group protection bot for an anime Hindi dub group.
 
 Your identity:
 - Name: Suhani
@@ -287,24 +291,42 @@ Your personality:
 
 What you do:
 1. MODERATION: Detect if a message is promotional spam
-2. ANIME: Answer anime questions enthusiastically
-3. HELP: Help users who seem confused or ask questions
-4. IDENTITY: Answer questions about who you are
+2. ANIME_SEARCH: User wrote an anime name (to search/request it) — provider bot handles actual search
+3. ANIME_NOT_FOUND: Provider bot did NOT reply → anime not available yet
+4. HELP: Help users who seem confused or ask questions
+5. IDENTITY: Answer questions about who you are
 
 When asked about your AI/technology — NEVER mention Groq, LLaMA, or any AI company. Say you are Suhani, made by Lucky.
 
+IMPORTANT CONTEXT about this group:
+- This is a Hindi dubbed anime group
+- Users type anime names to search/get them
+- A provider bot searches and replies with the anime if available
+- If provider bot did NOT reply → that anime is NOT available yet in Hindi dub
+- When anime is not found, ALWAYS suggest 2-3 similar anime they might like instead
+- Common typos happen — if you recognize a misspelled anime, mention the correct name
+
 Response format — you must ALWAYS respond with JSON only:
 {
-  "action": "PROMO" | "SAFE" | "REPLY",
-  "reply": "your message here (only if action is REPLY, else empty string)"
+  "action": "PROMO" | "SAFE" | "REPLY" | "ANIME_NOT_FOUND",
+  "reply": "your message here (only if action is REPLY or ANIME_NOT_FOUND, else empty string)",
+  "anime_name": "exact anime name user was searching (only if action is ANIME_NOT_FOUND, else empty string)"
 }
 
 action meanings:
 - PROMO: message is promotional/spam/advertising → will be deleted + warned
-- SAFE: normal message, ignore it
-- REPLY: message needs a response (question, anime topic, help needed, confusion, same anime name repeated)
+- SAFE: normal message or conversation, ignore it
+- REPLY: message needs a response (question, help needed, confusion, anime discussion)
+- ANIME_NOT_FOUND: user searched an anime but provider bot didn't find it → tell them nicely + suggest similar
 
-For REPLY, write in Hinglish, keep it short and friendly."""
+For ANIME_NOT_FOUND reply example:
+"Yaar, 'The Brilliant Healer's New Life in the Shadows' abhi Hindi mein available nahi hai 😅 Jald add karenge! Tab tak 'Eminence in Shadow' ya 'Overlord' try karo — same vibes hai! 🔥"
+
+For REPLY with typo correction example:
+"Bhai, 'Narato' nahi, 'Naruto' likho 😄 Provider se maango!"
+
+For REPLY, write in Hinglish, keep it short and friendly.
+For SAFE — normal conversations between users, greetings, reactions — DO NOT interfere."""
 
 async def ai_check(text: str, user_id: int, chat_id: int, username: str = "",
                    reply_context: str = "", bypass_cooldown: bool = False) -> dict:
@@ -377,11 +399,15 @@ async def ai_check(text: str, user_id: int, chat_id: int, username: str = "",
                 raw = json_match.group(0)
             result = json.loads(raw)
             action = result.get("action", "SAFE").upper()
-            if action not in ("PROMO", "SAFE", "REPLY"):
+            if action not in ("PROMO", "SAFE", "REPLY", "ANIME_NOT_FOUND"):
                 action = "SAFE"
-            return {"action": action, "reply": result.get("reply", "")}
+            return {
+                "action": action,
+                "reply": result.get("reply", ""),
+                "anime_name": result.get("anime_name", "")
+            }
     except Exception:
-        return {"action": "SAFE", "reply": ""}
+        return {"action": "SAFE", "reply": "", "anime_name": ""}
 
 # ── Repeat message tracker ───────────────────────────────────
 def track_repeat(chat_id: int, user_id: int, text: str) -> int:
@@ -699,6 +725,34 @@ class DB:
     def reset_teacher_promo_count(self, chat_id, user_id):
         k = f"tpromo_{chat_id}_{user_id}"
         self.users.delete_one({"_id": k})
+
+    # ── Missing Anime tracker ─────────────────────────────────
+    def log_missing_anime(self, anime_name: str, chat_id: int):
+        """Log a missing anime — increment request count."""
+        clean = anime_name.strip().lower()[:120]
+        self.db["missing_anime"].update_one(
+            {"_id": clean},
+            {
+                "$inc": {"count": 1},
+                "$set": {"display_name": anime_name.strip()},
+                "$addToSet": {"groups": chat_id},
+                "$setOnInsert": {"first_seen": time.time()}
+            },
+            upsert=True
+        )
+
+    def get_missing_anime_list(self, limit=30):
+        """Get top requested missing anime sorted by count."""
+        return list(
+            self.db["missing_anime"].find().sort("count", -1).limit(limit)
+        )
+
+    def clear_missing_anime(self, anime_name: str = None):
+        """Clear one or all missing anime entries."""
+        if anime_name:
+            self.db["missing_anime"].delete_one({"_id": anime_name.strip().lower()})
+        else:
+            self.db["missing_anime"].delete_many({})
 
 
 db = DB()
@@ -1530,6 +1584,8 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"🤖 `/aiapprove <id>` — Approve group for AI _(in DM)_\n"
             f"🔴 `/airevoke` — Revoke AI from group\n"
             f"📋 `/aigroups` — List all AI-approved groups\n"
+            f"🎌 `/missinganime` — Missing anime requests list\n"
+            f"🗑️ `/missinganime clear` — Clear missing list\n"
         )
 
     admin_text += (
@@ -2779,6 +2835,58 @@ async def aimod_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# ─── /missinganime ──────────────────────────────────────────
+async def missinganime_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Owner only — missing anime list dekhna aur clear karna.
+    /missinganime          → top 30 list
+    /missinganime clear    → sab clear
+    /missinganime clear <name> → ek entry clear
+    """
+    if update.effective_user.id != OWNER_ID:
+        return
+
+    args = ctx.args or []
+
+    # Clear command
+    if args and args[0].lower() == "clear":
+        if len(args) > 1:
+            name = ' '.join(args[1:])
+            db.clear_missing_anime(name)
+            return await update.message.reply_text(
+                f"✅ `{name}` missing list se remove kar diya!",
+                parse_mode='Markdown'
+            )
+        else:
+            db.clear_missing_anime()
+            return await update.message.reply_text("✅ Puri missing anime list clear kar di!")
+
+    # Show list
+    missing = db.get_missing_anime_list(30)
+    if not missing:
+        return await update.message.reply_text(
+            "📋 *Missing Anime List khali hai!*\n\n"
+            "_Koi anime abhi missing report nahi hua._",
+            parse_mode='Markdown'
+        )
+
+    lines = []
+    for i, doc in enumerate(missing, 1):
+        name = doc.get("display_name", doc["_id"])
+        count = doc.get("count", 1)
+        lines.append(f"  {i}. `{name}` — {count}x request")
+
+    text = (
+        f"📋 *Missing Anime Requests*\n"
+        f"{'─'*30}\n\n"
+        + "\n".join(lines) +
+        f"\n\n{'─'*30}\n"
+        f"_Total: {len(missing)} anime_\n"
+        f"Use `/missinganime clear` to reset list."
+    )
+    await update.message.reply_text(text, parse_mode='Markdown')
+
+
 # ─── /aiapprove ─────────────────────────────────────────────
 async def aiapprove_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
@@ -3114,6 +3222,41 @@ async def stats_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 # ═══════════════════════════════════════════════════════════
+#  BOT REPLY TRACKER — Provider bot ne reply kiya? Track karo
+# ═══════════════════════════════════════════════════════════
+async def track_bot_reply(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Jab bhi koi bot group mein kisi message pe reply karta hai,
+    us original message_id ko mark kar do.
+    Isse AI check mein pata chalega ki provider bot already respond kar chuka hai.
+    """
+    msg = update.message
+    if not msg or not msg.from_user:
+        return
+    # Sirf bots ke messages track karo (hamara bot nahi)
+    if not msg.from_user.is_bot or msg.from_user.id == ctx.bot.id:
+        return
+    # Sirf agar ye reply hai kisi message pe
+    if not msg.reply_to_message:
+        return
+
+    ch_id = update.effective_chat.id
+    replied_to_id = msg.reply_to_message.message_id
+
+    if ch_id not in PROVIDER_BOT_REPLIES:
+        PROVIDER_BOT_REPLIES[ch_id] = {}
+
+    PROVIDER_BOT_REPLIES[ch_id][replied_to_id] = time.time()
+
+    # Cleanup — 5 min se purane entries hata do (memory leak nahi hoga)
+    now = time.time()
+    PROVIDER_BOT_REPLIES[ch_id] = {
+        mid: t for mid, t in PROVIDER_BOT_REPLIES[ch_id].items()
+        if now - t < 300
+    }
+
+
+# ═══════════════════════════════════════════════════════════
 #  MAIN MESSAGE HANDLER
 # ═══════════════════════════════════════════════════════════
 async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -3237,38 +3380,93 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if not violation and AI_API_KEY and g_settings.get("ai_approved", False) and g_settings.get("aimod", False) and not is_admin:
         if txt_for_ai:
-            # Repeat tracker — ek hi cheez baar baar likh raha hai?
-            repeat_count = track_repeat(ch.id, usr.id, txt_for_ai)
-
-            # Check if user replied to bot's message — agar haan toh cooldown bypass karo
-            is_reply_to_bot = (
+            # ── Fix 1: Agar user kisi HUMAN ke message pe reply kar raha hai → AI skip ──
+            # Do members baat kar rahe hain — AI bich mein na ghuse
+            is_reply_to_human = (
                 msg.reply_to_message and
                 msg.reply_to_message.from_user and
-                msg.reply_to_message.from_user.id == ctx.bot.id
+                not msg.reply_to_message.from_user.is_bot
             )
-
-            # Anime name repeat — seedha reply, AI call nahi
-            if repeat_count >= 3 and is_anime_message(txt_for_ai):
-                anime_name = txt_for_ai.strip()
-                ai_result = {
-                    "action": "REPLY",
-                    "reply": f"Bhai {user_name(usr)}, *{anime_name}* baar baar likhne se kuch nahi hoga 😄 Ye anime available hai toh group mein already pata hoga!"
-                }
+            if is_reply_to_human:
+                # Sirf AI reply skip — violation check already upar ho chuka hai
+                pass
             else:
-                # Agar bot ke message pe reply hai toh previous bot message ka context bhi bhejo
-                reply_context = ""
-                if is_reply_to_bot and msg.reply_to_message.text:
-                    reply_context = msg.reply_to_message.text[:300]
+                # Repeat tracker — ek hi cheez baar baar likh raha hai?
+                repeat_count = track_repeat(ch.id, usr.id, txt_for_ai)
 
-                ai_result = await ai_check(
-                    txt_for_ai, usr.id, ch.id,
-                    getattr(usr, 'username', '') or '',
-                    reply_context=reply_context,
-                    bypass_cooldown=is_reply_to_bot
+                # Check if user replied to bot's message — cooldown bypass
+                is_reply_to_bot = (
+                    msg.reply_to_message and
+                    msg.reply_to_message.from_user and
+                    msg.reply_to_message.from_user.id == ctx.bot.id
                 )
+
+                # Anime name repeat — seedha reply, AI call nahi
+                if repeat_count >= 3 and is_anime_message(txt_for_ai):
+                    anime_name = txt_for_ai.strip()
+                    ai_result = {
+                        "action": "REPLY",
+                        "reply": f"Bhai {user_name(usr)}, *{anime_name}* baar baar likhne se kuch nahi hoga 😄 Ye anime available hai toh group mein already pata hoga!"
+                    }
+                else:
+                    # ── Fix 2: 1.5 sec wait karo — provider bot ne reply diya? → skip ──
+                    await asyncio.sleep(1.5)
+
+                    # Check: kisi bot ne is message pe reply kar diya kya?
+                    provider_replied = (
+                        ch.id in PROVIDER_BOT_REPLIES and
+                        msg.message_id in PROVIDER_BOT_REPLIES[ch.id]
+                    )
+
+                    if provider_replied:
+                        # Provider bot already answer de chuka — AI chup rahe
+                        pass
+                    else:
+                        # Agar bot ke message pe reply hai toh context bhi bhejo
+                        reply_context = ""
+                        if is_reply_to_bot and msg.reply_to_message.text:
+                            reply_context = msg.reply_to_message.text[:300]
+
+                        ai_result = await ai_check(
+                            txt_for_ai, usr.id, ch.id,
+                            getattr(usr, 'username', '') or '',
+                            reply_context=reply_context,
+                            bypass_cooldown=is_reply_to_bot
+                        )
 
         if ai_result["action"] == "PROMO":
             violation = "ai_promo"
+
+    # ── ANIME_NOT_FOUND → group reply + owner DM ──────────────
+    if ai_result["action"] == "ANIME_NOT_FOUND" and ai_result.get("reply"):
+        anime_name = ai_result.get("anime_name") or txt_for_ai.strip()
+        # DB mein log karo
+        db.log_missing_anime(anime_name, ch.id)
+        # Group mein reply do
+        try:
+            reply_msg = await msg.reply_text(
+                ai_result["reply"],
+                parse_mode='Markdown'
+            )
+            asyncio.create_task(delete_after(ctx, ch.id, reply_msg.message_id, 120))
+        except Exception:
+            pass
+        # Owner ko DM bhejo
+        try:
+            group_name = getattr(ch, 'title', str(ch.id))
+            await ctx.bot.send_message(
+                OWNER_ID,
+                f"📋 *Missing Anime Request!*\n"
+                f"{'─'*28}\n\n"
+                f"🎌 Anime: `{anime_name}`\n"
+                f"👤 User: {user_name(usr)}\n"
+                f"💬 Group: {group_name} (`{ch.id}`)\n\n"
+                f"_User ne search kiya lekin available nahi tha._",
+                parse_mode='Markdown'
+            )
+        except Exception:
+            pass
+        return
 
     if violation:
         asyncio.create_task(msg.delete())
@@ -3487,6 +3685,7 @@ def main():
     app.add_handler(CommandHandler("aiapprove",        aiapprove_cmd))
     app.add_handler(CommandHandler("airevoke",         airevoke_cmd))
     app.add_handler(CommandHandler("aigroups",         aigroups_cmd))
+    app.add_handler(CommandHandler("missinganime",     missinganime_cmd))
     app.add_handler(CommandHandler("addteacher",       addteacher_cmd))
     app.add_handler(CommandHandler("removeteacher",    removeteacher_cmd))
     app.add_handler(CommandHandler("teachers",         teachers_cmd))
@@ -3496,10 +3695,16 @@ def main():
     app.add_handler(CallbackQueryHandler(menu_callback,    pattern=r"^(menu_|show_|unmute_|unban_|dismiss_)"))
 
     # ── Message Handlers ─────────────────────────────────────
+    # Bot reply tracker — group ke saare messages dekho (bots ke replies track karne ke liye)
+    app.add_handler(MessageHandler(
+        filters.ALL & filters.ChatType.GROUPS,
+        track_bot_reply
+    ), group=0)
+    # Main message handler
     app.add_handler(MessageHandler(
         filters.ALL & filters.ChatType.GROUPS & ~filters.COMMAND,
         check_msg
-    ))
+    ), group=1)
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_join))
     app.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER,  on_leave))
 
