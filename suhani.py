@@ -333,13 +333,12 @@ async def ai_check(text: str, user_id: int, chat_id: int, username: str = "") ->
         session = await get_ai_session()
         payload = {
             "model": "llama-3.1-8b-instant",
-            "max_tokens": 120,
+            "max_tokens": 150,
             "temperature": 0.3,
             "messages": [
                 {"role": "system", "content": SUHANI_SYSTEM},
                 {"role": "user", "content": text[:600]}
-            ],
-            "response_format": {"type": "json_object"}
+            ]
         }
         async with session.post(
             "https://api.groq.com/openai/v1/chat/completions",
@@ -354,6 +353,14 @@ async def ai_check(text: str, user_id: int, chat_id: int, username: str = "") ->
                 return {"action": "SAFE", "reply": ""}
             data = await resp.json()
             raw = data["choices"][0]["message"]["content"].strip()
+            # Groq sometimes wraps JSON in ```json ... ``` markdown
+            raw = re.sub(r'^```(?:json)?\s*', '', raw)
+            raw = re.sub(r'\s*```$', '', raw)
+            raw = raw.strip()
+            # Extract first JSON object if extra text present
+            json_match = re.search(r'\{.*\}', raw, re.DOTALL)
+            if json_match:
+                raw = json_match.group(0)
             result = json.loads(raw)
             action = result.get("action", "SAFE").upper()
             if action not in ("PROMO", "SAFE", "REPLY"):
@@ -634,6 +641,49 @@ class DB:
 
     def get_rules(self, chat_id):
         return self.get_group(chat_id).get("rules")
+
+    # ── Teacher system ────────────────────────────────────────
+    def add_teacher(self, chat_id, user_id):
+        """Mark a user as teacher in a group (exempt from promo-mute, gets polite warning instead)."""
+        k = f"teacher_{chat_id}"
+        self.groups.update_one(
+            {"_id": chat_id},
+            {"$addToSet": {"teachers": user_id}},
+            upsert=True
+        )
+
+    def remove_teacher(self, chat_id, user_id):
+        self.groups.update_one(
+            {"_id": chat_id},
+            {"$pull": {"teachers": user_id}}
+        )
+
+    def is_teacher(self, chat_id, user_id):
+        g = self.get_group(chat_id)
+        return user_id in g.get("teachers", [])
+
+    def get_teachers(self, chat_id):
+        g = self.get_group(chat_id)
+        return g.get("teachers", [])
+
+    def get_teacher_promo_count(self, chat_id, user_id):
+        """How many times has this teacher done promo in this group?"""
+        k = f"tpromo_{chat_id}_{user_id}"
+        doc = self.users.find_one({"_id": k})
+        return doc.get("count", 0) if doc else 0
+
+    def inc_teacher_promo_count(self, chat_id, user_id):
+        k = f"tpromo_{chat_id}_{user_id}"
+        self.users.update_one(
+            {"_id": k},
+            {"$inc": {"count": 1}},
+            upsert=True
+        )
+        return self.get_teacher_promo_count(chat_id, user_id)
+
+    def reset_teacher_promo_count(self, chat_id, user_id):
+        k = f"tpromo_{chat_id}_{user_id}"
+        self.users.delete_one({"_id": k})
 
 
 db = DB()
@@ -1442,6 +1492,9 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"⛔ `/addblacklist <word>` — Ban a word\n"
         f"✅ `/addwhitelist <word>` — Whitelist word\n"
         f"📋 `/blacklist` `/whitelist` — View lists\n"
+        f"📚 `/addteacher` — Mark user as teacher\n"
+        f"❌ `/removeteacher` — Remove teacher status\n"
+        f"📋 `/teachers` — List all teachers\n"
     )
 
     if is_owner:
@@ -2698,6 +2751,116 @@ async def aimod_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# ─── /addteacher ────────────────────────────────────────────
+async def addteacher_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Admin only — mark a user as teacher (special promo handling)."""
+    ch = update.effective_chat
+    if ch.type == "private":
+        return await update.message.reply_text("❌ Use in group!")
+    if not await sender_is_admin(ctx, update):
+        return await update.message.reply_text("❌ Admins only!")
+
+    target_id = None
+    target_name = None
+
+    if update.message.reply_to_message:
+        tgt = update.message.reply_to_message.from_user
+        target_id = tgt.id
+        target_name = user_name(tgt)
+    elif ctx.args:
+        try:
+            target_id = int(ctx.args[0])
+        except ValueError:
+            uname = ctx.args[0].lstrip('@')
+            try:
+                chat_obj = await ctx.bot.get_chat(f"@{uname}")
+                target_id = chat_obj.id
+                target_name = uname
+            except Exception:
+                return await update.message.reply_text(
+                    f"❌ User nahi mila: `{ctx.args[0]}`", parse_mode='Markdown'
+                )
+    else:
+        return await update.message.reply_text(
+            "❌ Usage: `/addteacher <id>` ya reply karo user ke message pe",
+            parse_mode='Markdown'
+        )
+
+    db.add_teacher(ch.id, target_id)
+    await update.message.reply_text(
+        f"📚 *Teacher Added!*\n"
+        f"{'─'*28}\n\n"
+        f"👤 User: `{target_id}`{f'  ({target_name})' if target_name else ''}\n\n"
+        f"🛡️ *Special handling:*\n"
+        f"  • 1st promo → sirf polite warning, no mute\n"
+        f"  • 2nd promo → 🔇 10 min mute\n"
+        f"  • 3rd promo → 🔇 40 min mute\n"
+        f"  • 4th promo → 🔇 70 min mute _(+30 min har baar badhega)_\n\n"
+        f"Use `/removeteacher {target_id}` to remove.",
+        parse_mode='Markdown'
+    )
+
+
+# ─── /removeteacher ─────────────────────────────────────────
+async def removeteacher_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ch = update.effective_chat
+    if ch.type == "private":
+        return await update.message.reply_text("❌ Use in group!")
+    if not await sender_is_admin(ctx, update):
+        return await update.message.reply_text("❌ Admins only!")
+
+    target_id = None
+    if update.message.reply_to_message:
+        target_id = update.message.reply_to_message.from_user.id
+    elif ctx.args:
+        try:
+            target_id = int(ctx.args[0])
+        except ValueError:
+            return await update.message.reply_text("❌ Invalid ID!")
+    else:
+        return await update.message.reply_text(
+            "❌ Usage: `/removeteacher <id>`", parse_mode='Markdown'
+        )
+
+    db.remove_teacher(ch.id, target_id)
+    db.reset_teacher_promo_count(ch.id, target_id)
+    await update.message.reply_text(
+        f"✅ Teacher status removed for `{target_id}`.\n"
+        f"_Unka promo count bhi reset ho gaya._",
+        parse_mode='Markdown'
+    )
+
+
+# ─── /teachers ──────────────────────────────────────────────
+async def teachers_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ch = update.effective_chat
+    if ch.type == "private":
+        return await update.message.reply_text("❌ Use in group!")
+    if not await sender_is_admin(ctx, update):
+        return await update.message.reply_text("❌ Admins only!")
+
+    teachers = db.get_teachers(ch.id)
+    if not teachers:
+        return await update.message.reply_text(
+            "📚 Is group mein koi teacher nahi hai abhi.\n\n"
+            "_Use `/addteacher` to add one._",
+            parse_mode='Markdown'
+        )
+
+    lines = []
+    for tid in teachers:
+        cnt = db.get_teacher_promo_count(ch.id, tid)
+        lines.append(f"  • `{tid}` — promo violations: `{cnt}`")
+
+    await update.message.reply_text(
+        f"📚 *TEACHERS LIST*\n"
+        f"{'─'*28}\n\n"
+        + "\n".join(lines) +
+        f"\n\n_Total: {len(teachers)} teacher(s)_",
+        parse_mode='Markdown'
+    )
+
+
 async def adexempt_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
     Owner only — globally exempt a bot/channel from autodelete.
@@ -2956,6 +3119,40 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if violation:
         asyncio.create_task(msg.delete())
+
+        # ── Teacher special handling ──────────────────────────
+        if violation == "ai_promo" and db.is_teacher(ch.id, usr.id):
+            promo_count = db.inc_teacher_promo_count(ch.id, usr.id)
+            # 1st offense → sirf warning, no mute
+            if promo_count == 1:
+                notice = await ctx.bot.send_message(
+                    ch.id,
+                    f"📚 {user_name(usr)} bhai/didi,\n\n"
+                    f"Aap ek teacher ho, toh aapki izzat karte hain 🙏\n"
+                    f"Lekin *promotional content* is group mein allowed nahi hai.\n\n"
+                    f"⚠️ Aage se ऐसा mat karna — agla baar mute hoga!",
+                    parse_mode='Markdown'
+                )
+                asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 90))
+                return
+            else:
+                # 2nd offense → 10min, 3rd → 40min, 4th → 70min … +30 min har baar
+                base_min = 10
+                extra_min = 30 * (promo_count - 2)   # 2nd=0 extra, 3rd=30 extra, 4th=60 extra…
+                mute_min = base_min + extra_min
+                mute_sec = mute_min * 60
+                await do_mute(ctx, ch.id, usr.id, mute_sec)
+                notice = await ctx.bot.send_message(
+                    ch.id,
+                    f"📚 {user_name(usr)},\n\n"
+                    f"Promotion rule dobara tod di! 😤\n"
+                    f"🔇 *{mute_min} minutes* ke liye mute kar diya gaya hai.\n\n"
+                    f"_(Yeh {promo_count - 1}th repeat offense hai — mute duration bar bar badhega!)_",
+                    parse_mode='Markdown'
+                )
+                asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 90))
+                return
+
         cnt = db.add_warning(ch.id, usr.id)
 
         if cnt >= 4:
@@ -3134,6 +3331,9 @@ def main():
     app.add_handler(CommandHandler("adexempt",         adexempt_cmd))
     app.add_handler(CommandHandler("unadexempt",       unadexempt_cmd))
     app.add_handler(CommandHandler("aimod",            aimod_cmd))
+    app.add_handler(CommandHandler("addteacher",       addteacher_cmd))
+    app.add_handler(CommandHandler("removeteacher",    removeteacher_cmd))
+    app.add_handler(CommandHandler("teachers",         teachers_cmd))
 
     # ── Callback Queries ─────────────────────────────────────
     app.add_handler(CallbackQueryHandler(captcha_callback, pattern=r"^captcha_"))
