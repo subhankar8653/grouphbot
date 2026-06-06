@@ -2891,42 +2891,56 @@ async def missinganime_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def aiapprove_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
     Owner only — approve a group to use AI moderation.
-    Use in group: /aiapprove  → approves current group
-    Use in DM:    /aiapprove <chat_id>  → approves that group
+    Use in group: /aiapprove        → approves current group
+    Use in DM:    /aiapprove <id>   → approves that group by chat_id
     """
-    caller = update.effective_user
-    if caller.id != OWNER_ID:
+    if update.effective_user.id != OWNER_ID:
         return  # silent ignore
 
     ch = update.effective_chat
 
-    # DM mein use kiya with chat_id
+    # ── DM mein use kiya ──────────────────────────────────────
     if ch.type == "private":
         if not ctx.args:
             return await update.message.reply_text(
-                "❌ DM mein use: `/aiapprove <group_chat_id>`\n"
-                "Ya group mein ja ke seedha `/aiapprove` karo.",
+                "❌ *DM mein chat ID dena zaroori hai!*\n\n"
+                "Usage: `/aiapprove <group_chat_id>`\n\n"
+                "Example:\n"
+                "`/aiapprove -1001234567890`\n\n"
+                "_Group ka ID pane ke liye group mein `/id` use karo._",
                 parse_mode='Markdown'
             )
         try:
             target_chat_id = int(ctx.args[0])
         except ValueError:
-            return await update.message.reply_text("❌ Invalid chat ID!")
+            return await update.message.reply_text(
+                f"❌ Invalid ID: `{ctx.args[0]}`\n\n"
+                f"_Sirf number dalo, jaise `-1001234567890`_",
+                parse_mode='Markdown'
+            )
     else:
-        # Group mein use kiya
+        # ── Group mein use kiya ───────────────────────────────
         target_chat_id = ch.id
 
-    db.groups.update_one(
-        {"_id": target_chat_id},
-        {"$set": {"ai_approved": True, "aimod": True}},
-        upsert=True
-    )
-    await update.message.reply_text(
-        f"✅ *AI Approved!*\n\n"
-        f"🤖 Group `{target_chat_id}` ke liye AI moderation *approved + ON* kar diya!\n\n"
-        f"_Ab group admin `/aimod on/off` se control kar sakte hain._",
-        parse_mode='Markdown'
-    )
+    # DB mein save karo
+    try:
+        db.groups.update_one(
+            {"_id": target_chat_id},
+            {"$set": {"ai_approved": True, "aimod": True}},
+            upsert=True
+        )
+        await update.message.reply_text(
+            f"✅ *AI Approved!*\n"
+            f"{'─'*28}\n\n"
+            f"🤖 Group `{target_chat_id}` ke liye:\n"
+            f"  • AI Approved: ✅\n"
+            f"  • AI Status: 🟢 ON\n\n"
+            f"_Group admin `/aimod on/off` se control kar sakte hain._\n"
+            f"_Revoke karna ho toh: `/airevoke {target_chat_id}`_",
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: `{e}`", parse_mode='Markdown')
 
 
 # ─── /airevoke ──────────────────────────────────────────────
@@ -2936,8 +2950,7 @@ async def airevoke_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     Use in group: /airevoke
     Use in DM:    /airevoke <chat_id>
     """
-    caller = update.effective_user
-    if caller.id != OWNER_ID:
+    if update.effective_user.id != OWNER_ID:
         return  # silent ignore
 
     ch = update.effective_chat
@@ -2945,23 +2958,42 @@ async def airevoke_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if ch.type == "private":
         if not ctx.args:
             return await update.message.reply_text(
-                "❌ DM mein use: `/airevoke <group_chat_id>`",
+                "❌ *DM mein chat ID dena zaroori hai!*\n\n"
+                "Usage: `/airevoke <group_chat_id>`\n\n"
+                "Example:\n"
+                "`/airevoke -1001234567890`\n\n"
+                "_Approved groups dekhne ke liye `/aigroups` use karo._",
                 parse_mode='Markdown'
             )
         try:
             target_chat_id = int(ctx.args[0])
         except ValueError:
-            return await update.message.reply_text("❌ Invalid chat ID!")
+            return await update.message.reply_text(
+                f"❌ Invalid ID: `{ctx.args[0]}`\n\n"
+                f"_Sirf number dalo, jaise `-1001234567890`_",
+                parse_mode='Markdown'
+            )
     else:
         target_chat_id = ch.id
 
-    db.update_group(target_chat_id, {"ai_approved": False, "aimod": False})
-    await update.message.reply_text(
-        f"🔴 *AI Revoked!*\n\n"
-        f"Group `{target_chat_id}` se AI approval hata di.\n"
-        f"_AI wahan kaam nahi karega._",
-        parse_mode='Markdown'
-    )
+    try:
+        db.groups.update_one(
+            {"_id": target_chat_id},
+            {"$set": {"ai_approved": False, "aimod": False}},
+            upsert=True
+        )
+        await update.message.reply_text(
+            f"🔴 *AI Revoked!*\n"
+            f"{'─'*28}\n\n"
+            f"Group `{target_chat_id}` ke liye:\n"
+            f"  • AI Approved: ❌\n"
+            f"  • AI Status: 🔴 OFF\n\n"
+            f"_AI wahan kaam nahi karega._\n"
+            f"_Wapas enable karna ho: `/aiapprove {target_chat_id}`_",
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: `{e}`", parse_mode='Markdown')
 
 
 # ─── /aigroups ──────────────────────────────────────────────
@@ -3409,8 +3441,8 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                         "reply": f"Bhai {user_name(usr)}, *{anime_name}* baar baar likhne se kuch nahi hoga 😄 Ye anime available hai toh group mein already pata hoga!"
                     }
                 else:
-                    # ── Fix 2: 1.5 sec wait karo — provider bot ne reply diya? → skip ──
-                    await asyncio.sleep(1.5)
+                    # ── 3 sec wait — provider bot ne reply diya? → skip ──
+                    await asyncio.sleep(3.0)
 
                     # Check: kisi bot ne is message pe reply kar diya kya?
                     provider_replied = (
@@ -3470,6 +3502,10 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if violation:
         asyncio.create_task(msg.delete())
+
+        # ── Admin hai? Sirf message delete karo, koi action nahi ──
+        if is_admin:
+            return
 
         # ── Teacher special handling ──────────────────────────
         if violation == "ai_promo" and db.is_teacher(ch.id, usr.id):
