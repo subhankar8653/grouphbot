@@ -3496,53 +3496,44 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     g_settings = db.get_group(ch.id)
     sticker_del_min = g_settings.get("sticker_delete_min")
-    autodel_min     = db.get_effective_autodelete(ch.id)   # global default ya per-group override
+    autodel_min     = db.get_effective_autodelete(ch.id)
 
-    is_sticker_media = (
-        msg.sticker or
-        msg.animation or
-        (msg.text and any(ord(c) > 127000 for c in txt))
-    )
+    # ── Admin/Owner check SABSE PEHLE ───────────────────────
+    is_admin = await is_adm(ctx, ch.id, usr.id)
 
+    # Admin aur Owner ko koi bhi check nahi lagega
+    if is_admin:
+        return
+
+    # ── Gmute / Fban check (sirf non-admins ke liye) ────────
     if db.is_gmuted(usr.id):
         asyncio.create_task(msg.delete())
         asyncio.create_task(do_mute(ctx, ch.id, usr.id, 604800))
         return
 
-    # FBanned user — silently ban and delete message, no notification
     if db.is_fbanned(usr.id):
         asyncio.create_task(msg.delete())
         asyncio.create_task(do_ban(ctx, ch.id, usr.id))
         return
 
-    is_admin = await is_adm(ctx, ch.id, usr.id)
-
-    # ── Autodelete logic ────────────────────────────────────
-    # Sender ID resolve karo — normal user ya channel/bot sender_chat
+    # ── Autodelete logic ─────────────────────────────────────
     sender_id = usr.id if usr else None
     sender_chat = getattr(msg, 'sender_chat', None)
     if sender_chat:
         sender_id = sender_chat.id
 
-    # Autodelete exempt check — globally exempted bot/channel IDs
     ad_exempted = sender_id and db.is_ad_exempt(sender_id)
 
-    # Sticker auto-delete: sabpe lagega (admin bhi), sirf exempt nahi
+    # Sticker detection — sirf actual sticker/animation, stylish text nahi
+    is_sticker_media = bool(msg.sticker or msg.animation)
+
     if sticker_del_min and is_sticker_media and not ad_exempted:
         asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, sticker_del_min * 60))
 
-    # Global/per-group autodelete:
-    # - Admin ke messages delete NAHI honge (unka kaam hota hai)
-    # - Exempt bots/channels ke messages delete nahi honge
-    # - Baaki sab delete honge
-    if autodel_min and not is_admin and not ad_exempted:
+    if autodel_min and not ad_exempted:
         asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, autodel_min * 60))
 
     if db.is_immortal(ch.id, usr.id):
-        return
-
-    # ── Admin early return — koi bhi check nahi, koi delete nahi ──
-    if is_admin:
         return
 
     db.inc_stat("scanned")
