@@ -776,7 +776,7 @@ async def is_adm(ctx, chat_id, user_id):
         return True
     k = f"adm_{chat_id}_{user_id}"
     now = time.time()
-    if k in CACHE and now - CACHE[k][1] < 300:
+    if k in CACHE and now - CACHE[k][1] < 600:
         return CACHE[k][0]
     try:
         m = await ctx.bot.get_chat_member(chat_id, user_id)
@@ -785,8 +785,22 @@ async def is_adm(ctx, chat_id, user_id):
             CACHE.pop(next(iter(CACHE)))
         CACHE[k] = (r, now)
         return r
-    except:
-        return False
+    except Exception:
+        # API fail — fallback: saare admins fetch karke check karo
+        try:
+            admins = await ctx.bot.get_chat_administrators(chat_id)
+            admin_ids = {a.user.id for a in admins}
+            r = user_id in admin_ids
+            if len(CACHE) >= MAX_CACHE:
+                CACHE.pop(next(iter(CACHE)))
+            CACHE[k] = (r, now)
+            return r
+        except Exception:
+            # Dono fail — agar pehle se cached hai toh woh use karo
+            if k in CACHE:
+                return CACHE[k][0]
+            # Koi info nahi — doubt mein admin maano (safe side)
+            return True
 
 
 def get_sender_id(update: Update) -> int:
@@ -3320,7 +3334,6 @@ async def track_bot_reply(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
     Jab bhi koi bot group mein kisi message pe reply karta hai,
     us original message_id ko mark kar do.
-    Isse AI check mein pata chalega ki provider bot already respond kar chuka hai.
     """
     msg = update.message
     if not msg or not msg.from_user:
@@ -3328,24 +3341,93 @@ async def track_bot_reply(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Sirf bots ke messages track karo (hamara bot nahi)
     if not msg.from_user.is_bot or msg.from_user.id == ctx.bot.id:
         return
-    # Sirf agar ye reply hai kisi message pe
-    if not msg.reply_to_message:
-        return
 
     ch_id = update.effective_chat.id
-    replied_to_id = msg.reply_to_message.message_id
 
     if ch_id not in PROVIDER_BOT_REPLIES:
         PROVIDER_BOT_REPLIES[ch_id] = {}
 
-    PROVIDER_BOT_REPLIES[ch_id][replied_to_id] = time.time()
+    # Track karo:
+    # 1. Agar ye reply hai → original message_id track karo
+    if msg.reply_to_message:
+        replied_to_id = msg.reply_to_message.message_id
+        PROVIDER_BOT_REPLIES[ch_id][replied_to_id] = time.time()
 
-    # Cleanup — 5 min se purane entries hata do (memory leak nahi hoga)
+    # 2. Bot ne kisi bhi message ke baad last 30 sec mein reply kiya
+    #    → recent messages ka range mark karo (msg_id - 5 to msg_id - 1)
+    #    Yeh isliye ki kabhi kabhi reply_to_message nahi hota
+    current_id = msg.message_id
+    for offset in range(1, 8):
+        PROVIDER_BOT_REPLIES[ch_id][current_id - offset] = time.time()
+
+    # Cleanup — 2 min se purane entries hata do
     now = time.time()
     PROVIDER_BOT_REPLIES[ch_id] = {
         mid: t for mid, t in PROVIDER_BOT_REPLIES[ch_id].items()
-        if now - t < 300
+        if now - t < 120
     }
+
+
+async def _delayed_ai_check(ctx, msg, ch, usr, txt_for_ai, is_reply_to_bot, g_settings):
+    """
+    Background task — 4 sec baad check karo ki provider bot ne reply kiya ya nahi.
+    Isliye background mein hai taaki provider bot ka Telegram update pehle process ho sake.
+    """
+    await asyncio.sleep(4.0)
+
+    # Ab check karo — provider bot ne reply kiya?
+    provider_replied = (
+        ch.id in PROVIDER_BOT_REPLIES and
+        msg.message_id in PROVIDER_BOT_REPLIES[ch.id]
+    )
+
+    if provider_replied:
+        # Provider bot already answer de chuka — AI chup rahe
+        return
+
+    # Provider ne reply nahi kiya — AI check karo
+    reply_context = ""
+    if is_reply_to_bot and msg.reply_to_message and msg.reply_to_message.text:
+        reply_context = msg.reply_to_message.text[:300]
+
+    ai_result = await ai_check(
+        txt_for_ai, usr.id, ch.id,
+        getattr(usr, 'username', '') or '',
+        reply_context=reply_context,
+        bypass_cooldown=is_reply_to_bot
+    )
+
+    # ANIME_NOT_FOUND
+    if ai_result["action"] == "ANIME_NOT_FOUND" and ai_result.get("reply"):
+        anime_name = ai_result.get("anime_name") or txt_for_ai.strip()
+        db.log_missing_anime(anime_name, ch.id)
+        try:
+            reply_msg = await msg.reply_text(ai_result["reply"], parse_mode='Markdown')
+            asyncio.create_task(delete_after(ctx, ch.id, reply_msg.message_id, 120))
+        except Exception:
+            pass
+        try:
+            group_name = getattr(ch, 'title', str(ch.id))
+            await ctx.bot.send_message(
+                OWNER_ID,
+                f"📋 *Missing Anime Request!*\n{'─'*28}\n\n"
+                f"🎌 Anime: `{anime_name}`\n"
+                f"👤 User: {user_name(usr)}\n"
+                f"💬 Group: {group_name} (`{ch.id}`)\n\n"
+                f"_User ne search kiya lekin available nahi tha._",
+                parse_mode='Markdown'
+            )
+        except Exception:
+            pass
+        return
+
+    # REPLY
+    if ai_result["action"] == "REPLY" and ai_result.get("reply"):
+        try:
+            reply_msg = await msg.reply_text(ai_result["reply"], parse_mode='Markdown')
+            asyncio.create_task(delete_after(ctx, ch.id, reply_msg.message_id, 90))
+        except Exception:
+            pass
 
 
 # ═══════════════════════════════════════════════════════════
@@ -3503,30 +3585,15 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                         "reply": f"Bhai {user_name(usr)}, *{anime_name}* baar baar likhne se kuch nahi hoga 😄 Ye anime available hai toh group mein already pata hoga!"
                     }
                 else:
-                    # ── 3 sec wait — provider bot ne reply diya? → skip ──
-                    await asyncio.sleep(3.0)
-
-                    # Check: kisi bot ne is message pe reply kar diya kya?
-                    provider_replied = (
-                        ch.id in PROVIDER_BOT_REPLIES and
-                        msg.message_id in PROVIDER_BOT_REPLIES[ch.id]
-                    )
-
-                    if provider_replied:
-                        # Provider bot already answer de chuka — AI chup rahe
-                        pass
-                    else:
-                        # Agar bot ke message pe reply hai toh context bhi bhejo
-                        reply_context = ""
-                        if is_reply_to_bot and msg.reply_to_message.text:
-                            reply_context = msg.reply_to_message.text[:300]
-
-                        ai_result = await ai_check(
-                            txt_for_ai, usr.id, ch.id,
-                            getattr(usr, 'username', '') or '',
-                            reply_context=reply_context,
-                            bypass_cooldown=is_reply_to_bot
+                    # Provider bot ka update process hone ke liye background task mein bhejo
+                    asyncio.create_task(
+                        _delayed_ai_check(
+                            ctx, msg, ch, usr, txt_for_ai,
+                            is_reply_to_bot, g_settings
                         )
+                    )
+                    # Yahan se return — AI result baad mein process hoga
+                    return
 
         if ai_result["action"] == "PROMO":
             violation = "ai_promo"
