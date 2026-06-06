@@ -546,6 +546,13 @@ class DB:
         k = f"{chat_id}_{user_id}"
         self.users.delete_one({"_id": k})
 
+    def global_clear_warnings(self, user_id):
+        """Saare groups se ek saath user ki warnings hatao."""
+        # Key format: {chat_id}_{user_id} — user_id se ending wale sab delete
+        suffix = f"_{user_id}"
+        result = self.users.delete_many({"_id": {"$regex": f"{re.escape(str(user_id))}$"}})
+        return result.deleted_count
+
     def add_gmute(self, user_id):
         self.gmutes.update_one({"_id": user_id}, {"$set": {"_id": user_id}}, upsert=True)
         self.inc_stat("gmutes")
@@ -1490,6 +1497,7 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"🗓️ `/globalmutes` — Global mute list\n"
             f"💀 `/fban <id> [reason]` — Global ban\n"
             f"✅ `/gunban <id>` — Global unban\n"
+            f"🧹 `/gclearwarn <id>` — Saare groups se warnings clear\n"
             f"⚡ `/power <id>` — Grant fban power\n"
             f"🔻 `/unpower <id>` — Revoke fban power\n"
             f"🌐 `/gblacklist` — Global blacklist\n"
@@ -1573,7 +1581,8 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"🌐 `/autodelete <min>` _(in DM)_ — Global default\n"
             f"💀 `/fban <id> [reason]` — Global ban all groups\n"
             f"✅ `/gunban <id>` — Global unban\n"
-            f"⚡ `/power <id>` — Grant fban power\n"
+            f"✅ `/gunban <id>` — Global unban\n"
+            f"🧹 `/gclearwarn <id>` — Saare groups se warnings clear\n"
             f"🔻 `/unpower <id>` — Revoke fban power\n"
             f"📢 `/broadcast <msg>` — Message all groups\n"
             f"👥 `/groups` `/stats` — Bot stats\n"
@@ -2787,6 +2796,57 @@ async def gunban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# ─── /gclearwarn ────────────────────────────────────────────
+async def gclearwarn_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Owner + /power users — saare groups se ek saath user ki warnings clear karo.
+    Usage: /gclearwarn <user_id | @username>
+           Reply to message + /gclearwarn
+    """
+    caller = update.effective_user.id
+    if caller != OWNER_ID and not db.is_powered(caller):
+        return await update.message.reply_text("❌ Owner ya powered user hi yeh command use kar sakte hain!")
+
+    target_id = None
+    target_name = None
+
+    if update.message.reply_to_message:
+        tgt = update.message.reply_to_message.from_user
+        target_id = tgt.id
+        target_name = user_name(tgt)
+    elif ctx.args:
+        raw = ctx.args[0]
+        try:
+            target_id = int(raw)
+        except ValueError:
+            uname = raw.lstrip('@')
+            try:
+                chat_obj = await ctx.bot.get_chat(f"@{uname}")
+                target_id = chat_obj.id
+                target_name = chat_obj.first_name or uname
+            except Exception:
+                return await update.message.reply_text(
+                    f"❌ User nahi mila: `{raw}`", parse_mode='Markdown'
+                )
+    else:
+        return await update.message.reply_text(
+            "❌ Usage: `/gclearwarn <user_id | @username>`\n"
+            "Ya user ke message pe reply karke `/gclearwarn` likho.",
+            parse_mode='Markdown'
+        )
+
+    deleted = db.global_clear_warnings(target_id)
+
+    await update.message.reply_text(
+        f"🧹 *Global Warnings Cleared!*\n"
+        f"{'─'*28}\n\n"
+        f"👤 User: {target_name or f'`{target_id}`'}\n"
+        f"🗑️ Removed: `{deleted}` warning record(s) across all groups\n\n"
+        f"_Ab yeh user fresh start se hai — koi warning nahi._",
+        parse_mode='Markdown'
+    )
+
+
 # ─── /adexempt ──────────────────────────────────────────────
 # ─── /aimod ─────────────────────────────────────────────────
 async def aimod_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -3396,9 +3456,11 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if autodel_min and not is_admin and not ad_exempted:
         asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, autodel_min * 60))
 
-    # Admin ke violations (link/username/etc.) check hote rahenge
-    # Sirf is_adm wala early return hata diya — ab admin bhi violation check se guzrega
     if db.is_immortal(ch.id, usr.id):
+        return
+
+    # ── Admin early return — koi bhi check nahi, koi delete nahi ──
+    if is_admin:
         return
 
     db.inc_stat("scanned")
@@ -3715,6 +3777,7 @@ def main():
     app.add_handler(CommandHandler("unpower",          unpower_cmd))
     app.add_handler(CommandHandler("fban",             fban_cmd))
     app.add_handler(CommandHandler("gunban",           gunban_cmd))
+    app.add_handler(CommandHandler("gclearwarn",       gclearwarn_cmd))
     app.add_handler(CommandHandler("adexempt",         adexempt_cmd))
     app.add_handler(CommandHandler("unadexempt",       unadexempt_cmd))
     app.add_handler(CommandHandler("aimod",            aimod_cmd))
