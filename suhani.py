@@ -214,9 +214,6 @@ MAX_CACHE = 100
 
 CAPTCHA_PENDING = {}
 
-# Provider bot reply tracker: {chat_id: {msg_id: timestamp}}
-# Jab koi bot kisi message pe reply karta hai, hum yahan track karte hain
-PROVIDER_BOT_REPLIES: dict[int, dict[int, float]] = {}
 
 # ═══════════════════════════════════════════════════════════
 #  AI ENGINE — Groq (llama-3.1-8b-instant)
@@ -3330,59 +3327,63 @@ async def stats_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ═══════════════════════════════════════════════════════════
 #  BOT REPLY TRACKER — Provider bot ne reply kiya? Track karo
 # ═══════════════════════════════════════════════════════════
+# Structure: {chat_id: {"last_bot_reply_time": float, "replied_to_ids": {msg_id: time}}}
+PROVIDER_BOT_REPLIES: dict = {}
+
 async def track_bot_reply(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
-    Jab bhi koi bot group mein kisi message pe reply karta hai,
-    us original message_id ko mark kar do.
+    Jab bhi koi bot (provider) group mein kuch bheje → timestamp note karo.
+    _delayed_ai_check mein yeh timestamp use hoga.
     """
     msg = update.message
     if not msg or not msg.from_user:
         return
-    # Sirf bots ke messages track karo (hamara bot nahi)
+    # Sirf dusre bots track karo (hamara bot nahi)
     if not msg.from_user.is_bot or msg.from_user.id == ctx.bot.id:
         return
 
     ch_id = update.effective_chat.id
+    now = time.time()
 
     if ch_id not in PROVIDER_BOT_REPLIES:
-        PROVIDER_BOT_REPLIES[ch_id] = {}
+        PROVIDER_BOT_REPLIES[ch_id] = {"last_bot_time": 0, "replied_ids": {}}
 
-    # Track karo:
-    # 1. Agar ye reply hai → original message_id track karo
+    # Timestamp update karo — koi bhi bot active tha
+    PROVIDER_BOT_REPLIES[ch_id]["last_bot_time"] = now
+
+    # Agar direct reply hai → exact message_id bhi track karo
     if msg.reply_to_message:
-        replied_to_id = msg.reply_to_message.message_id
-        PROVIDER_BOT_REPLIES[ch_id][replied_to_id] = time.time()
+        rid = msg.reply_to_message.message_id
+        PROVIDER_BOT_REPLIES[ch_id]["replied_ids"][rid] = now
 
-    # 2. Bot ne kisi bhi message ke baad last 30 sec mein reply kiya
-    #    → recent messages ka range mark karo (msg_id - 5 to msg_id - 1)
-    #    Yeh isliye ki kabhi kabhi reply_to_message nahi hota
-    current_id = msg.message_id
-    for offset in range(1, 8):
-        PROVIDER_BOT_REPLIES[ch_id][current_id - offset] = time.time()
-
-    # Cleanup — 2 min se purane entries hata do
-    now = time.time()
-    PROVIDER_BOT_REPLIES[ch_id] = {
-        mid: t for mid, t in PROVIDER_BOT_REPLIES[ch_id].items()
+    # Cleanup old replied_ids (2 min se purane)
+    PROVIDER_BOT_REPLIES[ch_id]["replied_ids"] = {
+        mid: t for mid, t in PROVIDER_BOT_REPLIES[ch_id]["replied_ids"].items()
         if now - t < 120
     }
 
 
 async def _delayed_ai_check(ctx, msg, ch, usr, txt_for_ai, is_reply_to_bot, g_settings):
     """
-    Background task — 4 sec baad check karo ki provider bot ne reply kiya ya nahi.
-    Isliye background mein hai taaki provider bot ka Telegram update pehle process ho sake.
+    Background task — user ka message aane ke baad wait karo,
+    phir check karo ki provider bot ne kuch bheja ya nahi.
     """
-    await asyncio.sleep(4.0)
+    msg_time = time.time()  # Note karo kab message aaya
+    await asyncio.sleep(5.0)
 
-    # Ab check karo — provider bot ne reply kiya?
-    provider_replied = (
+    # Check 1: Exact message_id pe reply aaya?
+    exact_replied = (
         ch.id in PROVIDER_BOT_REPLIES and
-        msg.message_id in PROVIDER_BOT_REPLIES[ch.id]
+        msg.message_id in PROVIDER_BOT_REPLIES[ch.id].get("replied_ids", {})
     )
 
-    if provider_replied:
-        # Provider bot already answer de chuka — AI chup rahe
+    # Check 2: Hamare message ke BAAD kisi bot ne kuch bheja?
+    # (Provider bot ka reply reply_to_message ke bina bhi aa sakta hai)
+    last_bot_time = PROVIDER_BOT_REPLIES.get(ch.id, {}).get("last_bot_time", 0)
+    bot_replied_after = last_bot_time > msg_time
+
+    if exact_replied or bot_replied_after:
+        # Provider bot active tha — AI chup rahe
         return
 
     # Provider ne reply nahi kiya — AI check karo
