@@ -998,16 +998,26 @@ async def delete_after(ctx, chat_id, msg_id, delay_seconds):
         pass
 
 
+
+async def auto_delete_commands(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Group mein aane wale har command ko 10 min mein delete karo (sirf groups, broadcast nahi)."""
+    msg = update.effective_message
+    ch  = update.effective_chat
+    if not msg or not ch or ch.type == "private":
+        return
+    asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 600))
+
 async def global_mute_user(ctx, user_id, display_name=None):
     db.add_gmute(user_id)
     for gid in db.get_all_groups():
         try:
             await do_mute(ctx, gid, user_id, 604800)
-            await ctx.bot.send_message(
+            notice = await ctx.bot.send_message(
                 gid,
                 f"👤 {display_name or user_id}\n\n{WARN_MSG[4]}",
                 parse_mode='Markdown'
             )
+            asyncio.create_task(delete_after(ctx, gid, notice.message_id, 600))
             await asyncio.sleep(0.1)
         except:
             pass
@@ -2311,14 +2321,16 @@ async def warnings_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if ch.type == "private": return
     tgt = update.message.reply_to_message.from_user if update.message.reply_to_message else update.effective_user
     if db.is_gmuted(tgt.id):
-        return await update.message.reply_text(
+        msg = await update.message.reply_text(
             f"👤 {user_name(tgt)}\n\n"
             f"💀 *GLOBALLY MUTED* — 1 week ban active.",
             parse_mode='Markdown'
         )
+        asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 600))
+        return
     w = db.get_warnings(ch.id, tgt.id)
     bars = "🟥" * w + "⬜" * (4 - w)
-    await update.message.reply_text(
+    msg = await update.message.reply_text(
         f"📊 *Warning Status*\n"
         f"{'─'*20}\n\n"
         f"👤 {user_name(tgt)}\n"
@@ -2326,6 +2338,7 @@ async def warnings_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"Scale: {bars}",
         parse_mode='Markdown'
     )
+    asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 600))
 
 
 # ─── /resetwarnings ─────────────────────────────────────────
@@ -3863,6 +3876,11 @@ def main():
         filters.ALL & filters.ChatType.GROUPS & ~filters.COMMAND,
         check_msg
     ), group=1)
+    # ── Command auto-delete (10 min) — chahe koi bhi command ho, group mein ──
+    app.add_handler(MessageHandler(
+        filters.COMMAND & filters.ChatType.GROUPS,
+        auto_delete_commands
+    ), group=2)
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_join))
     app.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER,  on_leave))
 
