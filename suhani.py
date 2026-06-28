@@ -1466,6 +1466,7 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{'─'*28}\n\n"
             f"📜 `/rules` — View group rules\n"
             f"⚠️ `/warnings` — Check your warnings\n"
+            f"⭐ `/rep` — Check your reputation (ya reply karo)\n"
             f"🏆 `/leaderboard` — Group message-activity ranking\n"
             f"🌐 `/gleaderboard` — Global message-activity ranking\n"
             f"🆔 `/id` — Your Telegram ID\n\n"
@@ -1707,6 +1708,7 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"{'─'*28}\n"
         f"📜 `/rules` — View group rules\n"
         f"⚠️ `/warnings` — Check your warnings\n"
+        f"⭐ `/rep` — Check reputation (reply karo kisi ko)\n"
         f"🏆 `/leaderboard` — Group message-activity ranking\n"
         f"🌐 `/gleaderboard` — Global message-activity ranking\n"
         f"🆔 `/id` — Your Telegram ID\n"
@@ -1733,6 +1735,7 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{'─'*28}\n\n"
             f"📜 `/rules` — View group rules\n"
             f"⚠️ `/warnings` — Check your warnings\n"
+            f"⭐ `/rep` — Check reputation (ya kisi ko reply karo)\n"
             f"🏆 `/leaderboard` — Group message-activity ranking\n"
             f"🌐 `/gleaderboard` — Global message-activity ranking\n"
             f"🆔 `/id` — Your Telegram ID\n\n"
@@ -1754,6 +1757,7 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"♻️ `/resetwarnings` — Reset warnings (reply)\n"
         f"🏆 `/leaderboard` — Group message-activity ranking\n"
         f"🌐 `/gleaderboard` — Global message-activity ranking\n"
+        f"⭐ `/rep` — Reputation check (sab use kar sakte hain)\n"
         f"🗑️ `/del` — Delete message (reply)\n"
         f"🧹 `/purge` — Bulk delete from reply\n"
         f"🧪 `/testmute` — Test 35s mute (reply)\n"
@@ -1781,7 +1785,6 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{'─'*30}\n\n"
             f"🌐 `/autodelete <min>` _(in DM)_ — Global default\n"
             f"💀 `/fban <id> [reason]` — Global ban all groups\n"
-            f"✅ `/gunban <id>` — Global unban\n"
             f"✅ `/gunban <id>` — Global unban\n"
             f"🧹 `/gclearwarn <id>` — Saare groups se warnings clear\n"
             f"🔻 `/unpower <id>` — Revoke fban power\n"
@@ -2499,7 +2502,11 @@ async def warn_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def warnings_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private": return
-    tgt = update.message.reply_to_message.from_user if update.message.reply_to_message else update.effective_user
+    # Safe extraction — reply_to_message ho toh uska user, warna khud
+    if update.message.reply_to_message and update.message.reply_to_message.from_user:
+        tgt = update.message.reply_to_message.from_user
+    else:
+        tgt = update.effective_user
     if not tgt:
         return await update.message.reply_text("❌ Could not identify user (anonymous/channel reply).")
     if db.is_gmuted(tgt.id):
@@ -3564,24 +3571,30 @@ def build_lb_text(entries, period, scope_title):
 async def leaderboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private": return
-    entries = db.get_activity_leaderboard(ch.id, period="today", limit=10)
-    text = build_lb_text(entries, "today", "GROUP LEADERBOARD")
-    kb = build_lb_keyboard("g", ch.id, "today")
-    msg = await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
-    asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 300))
+    try:
+        entries = db.get_activity_leaderboard(ch.id, period="today", limit=10)
+        text = build_lb_text(entries, "today", "GROUP LEADERBOARD")
+        kb = build_lb_keyboard("g", ch.id, "today")
+        msg = await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
+        asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 600))
+    except Exception as e:
+        await update.message.reply_text(f"❌ Leaderboard load nahi hua: `{e}`", parse_mode='Markdown')
 
 
 # ─── /gleaderboard ─── Global message-count ranking (all groups) ─
 async def gleaderboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    entries = db.get_global_activity_leaderboard(period="today", limit=10)
-    text = build_lb_text(entries, "today", "GLOBAL LEADERBOARD")
-    kb = build_lb_keyboard("a", 0, "today")
-    ch = update.effective_chat
-    if ch.type == "private":
-        await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
-    else:
-        msg = await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
-        asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 300))
+    try:
+        entries = db.get_global_activity_leaderboard(period="today", limit=10)
+        text = build_lb_text(entries, "today", "GLOBAL LEADERBOARD")
+        kb = build_lb_keyboard("a", 0, "today")
+        ch = update.effective_chat
+        if ch.type == "private":
+            await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
+        else:
+            msg = await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
+            asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 600))
+    except Exception as e:
+        await update.message.reply_text(f"❌ Global leaderboard load nahi hua: `{e}`", parse_mode='Markdown')
 
 
 # ─── Leaderboard period-switch button callback ───────────────
@@ -3597,19 +3610,48 @@ async def leaderboard_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if period not in LB_PERIOD_LABEL:
         return
 
-    if scope == "g":
-        entries = db.get_activity_leaderboard(chat_id, period=period, limit=10)
-        text = build_lb_text(entries, period, "GROUP LEADERBOARD")
-        kb = build_lb_keyboard("g", chat_id, period)
-    else:
-        entries = db.get_global_activity_leaderboard(period=period, limit=10)
-        text = build_lb_text(entries, period, "GLOBAL LEADERBOARD")
-        kb = build_lb_keyboard("a", 0, period)
-
     try:
+        if scope == "g":
+            entries = db.get_activity_leaderboard(chat_id, period=period, limit=10)
+            text = build_lb_text(entries, period, "GROUP LEADERBOARD")
+            kb = build_lb_keyboard("g", chat_id, period)
+        else:
+            entries = db.get_global_activity_leaderboard(period=period, limit=10)
+            text = build_lb_text(entries, period, "GLOBAL LEADERBOARD")
+            kb = build_lb_keyboard("a", 0, period)
+
         await query.edit_message_text(text, parse_mode='Markdown', reply_markup=kb)
     except Exception:
         pass
+
+
+# ─── /rep ─── Reputation check (all group users can use) ─────
+async def rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ch = update.effective_chat
+    if ch.type == "private":
+        return await update.message.reply_text("❌ Ise group mein use karo!")
+    # Agar reply kiya ho toh us user ka rep, warna apna
+    if update.message.reply_to_message and update.message.reply_to_message.from_user:
+        tgt = update.message.reply_to_message.from_user
+    else:
+        tgt = update.effective_user
+    if not tgt:
+        return await update.message.reply_text("❌ User identify nahi hua!")
+    points = db.get_reputation(ch.id, tgt.id)
+    top_list = db.get_reputation_top(ch.id, limit=10)
+    rank = next((i + 1 for i, d in enumerate(top_list) if d.get("user_id") == tgt.id), None)
+    rank_str = f"#{rank}" if rank else "Unranked"
+    stars = "⭐" * min(points, 10) if points > 0 else "_(none yet)_"
+    msg = await update.message.reply_text(
+        f"⭐ *REPUTATION*\n"
+        f"{'─'*25}\n\n"
+        f"👤 {user_name(tgt)}\n"
+        f"Points: `{points}` {stars}\n"
+        f"Rank: `{rank_str}`\n\n"
+        f"_Thank you bolne pe reputation milti hai!_",
+        parse_mode='Markdown'
+    )
+    asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 300))
 
 
 # ═══════════════════════════════════════════════════════════
@@ -4157,6 +4199,7 @@ def main():
     app.add_handler(CommandHandler("warn",             warn_cmd))
     app.add_handler(CommandHandler("warnings",         warnings_cmd))
     app.add_handler(CommandHandler("resetwarnings",    reset_cmd))
+    app.add_handler(CommandHandler("rep",              rep_cmd))
     app.add_handler(CommandHandler("del",              del_cmd))
     app.add_handler(CommandHandler("purge",            purge_cmd))
     app.add_handler(CommandHandler("immortal",         immortal_cmd))
