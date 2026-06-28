@@ -126,7 +126,19 @@ VIOLATION_MSG = {
 EXEMPT_USERNAMES = {"admin", "owner", "request", "sbnime"}
 
 MUTE_TIME  = {1: 35, 2: 60, 3: 120, 4: 604800}
-WARN_EXP   = {1: 21600, 2: 57600, 3: 97200, 4: None}
+GMUTE_DURATION = 604800   # 1 week — global mute ki duration (seconds)
+# Warning expiry times (seconds). 4th warning (jo gmute trigger karta hai) ki
+# expiry GMUTE_DURATION ke barabar honi chahiye — None NAHI, warna woh warning
+# kabhi expire nahi hoti aur gmute hatne ke baad bhi warnings count rehta hai.
+WARN_EXP   = {1: 21600, 2: 57600, 3: 97200, 4: GMUTE_DURATION}
+
+# ── Thank-you keywords — reply karke bole to 1 warning kam / reputation +1 ──
+THANK_YOU_WORDS = {
+    "thank you", "thanks", "thank u", "thx", "tnx", "tysm", "ty",
+    "thankyou", "thanku", "thnx", "thnks",
+    "shukriya", "shukriyaa", "dhanyawad", "dhanyabad", "dhanyvad",
+    "asa shukriya", "bahut shukriya", "bohot shukriya", "bahot shukriya",
+}
 
 # ═══════════════════════════════════════════════════════════
 #  DETECTION PATTERNS
@@ -445,6 +457,7 @@ class DB:
         self.fbans    = self.db["fbans"]          # fban list
         self.powered  = self.db["powered_users"]  # users with /fban power
         self.ad_exempt = self.db["autodel_exempt"] # bots exempt from autodelete
+        self.reputation = self.db["reputation"]   # group-wise reputation points
 
         if not self.stats_c.find_one({"_id": "global"}):
             self.stats_c.insert_one({"_id": "global", "warnings": 0, "mutes": 0, "scanned": 0, "gmutes": 0})
@@ -529,7 +542,9 @@ class DB:
         now = time.time()
         current = self.get_warnings(chat_id, user_id)
         new_count = current + 1
-        exp = None if new_count >= 4 else now + WARN_EXP.get(new_count, 21600)
+        # Har warning (1-4) ki expiry hoti hai — 4th wali GMUTE_DURATION ke
+        # barabar, taaki gmute hatne ke saath hi yeh bhi expire ho jaaye.
+        exp = now + WARN_EXP.get(new_count, GMUTE_DURATION)
         warn_entry = {"t": now, "exp": exp}
         self.users.update_one(
             {"_id": k},
@@ -539,29 +554,111 @@ class DB:
         self.inc_stat("warnings")
         return min(new_count, 4)
 
+    def remove_one_warning(self, chat_id, user_id):
+        """Sabse purani/ek valid warning hatao (thank-you reward). Returns True if removed."""
+        k = f"{chat_id}_{user_id}"
+        doc = self.users.find_one({"_id": k})
+        if not doc:
+            return False
+        now = time.time()
+        valid = [w for w in doc.get("warns", []) if w.get("exp") is None or w["exp"] > now]
+        if not valid:
+            self.users.delete_one({"_id": k})
+            return False
+        valid.pop()  # sabse recent warning hatao
+        if valid:
+            self.users.update_one({"_id": k}, {"$set": {"warns": valid, "count": len(valid)}})
+        else:
+            self.users.delete_one({"_id": k})
+        return True
+
     def reset_warnings(self, chat_id, user_id):
         k = f"{chat_id}_{user_id}"
         self.users.delete_one({"_id": k})
 
     def global_clear_warnings(self, user_id):
         """Saare groups se ek saath user ki warnings hatao."""
-        # Key format: {chat_id}_{user_id} — user_id se ending wale sab delete
-        suffix = f"_{user_id}"
         result = self.users.delete_many({"_id": {"$regex": f"{re.escape(str(user_id))}$"}})
         return result.deleted_count
 
-    def add_gmute(self, user_id):
-        self.gmutes.update_one({"_id": user_id}, {"$set": {"_id": user_id}}, upsert=True)
+    def add_gmute(self, user_id, duration=GMUTE_DURATION):
+        """Global mute lagao with expiry timestamp — taaki yeh apne aap hat sake."""
+        now = time.time()
+        self.gmutes.update_one(
+            {"_id": user_id},
+            {"$set": {"_id": user_id, "since": now, "until": now + duration}},
+            upsert=True
+        )
         self.inc_stat("gmutes")
 
     def is_gmuted(self, user_id):
-        return self.gmutes.find_one({"_id": user_id}) is not None
+        """
+        Time-aware check. Agar gmute expire ho gaya hai (7 din puray), to:
+          - gmute record khud hata do
+          - is user ki saari (har group ki) warnings bhi clear kar do,
+            taaki agla offense fresh W1 se shuru ho — purani warnings carry na ho.
+        """
+        doc = self.gmutes.find_one({"_id": user_id})
+        if not doc:
+            return False
+        until = doc.get("until")
+        if until is not None and until <= time.time():
+            # Expired — auto cleanup + fresh start
+            self.gmutes.delete_one({"_id": user_id})
+            self.global_clear_warnings(user_id)
+            return False
+        return True
 
     def remove_gmute(self, user_id):
+        """Manual unmute — gmute hatao AND warnings bhi fresh start ke liye clear karo."""
         self.gmutes.delete_one({"_id": user_id})
+        self.global_clear_warnings(user_id)
+
+    def get_gmute_remaining(self, user_id):
+        """Seconds remaining in current gmute, ya None agar gmuted nahi hai."""
+        doc = self.gmutes.find_one({"_id": user_id})
+        if not doc:
+            return None
+        until = doc.get("until")
+        if until is None:
+            return None
+        remaining = until - time.time()
+        return max(0, remaining)
 
     def get_all_gmutes(self):
         return [g["_id"] for g in self.gmutes.find()]
+
+    # ── Reputation system ───────────────────────────────────────
+    def add_reputation(self, chat_id, user_id, amount=1, display_name=None):
+        """Group-wise reputation point add karo."""
+        k = f"{chat_id}_{user_id}"
+        update = {"$inc": {"points": amount}, "$set": {"chat_id": chat_id, "user_id": user_id}}
+        if display_name:
+            update["$set"]["name"] = display_name
+        self.reputation.update_one({"_id": k}, update, upsert=True)
+
+    def get_reputation(self, chat_id, user_id):
+        k = f"{chat_id}_{user_id}"
+        doc = self.reputation.find_one({"_id": k})
+        return doc.get("points", 0) if doc else 0
+
+    def get_group_leaderboard(self, chat_id, limit=10):
+        """Top reputation holders within ek group."""
+        cursor = self.reputation.find({"chat_id": chat_id}).sort("points", -1).limit(limit)
+        return list(cursor)
+
+    def get_global_leaderboard(self, limit=10):
+        """Top reputation holders across ALL groups — user_id ke hisaab se total points jodo."""
+        pipeline = [
+            {"$group": {
+                "_id": "$user_id",
+                "total_points": {"$sum": "$points"},
+                "name": {"$last": "$name"},
+            }},
+            {"$sort": {"total_points": -1}},
+            {"$limit": limit},
+        ]
+        return list(self.reputation.aggregate(pipeline))
 
     def add_immortal(self, chat_id, user_id):
         k = f"{chat_id}_{user_id}"
@@ -872,6 +969,23 @@ def user_name(u):
         return "User"
 
 
+def is_thank_you_text(text: str) -> bool:
+    """Check karo ki message me thank-you wala keyword hai ya nahi (Hindi/English mix)."""
+    if not text:
+        return False
+    clean = text.lower().strip()
+    clean = clean.strip(string.punctuation + " ")
+    if not clean:
+        return False
+    # Pura match ya keyword as a standalone word/phrase
+    for word in THANK_YOU_WORDS:
+        if clean == word:
+            return True
+        if re.search(r'\b' + re.escape(word) + r'\b', clean):
+            return True
+    return False
+
+
 def count_adult_emojis(text):
     return sum(text.count(e) for e in ADULT_EMOJIS)
 
@@ -1011,7 +1125,7 @@ async def global_mute_user(ctx, user_id, display_name=None):
     db.add_gmute(user_id)
     for gid in db.get_all_groups():
         try:
-            await do_mute(ctx, gid, user_id, 604800)
+            await do_mute(ctx, gid, user_id, GMUTE_DURATION)
             notice = await ctx.bot.send_message(
                 gid,
                 f"👤 {display_name or user_id}\n\n{WARN_MSG[4]}",
@@ -1296,6 +1410,8 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{'─'*28}\n\n"
             f"📜 `/rules` — View group rules\n"
             f"⚠️ `/warnings` — Check your warnings\n"
+            f"🏆 `/leaderboard` — Group reputation ranking\n"
+            f"🌐 `/gleaderboard` — Global reputation ranking\n"
             f"🆔 `/id` — Your Telegram ID\n\n"
             f"{'─'*28}\n"
             f"_These commands work for all members._"
@@ -1317,6 +1433,7 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"🔓 `/unban <id>` — Unban a user\n"
             f"⚠️ `/warn` — Give a warning\n"
             f"♻️ `/resetwarnings` — Reset warnings\n"
+            f"🏆 `/leaderboard` — Group reputation ranking\n"
             f"🗑️ `/del` — Delete replied message\n"
             f"🧹 `/purge` — Bulk delete messages\n"
             f"🧪 `/testmute` — Test 35s mute\n"
@@ -1534,6 +1651,8 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"{'─'*28}\n"
         f"📜 `/rules` — View group rules\n"
         f"⚠️ `/warnings` — Check your warnings\n"
+        f"🏆 `/leaderboard` — Group reputation ranking\n"
+        f"🌐 `/gleaderboard` — Global reputation ranking\n"
         f"🆔 `/id` — Your Telegram ID\n"
         f"{'─'*28}\n\n"
         f"_Add me to your group and make me admin to get started!_"
@@ -1558,11 +1677,14 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{'─'*28}\n\n"
             f"📜 `/rules` — View group rules\n"
             f"⚠️ `/warnings` — Check your warnings\n"
+            f"🏆 `/leaderboard` — Group reputation ranking\n"
+            f"🌐 `/gleaderboard` — Global reputation ranking\n"
             f"🆔 `/id` — Your Telegram ID\n\n"
             f"{'─'*28}\n"
             f"_Violations auto-detected. Stay within rules!_"
         )
         return await update.message.reply_text(text, parse_mode='Markdown')
+
 
     # ── Admin / Owner full help ──────────────────────────────
     admin_text = (
@@ -1574,6 +1696,8 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"🔓 `/unban <id>` — Unban user\n"
         f"⚠️ `/warn [reason]` — Warn user (reply)\n"
         f"♻️ `/resetwarnings` — Reset warnings (reply)\n"
+        f"🏆 `/leaderboard` — Group reputation ranking\n"
+        f"🌐 `/gleaderboard` — Global reputation ranking\n"
         f"🗑️ `/del` — Delete message (reply)\n"
         f"🧹 `/purge` — Bulk delete from reply\n"
         f"🧪 `/testmute` — Test 35s mute (reply)\n"
@@ -3337,6 +3461,67 @@ async def stats_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode='Markdown')
 
 
+# ─── /leaderboard ─── Group-wise reputation ranking ──────────
+async def leaderboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ch = update.effective_chat
+    if ch.type == "private": return
+    top = db.get_group_leaderboard(ch.id, limit=10)
+    if not top:
+        msg = await update.message.reply_text(
+            "📉 Abhi tak iss group mein koi reputation points nahi hain!\n\n"
+            "_Kisi ko thank you/shukriya bolo aur unka reputation badhao_ 💖",
+            parse_mode='Markdown'
+        )
+        asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 60))
+        return
+
+    medals = ["🥇", "🥈", "🥉"]
+    lines = []
+    for i, entry in enumerate(top):
+        rank = medals[i] if i < 3 else f"`{i+1}.`"
+        name = entry.get("name") or str(entry.get("user_id"))
+        pts = entry.get("points", 0)
+        lines.append(f"{rank} {name} — *{pts}* pts")
+
+    text = (
+        f"🏆 *GROUP LEADERBOARD*\n"
+        f"{'─'*28}\n\n" + "\n".join(lines)
+    )
+    msg = await update.message.reply_text(text, parse_mode='Markdown')
+    asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 300))
+
+
+# ─── /gleaderboard ─── Global reputation ranking (all groups) ─
+async def gleaderboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    top = db.get_global_leaderboard(limit=10)
+    if not top:
+        await update.message.reply_text(
+            "📉 Abhi tak koi global reputation points nahi hain!",
+            parse_mode='Markdown'
+        )
+        return
+
+    medals = ["🥇", "🥈", "🥉"]
+    lines = []
+    for i, entry in enumerate(top):
+        rank = medals[i] if i < 3 else f"`{i+1}.`"
+        name = entry.get("name") or str(entry.get("_id"))
+        pts = entry.get("total_points", 0)
+        lines.append(f"{rank} {name} — *{pts}* pts")
+
+    text = (
+        f"🌐 *GLOBAL LEADERBOARD*\n"
+        f"_(Saare groups mile ke ranking)_\n"
+        f"{'─'*28}\n\n" + "\n".join(lines)
+    )
+    ch = update.effective_chat
+    if ch.type == "private":
+        await update.message.reply_text(text, parse_mode='Markdown')
+    else:
+        msg = await update.message.reply_text(text, parse_mode='Markdown')
+        asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 300))
+
+
 # ═══════════════════════════════════════════════════════════
 #  BOT REPLY TRACKER — Provider bot ne reply kiya? Track karo
 # ═══════════════════════════════════════════════════════════
@@ -3466,9 +3651,40 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     txt = msg.text or msg.caption or ""
     if txt.startswith('/'): return
 
+    txt_lower = txt.lower().strip()
+
+    # ── Reply karke "thank you/shukriya" type bole to: ──────────
+    #    - target ki 1 warning kam ho jaayegi (agar koi warning hai)
+    #    - warna target ko 1 reputation point milega
+    if (
+        msg.reply_to_message
+        and msg.reply_to_message.from_user
+        and not msg.reply_to_message.from_user.is_bot
+        and msg.reply_to_message.from_user.id != usr.id
+        and is_thank_you_text(txt_lower)
+    ):
+        target = msg.reply_to_message.from_user
+        current_warns = db.get_warnings(ch.id, target.id)
+        if current_warns > 0:
+            db.remove_one_warning(ch.id, target.id)
+            notice = await msg.reply_text(
+                f"💖 {user_name(usr)} ne {user_name(target)} ko thank you bola!\n\n"
+                f"✅ 1 warning maaf ho gayi — ab `{current_warns - 1}/4` warnings hain.",
+                parse_mode='Markdown'
+            )
+        else:
+            db.add_reputation(ch.id, target.id, 1, user_name(target))
+            new_rep = db.get_reputation(ch.id, target.id)
+            notice = await msg.reply_text(
+                f"💖 {user_name(usr)} ne {user_name(target)} ko thank you bola!\n\n"
+                f"⭐ Reputation +1 mil gaya — total: `{new_rep}` points.",
+                parse_mode='Markdown'
+            )
+        asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 60))
+        return
+
     # ── "Suhani ban" natural language command ──────────────
     # Admin group mein "suhani ban @user" ya "suhani ban userid" likh sakta hai
-    txt_lower = txt.lower().strip()
     if txt_lower.startswith("suhani ban"):
         caller_is_admin = await is_adm(ctx, ch.id, usr.id) or usr.id == OWNER_ID
         if caller_is_admin:
@@ -3522,7 +3738,8 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # ── Gmute / Fban check (sirf non-admins ke liye) ────────
     if db.is_gmuted(usr.id):
         asyncio.create_task(msg.delete())
-        asyncio.create_task(do_mute(ctx, ch.id, usr.id, 604800))
+        remaining = db.get_gmute_remaining(usr.id)
+        asyncio.create_task(do_mute(ctx, ch.id, usr.id, remaining or GMUTE_DURATION))
         return
 
     if db.is_fbanned(usr.id):
@@ -3845,6 +4062,8 @@ def main():
     app.add_handler(CommandHandler("gblacklist",       gblacklist_cmd))
     app.add_handler(CommandHandler("gwhitelist",       gwhitelist_cmd))
     app.add_handler(CommandHandler("stats",            stats_cmd))
+    app.add_handler(CommandHandler("leaderboard",       leaderboard_cmd))
+    app.add_handler(CommandHandler("gleaderboard",      gleaderboard_cmd))
     app.add_handler(CommandHandler("power",            power_cmd))
     app.add_handler(CommandHandler("unpower",          unpower_cmd))
     app.add_handler(CommandHandler("fban",             fban_cmd))
