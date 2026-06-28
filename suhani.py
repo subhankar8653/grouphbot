@@ -457,7 +457,8 @@ class DB:
         self.fbans    = self.db["fbans"]          # fban list
         self.powered  = self.db["powered_users"]  # users with /fban power
         self.ad_exempt = self.db["autodel_exempt"] # bots exempt from autodelete
-        self.reputation = self.db["reputation"]   # group-wise reputation points
+        self.reputation = self.db["reputation"]   # group-wise reputation points (SEPARATE from leaderboard)
+        self.activity  = self.db["activity"]      # daily message-count tracking (leaderboard source)
 
         if not self.stats_c.find_one({"_id": "global"}):
             self.stats_c.insert_one({"_id": "global", "warnings": 0, "mutes": 0, "scanned": 0, "gmutes": 0})
@@ -578,7 +579,9 @@ class DB:
 
     def global_clear_warnings(self, user_id):
         """Saare groups se ek saath user ki warnings hatao."""
-        result = self.users.delete_many({"_id": {"$regex": f"{re.escape(str(user_id))}$"}})
+        # Underscore-anchored — taaki kisi doosre user ka ID (jo suffix
+        # ke roop mein match ho sakta tha) galti se na hat jaaye.
+        result = self.users.delete_many({"_id": {"$regex": f"_{re.escape(str(user_id))}$"}})
         return result.deleted_count
 
     def add_gmute(self, user_id, duration=GMUTE_DURATION):
@@ -597,13 +600,19 @@ class DB:
           - gmute record khud hata do
           - is user ki saari (har group ki) warnings bhi clear kar do,
             taaki agla offense fresh W1 se shuru ho — purani warnings carry na ho.
+
+        NOTE: Purane (legacy) gmute records — jo old buggy code se bane the —
+        mein 'until' field hi nahi hota tha, isliye unhe bhi yahan turant
+        expire/cleanup kar dete hain (permanent treat NAHI karte), warna woh
+        user hamesha "GLOBALLY MUTED" dikhta rahega aur /warnings kabhi sahi
+        count nahi dikhayega.
         """
         doc = self.gmutes.find_one({"_id": user_id})
         if not doc:
             return False
         until = doc.get("until")
-        if until is not None and until <= time.time():
-            # Expired — auto cleanup + fresh start
+        if until is None or until <= time.time():
+            # Expired (ya legacy record bina 'until') — auto cleanup + fresh start
             self.gmutes.delete_one({"_id": user_id})
             self.global_clear_warnings(user_id)
             return False
@@ -628,7 +637,7 @@ class DB:
     def get_all_gmutes(self):
         return [g["_id"] for g in self.gmutes.find()]
 
-    # ── Reputation system ───────────────────────────────────────
+    # ── Reputation system (ALAG/SEPARATE feature — leaderboard ka hissa NAHI hai) ──
     def add_reputation(self, chat_id, user_id, amount=1, display_name=None):
         """Group-wise reputation point add karo."""
         k = f"{chat_id}_{user_id}"
@@ -642,23 +651,70 @@ class DB:
         doc = self.reputation.find_one({"_id": k})
         return doc.get("points", 0) if doc else 0
 
-    def get_group_leaderboard(self, chat_id, limit=10):
-        """Top reputation holders within ek group."""
+    def get_reputation_top(self, chat_id, limit=10):
+        """Reputation ke hisaab se top users (alag feature, leaderboard se related nahi)."""
         cursor = self.reputation.find({"chat_id": chat_id}).sort("points", -1).limit(limit)
         return list(cursor)
 
-    def get_global_leaderboard(self, limit=10):
-        """Top reputation holders across ALL groups — user_id ke hisaab se total points jodo."""
+    # ── Activity / Message-count Leaderboard ──────────────────────
+    # Leaderboard ab REPUTATION se nahi — kitne MESSAGES bheje hain usse decide hota hai.
+    # Period buckets: "today", "2weeks" (last 14 din), "month" (last 30 din).
+    def track_activity(self, chat_id, user_id, display_name=None):
+        """Har message pe call hota hai — aaj ke date-bucket mein count +1."""
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        k = f"{chat_id}_{user_id}_{date_str}"
+        update = {
+            "$inc": {"count": 1},
+            "$set": {"chat_id": chat_id, "user_id": user_id, "date": date_str}
+        }
+        if display_name:
+            update["$set"]["name"] = display_name
+        self.activity.update_one({"_id": k}, update, upsert=True)
+
+    @staticmethod
+    def _activity_date_filter(period):
+        """period: 'today' | '2weeks' | 'month' → mongo date-string filter banata hai."""
+        now = datetime.now()
+        if period == "today":
+            return {"date": now.strftime("%Y-%m-%d")}
+        elif period == "2weeks":
+            cutoff = (now - timedelta(days=14)).strftime("%Y-%m-%d")
+            return {"date": {"$gte": cutoff}}
+        else:  # "month"
+            cutoff = (now - timedelta(days=30)).strftime("%Y-%m-%d")
+            return {"date": {"$gte": cutoff}}
+
+    def get_activity_leaderboard(self, chat_id, period="today", limit=10):
+        """Group ke andar top message-senders, given period ke liye."""
+        match = {"chat_id": chat_id}
+        match.update(self._activity_date_filter(period))
         pipeline = [
+            {"$match": match},
             {"$group": {
                 "_id": "$user_id",
-                "total_points": {"$sum": "$points"},
+                "total": {"$sum": "$count"},
                 "name": {"$last": "$name"},
             }},
-            {"$sort": {"total_points": -1}},
+            {"$sort": {"total": -1}},
             {"$limit": limit},
         ]
-        return list(self.reputation.aggregate(pipeline))
+        return list(self.activity.aggregate(pipeline))
+
+    def get_global_activity_leaderboard(self, period="today", limit=10):
+        """Saare groups mile ke top message-senders, given period ke liye."""
+        match = {}
+        match.update(self._activity_date_filter(period))
+        pipeline = [
+            {"$match": match},
+            {"$group": {
+                "_id": "$user_id",
+                "total": {"$sum": "$count"},
+                "name": {"$last": "$name"},
+            }},
+            {"$sort": {"total": -1}},
+            {"$limit": limit},
+        ]
+        return list(self.activity.aggregate(pipeline))
 
     def add_immortal(self, chat_id, user_id):
         k = f"{chat_id}_{user_id}"
@@ -1410,8 +1466,8 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{'─'*28}\n\n"
             f"📜 `/rules` — View group rules\n"
             f"⚠️ `/warnings` — Check your warnings\n"
-            f"🏆 `/leaderboard` — Group reputation ranking\n"
-            f"🌐 `/gleaderboard` — Global reputation ranking\n"
+            f"🏆 `/leaderboard` — Group message-activity ranking\n"
+            f"🌐 `/gleaderboard` — Global message-activity ranking\n"
             f"🆔 `/id` — Your Telegram ID\n\n"
             f"{'─'*28}\n"
             f"_These commands work for all members._"
@@ -1433,7 +1489,7 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"🔓 `/unban <id>` — Unban a user\n"
             f"⚠️ `/warn` — Give a warning\n"
             f"♻️ `/resetwarnings` — Reset warnings\n"
-            f"🏆 `/leaderboard` — Group reputation ranking\n"
+            f"🏆 `/leaderboard` — Group message-activity ranking\n"
             f"🗑️ `/del` — Delete replied message\n"
             f"🧹 `/purge` — Bulk delete messages\n"
             f"🧪 `/testmute` — Test 35s mute\n"
@@ -1651,8 +1707,8 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"{'─'*28}\n"
         f"📜 `/rules` — View group rules\n"
         f"⚠️ `/warnings` — Check your warnings\n"
-        f"🏆 `/leaderboard` — Group reputation ranking\n"
-        f"🌐 `/gleaderboard` — Global reputation ranking\n"
+        f"🏆 `/leaderboard` — Group message-activity ranking\n"
+        f"🌐 `/gleaderboard` — Global message-activity ranking\n"
         f"🆔 `/id` — Your Telegram ID\n"
         f"{'─'*28}\n\n"
         f"_Add me to your group and make me admin to get started!_"
@@ -1677,8 +1733,8 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{'─'*28}\n\n"
             f"📜 `/rules` — View group rules\n"
             f"⚠️ `/warnings` — Check your warnings\n"
-            f"🏆 `/leaderboard` — Group reputation ranking\n"
-            f"🌐 `/gleaderboard` — Global reputation ranking\n"
+            f"🏆 `/leaderboard` — Group message-activity ranking\n"
+            f"🌐 `/gleaderboard` — Global message-activity ranking\n"
             f"🆔 `/id` — Your Telegram ID\n\n"
             f"{'─'*28}\n"
             f"_Violations auto-detected. Stay within rules!_"
@@ -1696,8 +1752,8 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"🔓 `/unban <id>` — Unban user\n"
         f"⚠️ `/warn [reason]` — Warn user (reply)\n"
         f"♻️ `/resetwarnings` — Reset warnings (reply)\n"
-        f"🏆 `/leaderboard` — Group reputation ranking\n"
-        f"🌐 `/gleaderboard` — Global reputation ranking\n"
+        f"🏆 `/leaderboard` — Group message-activity ranking\n"
+        f"🌐 `/gleaderboard` — Global message-activity ranking\n"
         f"🗑️ `/del` — Delete message (reply)\n"
         f"🧹 `/purge` — Bulk delete from reply\n"
         f"🧪 `/testmute` — Test 35s mute (reply)\n"
@@ -2444,6 +2500,8 @@ async def warnings_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private": return
     tgt = update.message.reply_to_message.from_user if update.message.reply_to_message else update.effective_user
+    if not tgt:
+        return await update.message.reply_text("❌ Could not identify user (anonymous/channel reply).")
     if db.is_gmuted(tgt.id):
         msg = await update.message.reply_text(
             f"👤 {user_name(tgt)}\n\n"
@@ -3461,65 +3519,97 @@ async def stats_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode='Markdown')
 
 
-# ─── /leaderboard ─── Group-wise reputation ranking ──────────
+# ═══════════════════════════════════════════════════════════
+#  LEADERBOARD — Message-count based (Today / 2 Weeks / Month)
+#  NOTE: Yeh REPUTATION se ALAG hai — sirf "kitne message bheje"
+#  ke hisaab se ranking hoti hai.
+# ═══════════════════════════════════════════════════════════
+LB_PERIOD_LABEL = {"today": "📅 Today", "2weeks": "🗓 Last 2 Weeks", "month": "📆 Last Month"}
+LB_PERIOD_ORDER = ["today", "2weeks", "month"]
+
+def build_lb_keyboard(scope, chat_id, active_period):
+    """scope: 'g' (group) ya 'a' (all/global)."""
+    row = []
+    for p in LB_PERIOD_ORDER:
+        label = LB_PERIOD_LABEL[p]
+        if p == active_period:
+            label = f"• {label} •"
+        row.append(InlineKeyboardButton(label, callback_data=f"lbd:{scope}:{p}:{chat_id}"))
+    return InlineKeyboardMarkup([row])
+
+def build_lb_text(entries, period, scope_title):
+    period_label = LB_PERIOD_LABEL[period]
+    if not entries:
+        return (
+            f"🏆 *{scope_title}*\n"
+            f"_{period_label}_\n"
+            f"{'─'*28}\n\n"
+            f"📉 Is period mein koi message activity nahi mili!"
+        )
+    medals = ["🥇", "🥈", "🥉"]
+    lines = []
+    for i, entry in enumerate(entries):
+        rank = medals[i] if i < 3 else f"`{i+1}.`"
+        name = entry.get("name") or str(entry.get("_id"))
+        total = entry.get("total", 0)
+        lines.append(f"{rank} {name} — *{total}* messages")
+    return (
+        f"🏆 *{scope_title}*\n"
+        f"_{period_label}_\n"
+        f"{'─'*28}\n\n" + "\n".join(lines)
+    )
+
+
+# ─── /leaderboard ─── Group-wise message-count ranking ───────
 async def leaderboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private": return
-    top = db.get_group_leaderboard(ch.id, limit=10)
-    if not top:
-        msg = await update.message.reply_text(
-            "📉 Abhi tak iss group mein koi reputation points nahi hain!\n\n"
-            "_Kisi ko thank you/shukriya bolo aur unka reputation badhao_ 💖",
-            parse_mode='Markdown'
-        )
-        asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 60))
-        return
-
-    medals = ["🥇", "🥈", "🥉"]
-    lines = []
-    for i, entry in enumerate(top):
-        rank = medals[i] if i < 3 else f"`{i+1}.`"
-        name = entry.get("name") or str(entry.get("user_id"))
-        pts = entry.get("points", 0)
-        lines.append(f"{rank} {name} — *{pts}* pts")
-
-    text = (
-        f"🏆 *GROUP LEADERBOARD*\n"
-        f"{'─'*28}\n\n" + "\n".join(lines)
-    )
-    msg = await update.message.reply_text(text, parse_mode='Markdown')
+    entries = db.get_activity_leaderboard(ch.id, period="today", limit=10)
+    text = build_lb_text(entries, "today", "GROUP LEADERBOARD")
+    kb = build_lb_keyboard("g", ch.id, "today")
+    msg = await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
     asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 300))
 
 
-# ─── /gleaderboard ─── Global reputation ranking (all groups) ─
+# ─── /gleaderboard ─── Global message-count ranking (all groups) ─
 async def gleaderboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    top = db.get_global_leaderboard(limit=10)
-    if not top:
-        await update.message.reply_text(
-            "📉 Abhi tak koi global reputation points nahi hain!",
-            parse_mode='Markdown'
-        )
-        return
-
-    medals = ["🥇", "🥈", "🥉"]
-    lines = []
-    for i, entry in enumerate(top):
-        rank = medals[i] if i < 3 else f"`{i+1}.`"
-        name = entry.get("name") or str(entry.get("_id"))
-        pts = entry.get("total_points", 0)
-        lines.append(f"{rank} {name} — *{pts}* pts")
-
-    text = (
-        f"🌐 *GLOBAL LEADERBOARD*\n"
-        f"_(Saare groups mile ke ranking)_\n"
-        f"{'─'*28}\n\n" + "\n".join(lines)
-    )
+    entries = db.get_global_activity_leaderboard(period="today", limit=10)
+    text = build_lb_text(entries, "today", "GLOBAL LEADERBOARD")
+    kb = build_lb_keyboard("a", 0, "today")
     ch = update.effective_chat
     if ch.type == "private":
-        await update.message.reply_text(text, parse_mode='Markdown')
+        await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
     else:
-        msg = await update.message.reply_text(text, parse_mode='Markdown')
+        msg = await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
         asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 300))
+
+
+# ─── Leaderboard period-switch button callback ───────────────
+async def leaderboard_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    try:
+        _, scope, period, chat_id_str = query.data.split(":")
+        chat_id = int(chat_id_str)
+    except Exception:
+        return
+
+    if period not in LB_PERIOD_LABEL:
+        return
+
+    if scope == "g":
+        entries = db.get_activity_leaderboard(chat_id, period=period, limit=10)
+        text = build_lb_text(entries, period, "GROUP LEADERBOARD")
+        kb = build_lb_keyboard("g", chat_id, period)
+    else:
+        entries = db.get_global_activity_leaderboard(period=period, limit=10)
+        text = build_lb_text(entries, period, "GLOBAL LEADERBOARD")
+        kb = build_lb_keyboard("a", 0, period)
+
+    try:
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=kb)
+    except Exception:
+        pass
 
 
 # ═══════════════════════════════════════════════════════════
@@ -3559,6 +3649,32 @@ async def track_bot_reply(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         mid: t for mid, t in PROVIDER_BOT_REPLIES[ch_id]["replied_ids"].items()
         if now - t < 120
     }
+
+
+# ═══════════════════════════════════════════════════════════
+#  ACTIVITY TRACKER — Har group message ko count karo
+#  (Leaderboard isi data se banta hai — reputation se NAHI)
+# ═══════════════════════════════════════════════════════════
+async def track_activity_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Har message (text/media/sticker/command — sab) ko count karo, taaki
+    /leaderboard aur /gleaderboard sahi "kitne message bheje" dikha sakein.
+    Apne alag handler-group mein chalta hai, isliye kisi aur logic
+    (warnings/violations/etc.) se conflict nahi karta.
+    """
+    msg = update.message
+    ch  = update.effective_chat
+    usr = update.effective_user
+    if not msg or not ch or not usr:
+        return
+    if ch.type == "private":
+        return
+    if usr.is_bot:
+        return
+    ANON_BOT_ID = 1087968824
+    if usr.id == ANON_BOT_ID:
+        return
+    db.track_activity(ch.id, usr.id, user_name(usr))
 
 
 async def _delayed_ai_check(ctx, msg, ch, usr, txt_for_ai, is_reply_to_bot, g_settings):
@@ -4083,8 +4199,16 @@ def main():
     # ── Callback Queries ─────────────────────────────────────
     app.add_handler(CallbackQueryHandler(captcha_callback, pattern=r"^captcha_"))
     app.add_handler(CallbackQueryHandler(menu_callback,    pattern=r"^(menu_|show_|unmute_|unban_|dismiss_)"))
+    app.add_handler(CallbackQueryHandler(leaderboard_callback, pattern=r"^lbd:"))
 
     # ── Message Handlers ─────────────────────────────────────
+    # Activity tracker (message-count leaderboard) — apna ALAG group (-1),
+    # taaki yeh COMMANDS samet har message ko count kare, bina kisi
+    # doosre handler (commands/check_msg/auto-delete) se conflict kiye.
+    app.add_handler(MessageHandler(
+        filters.ALL & filters.ChatType.GROUPS,
+        track_activity_msg
+    ), group=-1)
     # Bot reply tracker — group ke saare messages dekho (bots ke replies track karne ke liye)
     app.add_handler(MessageHandler(
         filters.ALL & filters.ChatType.GROUPS,
