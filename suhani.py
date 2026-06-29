@@ -1396,11 +1396,11 @@ def kb_main_menu():
         ],
         [
             InlineKeyboardButton("⚠️ Warn System", callback_data="menu_warns"),
-            InlineKeyboardButton("📊 Bot Stats", callback_data="menu_stats"),
+            InlineKeyboardButton("📜 Rules", callback_data="show_rules"),
         ],
         [
-            InlineKeyboardButton("🏆 Rep Board", callback_data="menu_repinfo"),
-            InlineKeyboardButton("🤖 AI Status", callback_data="menu_ai"),
+            InlineKeyboardButton("🏆 Rep Board", callback_data="menu_repboard"),
+            InlineKeyboardButton("⭐ My Profile", callback_data="rep:myprofile"),
         ],
     ])
 
@@ -1481,11 +1481,11 @@ def ckb_main_menu():
         ],
         [
             {"text": "⚠️ Warn System",  "callback_data": "menu_warns",      "style": "danger"},
-            {"text": "📊 Bot Stats",     "callback_data": "menu_stats",      "style": "primary"},
+            {"text": "📜 Rules",         "callback_data": "show_rules",      "style": "primary"},
         ],
         [
-            {"text": "🏆 Rep Board",     "callback_data": "menu_repinfo",    "style": "success"},
-            {"text": "🤖 AI Status",     "callback_data": "menu_ai",         "style": "primary"},
+            {"text": "🏆 Rep Board",     "callback_data": "menu_repboard",   "style": "success"},
+            {"text": "⭐ My Profile",    "callback_data": "rep:myprofile",   "style": "success"},
         ],
     ]
 
@@ -1777,9 +1777,16 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"_Active raho → Auto earn! 🔥_\n"
             f"_Min withdrawal: ₹10 \\(@suhan\\_support\\)_"
         )
-        await query.edit_message_text(text, reply_markup=kb_back(), parse_mode='Markdown')
-
-    elif data == "menu_admin":
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("◀️ Back", callback_data="menu_main"),
+                    InlineKeyboardButton("🏆 Rep Board", callback_data="menu_repboard"),
+                ]
+            ]),
+            parse_mode='Markdown'
+        )
         # Only admins / owner can see this panel
         ch_id = update.effective_chat.id if update.effective_chat else 0
         if query.from_user.id != OWNER_ID and not await is_adm(ctx, ch_id, query.from_user.id):
@@ -1818,8 +1825,6 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif data == "menu_protection":
         text = (
-            f"╔{'═'*32}╗\n"
-            f"║   🛡️  AUTO PROTECTIONS       ║\n"
             f"╚{'═'*32}╝\n\n"
             f"🤖 External bot usernames\n"
             f"👤 External @mentions\n"
@@ -1841,7 +1846,11 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{'─'*32}\n"
             f"_All protections are automatic!_"
         )
-        await query.edit_message_text(text, reply_markup=kb_back(), parse_mode='Markdown')
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="menu_main")]]),
+            parse_mode='Markdown'
+        )
 
     elif data == "menu_settings":
         text = (
@@ -1861,7 +1870,11 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{'─'*32}\n"
             f"💡 _Settings apply only to this group_"
         )
-        await query.edit_message_text(text, reply_markup=kb_back(), parse_mode='Markdown')
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="menu_main")]]),
+            parse_mode='Markdown'
+        )
 
     elif data == "menu_warns":
         text = (
@@ -1881,7 +1894,16 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"💡 *Tip:* Reply *Thank You* to remove 1 warning!\n"
             f"_Violations auto\\-trigger warnings_"
         )
-        await query.edit_message_text(text, reply_markup=kb_back(), parse_mode='Markdown')
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("◀️ Back", callback_data="menu_main"),
+                    InlineKeyboardButton("⚠️ My Warnings", callback_data="show_my_warnings"),
+                ]
+            ]),
+            parse_mode='Markdown'
+        )
 
     elif data == "menu_stats":
         s = db.get_stats()
@@ -1912,43 +1934,69 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown'
         )
 
-    elif data == "menu_repinfo":
+    elif data == "menu_repboard":
+        # Actual leaderboard directly — group + global
+        ch_id = update.effective_chat.id if update.effective_chat else 0
+        medals = ["🥇", "🥈", "🥉"]
+        rank_e  = ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
+
+        def _lines(entries, key_pts, key_id):
+            if not entries:
+                return ["  📉 _Abhi koi data nahi!_"]
+            out = []
+            for i, doc in enumerate(entries[:7]):
+                medal = medals[i] if i < 3 else rank_e[i-3]
+                name  = md_esc(str(doc.get("name") or doc.get(key_id, "?")))
+                pts   = doc.get(key_pts, 0)
+                out.append(f"{medal} {name}  —  `{pts}` rep")
+            return out
+
+        group_top  = db.get_reputation_top(ch_id, limit=7) if ch_id else []
+        global_top = db.get_global_reputation_top(limit=7)
+        group_lines  = _lines(group_top,  "points", "user_id")
+        global_lines = _lines(global_top, "total",  "_id")
+
         text = (
             f"╔{'═'*32}╗\n"
-            f"║   🏆  REPUTATION SYSTEM      ║\n"
+            f"║   🏆  REPUTATION BOARD       ║\n"
             f"╚{'═'*32}╝\n\n"
-            f"⭐ *HOW TO EARN REP:*\n"
-            f"  • Reply to someone with *Thank You*\n"
-            f"  • Shukriya, Thanks, TY bhi chalega\n"
-            f"  • Max *3 reps* de sakte ho daily\n"
-            f"  • 💬 Group mein active raho — auto earn! 🔥\n\n"
-            f"{'─'*32}\n"
-            f"💰 *CONVERSION:*\n"
-            f"  100 Rep  →  10 Suhani Pts\n"
-            f"  10 SP    →  ₹1\n"
-            f"  Min: 100 SP = ₹10 withdrawal\n\n"
-            f"{'─'*32}\n"
-            f"🏅 *REP TIERS:*\n"
-            f"  🆕 0\\-9    → Starter\n"
-            f"  🌱 10\\-49  → Newcomer\n"
-            f"  ✨ 50\\-99  → Active\n"
-            f"  🌟 100\\-199 → Rising Star\n"
-            f"  ⭐ 200\\-499 → Veteran\n"
-            f"  🔥 500\\-999 → Elite\n"
-            f"  💎 1000\\+  → Legendary\n\n"
-            f"{'─'*32}\n"
-            f"💸 _Withdraw: @suhan\\_support_"
+            f"🏠 *GROUP TOP*\n"
+            f"{'┄'*32}\n"
+            + "\n".join(group_lines) +
+            f"\n\n🌐 *GLOBAL TOP*\n"
+            f"{'┄'*32}\n"
+            + "\n".join(global_lines) +
+            f"\n\n{'─'*32}\n"
+            f"💡 _Reply 'Thank You' → \\+1 Rep_\n"
+            f"_Active raho → Auto earn! 🔥_"
         )
+        user_id = query.from_user.id if query.from_user else 0
         await query.edit_message_text(
             text,
             reply_markup=InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("◀️ Back", callback_data="menu_main"),
-                    InlineKeyboardButton("💸 Withdraw", url="https://t.me/suhan_support"),
-                ]
+                    InlineKeyboardButton("🔄 Refresh", callback_data="menu_repboard"),
+                    InlineKeyboardButton("⭐ My Profile", callback_data="rep:myprofile"),
+                ],
+                [
+                    InlineKeyboardButton("📊 Group Rank", callback_data=f"rep:board:{ch_id}"),
+                    InlineKeyboardButton("🌐 Global Rank", callback_data="rep:global:0"),
+                ],
+                [InlineKeyboardButton("◀️ Back", callback_data="menu_main")],
             ]),
             parse_mode='Markdown'
         )
+
+    elif data == "menu_repinfo":
+        # Keep for backwards compat — redirect to repboard
+        ch_id = update.effective_chat.id if update.effective_chat else 0
+        await query.answer()
+        query.data = "menu_repboard"
+        # Re-trigger via same logic
+        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🏆 Open Rep Board", callback_data="menu_repboard")]
+        ]))
+        return
 
     elif data == "menu_ai":
         text = (
@@ -2018,6 +2066,24 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif data == "show_id":
         u = query.from_user
         await query.answer(f"Your ID: {u.id}", show_alert=True)
+        return
+
+    elif data == "show_my_warnings":
+        usr = query.from_user
+        if not usr:
+            await query.answer("❌ User identify nahi hua!", show_alert=True)
+            return
+        ch_id = update.effective_chat.id if update.effective_chat else 0
+        if not ch_id:
+            await query.answer("❌ Group mein use karo!", show_alert=True)
+            return
+        count = db.get_warnings(ch_id, usr.id)
+        bars  = "🟥" * count + "⬜" * (4 - count)
+        status = {0: "✅ Clean!", 1: "🟡 W1", 2: "🟠 W2", 3: "🔴 W3", 4: "💀 W4"}.get(count, "❓")
+        await query.answer(
+            f"⚠️ Your Warnings: {count}/4\n{bars}\nStatus: {status}",
+            show_alert=True
+        )
         return
 
     elif data.startswith("unban_"):
@@ -4323,97 +4389,148 @@ async def repboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 600))
 
 
-# ─── Reputation callbacks (repboard refresh + wallet) ─────────
+# ─── Reputation callbacks (repboard refresh + wallet + myprofile) ──
 async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    medals    = ["🥇", "🥈", "🥉"]
+    rank_emojis = ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
+
+    def _rep_lines(entries, key_pts, key_id, limit=7):
+        if not entries:
+            return ["  📉 _Abhi koi data nahi!_"]
+        out = []
+        for i, doc in enumerate(entries[:limit]):
+            medal = medals[i] if i < 3 else (rank_emojis[i-3] if i-3 < len(rank_emojis) else f"`{i+1}.`")
+            name  = md_esc(str(doc.get("name") or doc.get(key_id, "?")))
+            pts   = doc.get(key_pts, 0)
+            sp    = (pts // 100) * 10
+            out.append(f"{medal} {name}  —  `{pts}` rep  •  `{sp}` SP")
+        return out
+
     try:
-        parts = query.data.split(":")
+        parts  = query.data.split(":")
         action = parts[1]
+        ch_id  = update.effective_chat.id if update.effective_chat else 0
 
-        if action == "board":
-            chat_id = int(parts[2])
-            group_top  = db.get_reputation_top(chat_id, limit=10)
-            global_top = db.get_global_reputation_top(limit=10)
-            medals = ["🥇", "🥈", "🥉"]
-            rank_emojis = ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
+        if action == "myprofile":
+            # Caller ka profile — same as /rep command
+            usr = query.from_user
+            if not usr:
+                return
+            group_rep   = db.get_reputation(ch_id, usr.id) if ch_id else 0
+            total_rep   = db.get_total_reputation(usr.id)
+            wallet      = db.get_suhani_points(usr.id)
+            suhani_pts  = wallet["suhani_pts"]
+            inr_val     = suhani_pts // 10
+            progress    = total_rep % 100
+            prog_bar    = "█" * (progress // 10) + "░" * (10 - progress // 10)
+            pts_needed  = 100 - progress
+            can_wd      = suhani_pts >= 100
 
-            def _lines(entries, key_pts, key_id):
-                if not entries:
-                    return ["  📉 _Koi data nahi mila!_"]
-                out = []
-                for i, doc in enumerate(entries):
-                    medal = medals[i] if i < 3 else (rank_emojis[i-3] if i-3 < len(rank_emojis) else f"`{i+1}.`")
-                    raw_name = doc.get("name") or str(doc.get(key_id, "?"))
-                    name = md_esc(str(raw_name))
-                    pts  = doc.get(key_pts, 0)
-                    sp   = (pts // 100) * 10
-                    out.append(f"{medal} {name}  —  `{pts}` rep  •  `{sp}` SP")
-                return out
+            def rep_tier(p):
+                if p >= 1000: return "💎 LEGENDARY"
+                if p >= 500:  return "🔥 ELITE"
+                if p >= 200:  return "⭐ VETERAN"
+                if p >= 100:  return "🌟 RISING STAR"
+                if p >= 50:   return "✨ ACTIVE"
+                if p >= 10:   return "🌱 NEWCOMER"
+                return "🆕 STARTER"
 
-            group_lines  = _lines(group_top,  "points", "user_id")
-            global_lines = _lines(global_top, "total",  "_id")
-
+            tier = rep_tier(total_rep)
+            name_safe = user_name(usr)
             text = (
-                f"╔{'═'*34}╗\n"
-                f"║   🏆  SUHANI REPUTATION BOARD   ║\n"
-                f"╚{'═'*34}╝\n\n"
-                f"🏠 *GROUP TOP*\n"
-                f"{'┄'*34}\n"
-                + "\n".join(group_lines) +
-                f"\n\n🌐 *GLOBAL TOP* — All Groups\n"
-                f"{'┄'*34}\n"
-                + "\n".join(global_lines) +
-                f"\n\n{'─'*34}\n"
-                f"_100 rep = 10 Suhani Pts = ₹1_"
+                f"╔══════════════════════════╗\n"
+                f"║  ⭐  SUHANI PROFILE CARD  ║\n"
+                f"╚══════════════════════════╝\n\n"
+                f"👤 *{name_safe}*\n"
+                f"🏷️ Tier: *{tier}*\n\n"
+                f"{'─'*28}\n"
+                f"📊 *REPUTATION*\n"
+                f"  🏠 Group Rep:  `{group_rep}` pts\n"
+                f"  🌐 Total Rep:  `{total_rep}` pts\n\n"
+                f"⚡ *Next Milestone*\n"
+                f"  \\[{prog_bar}\\] `{progress}/100`\n"
+                f"  _{pts_needed} more rep → \\+10 Suhani Pts_\n\n"
+                f"{'─'*28}\n"
+                f"💰 *WALLET*\n"
+                f"  💎 Suhani Points: `{suhani_pts} SP`\n"
+                f"  💵 INR Value:     `₹{inr_val}`\n"
+                f"  {'✅ Withdrawal ready\\!' if can_wd else f'🔒 Need {max(0,100-suhani_pts)} more SP'}"
             )
-            kb = InlineKeyboardMarkup([
+            kb_rows = [
                 [
-                    InlineKeyboardButton("🔄 Refresh", callback_data=f"rep:board:{chat_id}"),
-                    InlineKeyboardButton("🌐 Global Refresh", callback_data="rep:global:0"),
+                    InlineKeyboardButton("🏆 Rep Board",   callback_data="menu_repboard"),
+                    InlineKeyboardButton("🌐 Global Rank", callback_data="rep:global:0"),
                 ],
-                [InlineKeyboardButton("💸 Withdraw", url="https://t.me/suhan_support")]
-            ])
-            await query.edit_message_text(text, parse_mode='Markdown', reply_markup=kb)
+                [InlineKeyboardButton("◀️ Back", callback_data="menu_main")],
+            ]
+            if can_wd:
+                kb_rows.insert(1, [InlineKeyboardButton("💸 Withdraw", url="https://t.me/suhan_support")])
+            await query.edit_message_text(text, parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup(kb_rows))
+
+        elif action == "board":
+            chat_id = int(parts[2]) if len(parts) > 2 else ch_id
+            group_top  = db.get_reputation_top(chat_id, limit=7)
+            global_top = db.get_global_reputation_top(limit=7)
+            group_lines  = _rep_lines(group_top,  "points", "user_id")
+            global_lines = _rep_lines(global_top, "total",  "_id")
+            text = (
+                f"╔{'═'*32}╗\n"
+                f"║   🏆  REPUTATION BOARD       ║\n"
+                f"╚{'═'*32}╝\n\n"
+                f"🏠 *GROUP TOP*\n{'┄'*32}\n"
+                + "\n".join(group_lines) +
+                f"\n\n🌐 *GLOBAL TOP*\n{'┄'*32}\n"
+                + "\n".join(global_lines) +
+                f"\n\n{'─'*32}\n"
+                f"_100 rep = 10 SP = ₹1_"
+            )
+            await query.edit_message_text(
+                text, parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("🔄 Refresh",       callback_data=f"rep:board:{chat_id}"),
+                        InlineKeyboardButton("⭐ My Profile",    callback_data="rep:myprofile"),
+                    ],
+                    [
+                        InlineKeyboardButton("📊 Group Rank",   callback_data=f"rep:board:{chat_id}"),
+                        InlineKeyboardButton("🌐 Global Rank",  callback_data="rep:global:0"),
+                    ],
+                    [InlineKeyboardButton("◀️ Back", callback_data="menu_main")],
+                ])
+            )
 
         elif action == "global":
             top = db.get_global_reputation_top(limit=10)
-            medals = ["🥇", "🥈", "🥉"]
-            rank_emojis = ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
-            if not top:
-                await query.edit_message_text(
-                    "🌐 *GLOBAL REP LEADERBOARD*\n\n📉 Koi data nahi mila!",
-                    parse_mode='Markdown'
-                )
-                return
-            lines = []
-            for i, doc in enumerate(top):
-                medal = medals[i] if i < 3 else (rank_emojis[i-3] if i-3 < len(rank_emojis) else f"`{i+1}.`")
-                raw_name = doc.get("name") or str(doc.get("_id", "?"))
-                name = md_esc(str(raw_name))
-                pts  = doc.get("total", 0)
-                sp   = (pts // 100) * 10
-                lines.append(f"{medal} {name}  —  `{pts}` rep  •  `{sp}` SP")
+            lines = _rep_lines(top, "total", "_id", limit=10)
             text = (
-                f"╔{'═'*34}╗\n"
-                f"║   🌐  GLOBAL REP LEADERBOARD   ║\n"
-                f"╚{'═'*34}╝\n\n"
-                f"{'┄'*34}\n"
+                f"╔{'═'*32}╗\n"
+                f"║   🌐  GLOBAL REP BOARD       ║\n"
+                f"╚{'═'*32}╝\n\n"
+                f"{'┄'*32}\n"
                 + "\n".join(lines) +
-                f"\n\n{'─'*34}\n"
-                f"_100 rep = 10 Suhani Pts = ₹1_\n"
-                f"_Sab groups ka combined data_"
+                f"\n\n{'─'*32}\n"
+                f"_Sab groups ka combined data_\n"
+                f"_100 rep = 10 SP = ₹1_"
             )
-            kb = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("🔄 Refresh", callback_data="rep:global:0"),
-                    InlineKeyboardButton("💸 Withdraw", url="https://t.me/suhan_support"),
-                ]
-            ])
-            await query.edit_message_text(text, parse_mode='Markdown', reply_markup=kb)
+            await query.edit_message_text(
+                text, parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("🔄 Refresh",     callback_data="rep:global:0"),
+                        InlineKeyboardButton("⭐ My Profile",  callback_data="rep:myprofile"),
+                    ],
+                    [
+                        InlineKeyboardButton("🏠 Group Rank",  callback_data=f"rep:board:{ch_id}"),
+                        InlineKeyboardButton("◀️ Back",        callback_data="menu_main"),
+                    ],
+                ])
+            )
 
         elif action == "wallet":
-            user_id = int(parts[2])
+            user_id    = int(parts[2]) if len(parts) > 2 else (query.from_user.id if query.from_user else 0)
             total_rep  = db.get_total_reputation(user_id)
             wallet     = db.get_suhani_points(user_id)
             suhani_pts = wallet["suhani_pts"]
@@ -4422,19 +4539,19 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             prog_bar   = "█" * (progress // 10) + "░" * (10 - progress // 10)
             can_wd     = suhani_pts >= 100
             text = (
-                f"💰 *SUHANI WALLET*\n"
-                f"{'─'*26}\n\n"
+                f"💰 *SUHANI WALLET*\n{'─'*26}\n\n"
                 f"💎 Points: `{suhani_pts} SP`\n"
                 f"🌐 Total Rep: `{total_rep} pts`\n"
                 f"💵 Value: `₹{inr_val}`\n\n"
-                f"[{prog_bar}] `{progress}/100`\n\n"
-                f"{'✅ Withdrawal ready!' if can_wd else f'🔒 {max(0,100-suhani_pts)} SP needed'}"
+                f"\\[{prog_bar}\\] `{progress}/100`\n\n"
+                f"{'✅ Withdrawal ready\\!' if can_wd else f'🔒 {max(0,100-suhani_pts)} SP needed'}"
             )
+            kb_rows = [[InlineKeyboardButton("◀️ Back", callback_data="rep:myprofile")]]
+            if can_wd:
+                kb_rows.insert(0, [InlineKeyboardButton("💸 Withdraw", url="https://t.me/suhan_support")])
             await query.edit_message_text(text, parse_mode='Markdown',
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("💸 Withdraw", url="https://t.me/suhan_support")
-                ]]) if can_wd else None
-            )
+                reply_markup=InlineKeyboardMarkup(kb_rows))
+
     except Exception:
         pass
 
