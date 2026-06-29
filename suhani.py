@@ -492,6 +492,15 @@ class DB:
     def update_group(self, chat_id, data):
         self.groups.update_one({"_id": chat_id}, {"$set": data}, upsert=True)
 
+    def get_total_msg_count(self, chat_id: int, user_id: int) -> int:
+        """Group mein is user ke total messages kitne hain (sab dates milakar)."""
+        pipeline = [
+            {"$match": {"chat_id": chat_id, "user_id": user_id}},
+            {"$group": {"_id": None, "total": {"$sum": "$count"}}}
+        ]
+        result = list(self.activity.aggregate(pipeline))
+        return result[0]["total"] if result else 0
+
     def get_all_groups(self):
         return [g["_id"] for g in self.groups.find({}, {"_id": 1})]
 
@@ -988,6 +997,95 @@ db = DB()
 
 
 # ═══════════════════════════════════════════════════════════
+#  COLORED BUTTON SENDER — Bot API direct HTTP (filter.go approach)
+#  Standard python-telegram-bot colored buttons support nahi karta.
+#  Isliye direct Bot API call karke "style" field pass karte hain.
+#  Style values: "primary" (blue), "success" (green), "danger" (red)
+# ═══════════════════════════════════════════════════════════
+
+async def send_colored_message(chat_id: int, text: str, keyboard_rows: list, parse_mode: str = "Markdown") -> int:
+    """
+    Bot API ko seedha call karo colored buttons ke saath.
+    keyboard_rows = list of list of dicts:
+      {"text": "...", "callback_data": "...", "style": "primary"/"success"/"danger"}
+      {"text": "...", "url": "...", "style": "success"}
+    Returns message_id on success, 0 on failure.
+    """
+    if not BOT_TOKEN:
+        return 0
+    inline_keyboard = []
+    for row in keyboard_rows:
+        btns = []
+        for btn in row:
+            b = {"text": btn["text"]}
+            if "url" in btn:
+                b["url"] = btn["url"]
+            elif "callback_data" in btn:
+                b["callback_data"] = btn["callback_data"]
+            if "style" in btn:
+                b["style"] = btn["style"]
+            btns.append(b)
+        inline_keyboard.append(btns)
+
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": parse_mode,
+        "reply_markup": {"inline_keyboard": inline_keyboard}
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                json=payload
+            ) as resp:
+                data = await resp.json()
+                if data.get("ok"):
+                    return data["result"]["message_id"]
+    except Exception:
+        pass
+    return 0
+
+
+async def edit_colored_message(chat_id: int, message_id: int, text: str, keyboard_rows: list, parse_mode: str = "Markdown") -> bool:
+    """Edit existing message with colored buttons."""
+    if not BOT_TOKEN:
+        return False
+    inline_keyboard = []
+    for row in keyboard_rows:
+        btns = []
+        for btn in row:
+            b = {"text": btn["text"]}
+            if "url" in btn:
+                b["url"] = btn["url"]
+            elif "callback_data" in btn:
+                b["callback_data"] = btn["callback_data"]
+            if "style" in btn:
+                b["style"] = btn["style"]
+            btns.append(b)
+        inline_keyboard.append(btns)
+
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+        "parse_mode": parse_mode,
+        "reply_markup": {"inline_keyboard": inline_keyboard}
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText",
+                json=payload
+            ) as resp:
+                data = await resp.json()
+                return data.get("ok", False)
+    except Exception:
+        pass
+    return False
+
+
+# ═══════════════════════════════════════════════════════════
 #  HELPERS
 # ═══════════════════════════════════════════════════════════
 async def is_adm(ctx, chat_id, user_id):
@@ -1367,6 +1465,92 @@ def kb_bot_added():
     ])
 
 
+# ── Colored keyboard row data (for direct Bot API calls) ──────
+# Style: "primary"=blue, "success"=green, "danger"=red
+
+def ckb_main_menu():
+    """Main menu colored rows."""
+    return [
+        [
+            {"text": "👤 My Commands",   "callback_data": "menu_user",       "style": "primary"},
+            {"text": "👮 Admin Panel",   "callback_data": "menu_admin",      "style": "primary"},
+        ],
+        [
+            {"text": "🛡️ Protections",  "callback_data": "menu_protection", "style": "success"},
+            {"text": "⚙️ Settings",     "callback_data": "menu_settings",   "style": "primary"},
+        ],
+        [
+            {"text": "⚠️ Warn System",  "callback_data": "menu_warns",      "style": "danger"},
+            {"text": "📊 Bot Stats",     "callback_data": "menu_stats",      "style": "primary"},
+        ],
+        [
+            {"text": "🏆 Rep Board",     "callback_data": "menu_repinfo",    "style": "success"},
+            {"text": "🤖 AI Status",     "callback_data": "menu_ai",         "style": "primary"},
+        ],
+    ]
+
+def ckb_back():
+    return [[{"text": "◀️ Back to Menu", "callback_data": "menu_main", "style": "primary"}]]
+
+def ckb_stats_refresh():
+    return [[
+        {"text": "🔄 Refresh",  "callback_data": "menu_stats", "style": "primary"},
+        {"text": "◀️ Back",     "callback_data": "menu_main",  "style": "primary"},
+    ]]
+
+def ckb_repinfo(withdraw_url="https://t.me/suhan_support"):
+    return [[
+        {"text": "◀️ Back",     "callback_data": "menu_main",  "style": "primary"},
+        {"text": "💸 Withdraw", "url": withdraw_url,           "style": "success"},
+    ]]
+
+def ckb_warn_actions(chat_id, user_id):
+    return [[
+        {"text": "🔊 Unmute",   "callback_data": f"unmute_{chat_id}_{user_id}", "style": "success"},
+        {"text": "🗑️ Dismiss", "callback_data": "dismiss_warn",                "style": "danger"},
+    ]]
+
+def ckb_join_welcome():
+    return [
+        [
+            {"text": "📜 Group Rules", "callback_data": "show_rules", "style": "success"},
+            {"text": "🆘 Help",        "callback_data": "menu_user",  "style": "primary"},
+        ],
+        [
+            {"text": "⚠️ Warn System", "callback_data": "menu_warns", "style": "danger"},
+        ]
+    ]
+
+def ckb_bot_added():
+    return [
+        [
+            {"text": "📋 Commands",     "callback_data": "menu_admin",      "style": "primary"},
+            {"text": "⚙️ Setup",        "callback_data": "menu_settings",   "style": "primary"},
+        ],
+        [
+            {"text": "🛡️ Protections", "callback_data": "menu_protection", "style": "success"},
+        ]
+    ]
+
+def ckb_rep_board(chat_id, user_id, withdraw_url="https://t.me/suhan_support"):
+    return [
+        [
+            {"text": "🔄 Refresh",       "callback_data": f"rep:board:{chat_id}", "style": "primary"},
+            {"text": "⭐ My Profile",    "callback_data": f"rep:wallet:{user_id}", "style": "success"},
+        ],
+        [
+            {"text": "🌐 Global Refresh","callback_data": "rep:global:0",          "style": "primary"},
+            {"text": "💸 Withdraw",      "url": withdraw_url,                       "style": "success"},
+        ]
+    ]
+
+def ckb_start_group():
+    return [[
+        {"text": "📋 Commands", "callback_data": "menu_main",   "style": "primary"},
+        {"text": "📜 Rules",    "callback_data": "show_rules",  "style": "success"},
+    ]]
+
+
 # ═══════════════════════════════════════════════════════════
 #  VIOLATION CHECK
 # ═══════════════════════════════════════════════════════════
@@ -1567,7 +1751,11 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"╚{'═'*34}╝\n\n"
             f"_Choose a category below 👇_"
         )
-        await query.edit_message_text(text, reply_markup=kb_main_menu(), parse_mode='Markdown')
+        # Try colored Bot API edit
+        chat_id = update.effective_chat.id if update.effective_chat else 0
+        success = await edit_colored_message(chat_id, query.message.message_id, text, ckb_main_menu())
+        if not success:
+            await query.edit_message_text(text, reply_markup=kb_main_menu(), parse_mode='Markdown')
 
     elif data == "menu_user":
         text = (
@@ -1586,6 +1774,7 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{'─'*32}\n"
             f"💎 *REWARD SYSTEM*\n"
             f"_100 Rep → 10 Suhani Pts → ₹1_\n"
+            f"_Active raho → Auto earn! 🔥_\n"
             f"_Min withdrawal: ₹10 \\(@suhan\\_support\\)_"
         )
         await query.edit_message_text(text, reply_markup=kb_back(), parse_mode='Markdown')
@@ -1710,7 +1899,7 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{'─'*32}\n"
             f"🛡️ Status:  {ICON_ON} *Active & Running*\n"
             f"🗄️ Database: {ICON_ON} *MongoDB Connected*\n"
-            f"🤖 AI Engine: {'🟢 Groq Active' if AI_API_KEY else '🔴 Not Configured'}"
+            f"🤖 AI Engine: {'🟢 Active' if AI_API_KEY else '🔴 Not Configured'}"
         )
         await query.edit_message_text(
             text,
@@ -1731,7 +1920,8 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"⭐ *HOW TO EARN REP:*\n"
             f"  • Reply to someone with *Thank You*\n"
             f"  • Shukriya, Thanks, TY bhi chalega\n"
-            f"  • Max *3 reps* de sakte ho daily\n\n"
+            f"  • Max *3 reps* de sakte ho daily\n"
+            f"  • 💬 Group mein active raho — auto earn! 🔥\n\n"
             f"{'─'*32}\n"
             f"💰 *CONVERSION:*\n"
             f"  100 Rep  →  10 Suhani Pts\n"
@@ -1765,7 +1955,7 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"╔{'═'*32}╗\n"
             f"║   🤖  AI MODERATION          ║\n"
             f"╚{'═'*32}╝\n\n"
-            f"AI Engine: {'🟢 *Groq Llama Active*' if AI_API_KEY else '🔴 *Not Configured*'}\n\n"
+            f"AI Engine: {'🟢 *Suhani AI — Active*' if AI_API_KEY else '🔴 *Not Configured*'}\n\n"
             f"{'─'*32}\n"
             f"*What AI Does:*\n"
             f"  🚨 Detects promo/spam content\n"
@@ -1887,17 +2077,22 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # Group me /start → sirf ek line with button
     if ch.type != "private":
-        await update.message.reply_text(
+        start_text = (
             f"🛡️ *Suhani Bot* is active & protecting this group!\n"
-            f"_Use /help for all commands._",
-            parse_mode='Markdown',
-            reply_markup=InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("📋 Commands", callback_data="menu_main"),
-                    InlineKeyboardButton("📜 Rules", callback_data="show_rules"),
-                ]
-            ])
+            f"_Use /help for all commands._"
         )
+        msg_id = await send_colored_message(ch.id, start_text, ckb_start_group())
+        if not msg_id:
+            await update.message.reply_text(
+                start_text,
+                parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("📋 Commands", callback_data="menu_main"),
+                        InlineKeyboardButton("📜 Rules", callback_data="show_rules"),
+                    ]
+                ])
+            )
         return
 
     # DM — Owner panel
@@ -4310,6 +4505,22 @@ async def track_activity_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     db.track_activity(ch.id, usr.id, user_name(usr))
 
+    # ── Auto-Reputation: har 100 messages pe 1 rep point ──────
+    total_msgs = db.get_total_msg_count(ch.id, usr.id)
+    if total_msgs > 0 and total_msgs % 100 == 0:
+        db.add_reputation(ch.id, usr.id, 1, user_name(usr, escape=False))
+        new_rep = db.get_reputation(ch.id, usr.id)
+        try:
+            notice = await ctx.bot.send_message(
+                ch.id,
+                f"🎉 *{user_name(usr)}* ne group mein `{total_msgs}` messages complete kiye\\!\n"
+                f"⭐ *\\+1 Reputation Point* auto\\-earn hua\\! Total: `{new_rep}` rep",
+                parse_mode='MarkdownV2'
+            )
+            asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 30))
+        except Exception:
+            pass
+
 
 async def _delayed_ai_check(ctx, msg, ch, usr, txt_for_ai, is_reply_to_bot, g_settings):
     """
@@ -4682,8 +4893,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         warn_colors = {1: "🟡", 2: "🟠", 3: "🔴", 4: "💀"}
         color = warn_colors.get(cnt, "⚠️")
 
-        notice = await ctx.bot.send_message(
-            ch.id,
+        warn_text = (
             f"╔{'═'*28}╗\n"
             f"║  {color} WARNING {cnt}/4 — ACTION TAKEN  ║\n"
             f"╚{'═'*28}╝\n\n"
@@ -4691,11 +4901,17 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"📌 _{viol_txt}_\n\n"
             f"⏱ Muted: `{mute_str}` • Next: {next_str}\n"
             f"{'─'*28}\n"
-            f"Progress: {bars} `{cnt}/4`",
-            parse_mode='Markdown',
-            reply_markup=kb_warn_actions(ch.id, usr.id)
+            f"Progress: {bars} `{cnt}/4`"
         )
-        asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 90))
+        warn_msg_id = await send_colored_message(ch.id, warn_text, ckb_warn_actions(ch.id, usr.id))
+        if warn_msg_id:
+            asyncio.create_task(delete_after(ctx, ch.id, warn_msg_id, 90))
+        else:
+            notice = await ctx.bot.send_message(
+                ch.id, warn_text, parse_mode='Markdown',
+                reply_markup=kb_warn_actions(ch.id, usr.id)
+            )
+            asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 90))
         return
 
     # ── AI REPLY — question/help/anime/confusion ──
@@ -4724,7 +4940,7 @@ async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     db.set_linked_channel(update.effective_chat.id, chat.linked_chat_id)
             except:
                 pass
-            await update.message.reply_text(
+            bot_added_text = (
                 f"╔{'═'*36}╗\n"
                 f"║  🛡️  SUHANI BOT — ACTIVATED!    ║\n"
                 f"╠{'═'*36}╣\n"
@@ -4746,10 +4962,15 @@ async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"  🌊 Anti-Flood\n"
                 f"  🎭 Captcha _(optional)_\n"
                 f"  ⏱️ Auto-delete _(optional)_\n\n"
-                f"_Use /help to see all commands!_",
-                parse_mode='Markdown',
-                reply_markup=kb_bot_added()
+                f"_Use /help to see all commands!_"
             )
+            added_msg_id = await send_colored_message(
+                update.effective_chat.id, bot_added_text, ckb_bot_added()
+            )
+            if not added_msg_id:
+                await update.message.reply_text(
+                    bot_added_text, parse_mode='Markdown', reply_markup=kb_bot_added()
+                )
         else:
             g = db.get_group(update.effective_chat.id)
             if g.get("captcha"):
@@ -4757,7 +4978,7 @@ async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     send_captcha(ctx, update.effective_chat.id, member.id, user_name(member))
                 )
             else:
-                msg = await update.message.reply_text(
+                welcome_text = (
                     f"╔{'═'*30}╗\n"
                     f"║   👋  WELCOME!              ║\n"
                     f"╚{'═'*30}╝\n\n"
@@ -4766,13 +4987,18 @@ async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     f"📜 Please read the group rules\n"
                     f"⚠️ Violations are auto\\-detected\n"
                     f"⭐ Earn rep by being helpful!\n\n"
-                    f"_Enjoy the community!_ 🔥",
-                    parse_mode='Markdown',
-                    reply_markup=kb_join_welcome()
+                    f"_Enjoy the community!_ 🔥"
                 )
-                asyncio.create_task(
-                    delete_after(ctx, update.effective_chat.id, msg.message_id, 60)
+                welcome_msg_id = await send_colored_message(
+                    update.effective_chat.id, welcome_text, ckb_join_welcome()
                 )
+                if welcome_msg_id:
+                    asyncio.create_task(delete_after(ctx, update.effective_chat.id, welcome_msg_id, 60))
+                else:
+                    msg = await update.message.reply_text(
+                        welcome_text, parse_mode='Markdown', reply_markup=kb_join_welcome()
+                    )
+                    asyncio.create_task(delete_after(ctx, update.effective_chat.id, msg.message_id, 60))
 
 
 async def on_leave(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
