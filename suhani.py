@@ -459,6 +459,8 @@ class DB:
         self.ad_exempt = self.db["autodel_exempt"] # bots exempt from autodelete
         self.reputation = self.db["reputation"]   # group-wise reputation points (SEPARATE from leaderboard)
         self.activity  = self.db["activity"]      # daily message-count tracking (leaderboard source)
+        self.suhani_pts = self.db["suhani_points"]   # global suhani points wallet per user
+        self.rep_daily  = self.db["rep_daily_limit"] # daily rep-give tracking (3/day cap)
 
         if not self.stats_c.find_one({"_id": "global"}):
             self.stats_c.insert_one({"_id": "global", "warnings": 0, "mutes": 0, "scanned": 0, "gmutes": 0})
@@ -637,24 +639,94 @@ class DB:
     def get_all_gmutes(self):
         return [g["_id"] for g in self.gmutes.find()]
 
-    # ── Reputation system (ALAG/SEPARATE feature — leaderboard ka hissa NAHI hai) ──
+    # ══════════════════════════════════════════════════════════════
+    #  SUHANI POINTS SYSTEM
+    #  100 Reputation Points → 10 Suhani Points → 1 INR
+    #  Min withdrawal: 10 INR (100 Suhani Points)
+    #  Daily rep-give cap: 3 per user per day (cross-group global)
+    # ══════════════════════════════════════════════════════════════
+
+    # ── Daily rep-give limit ──────────────────────────────────────
+    def get_rep_given_today(self, giver_id: int) -> int:
+        """Aaj kitni baar is user ne rep diya (global, cross-group)."""
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        doc = self.rep_daily.find_one({"_id": f"{giver_id}_{date_str}"})
+        return doc.get("count", 0) if doc else 0
+
+    def increment_rep_given(self, giver_id: int) -> int:
+        """Rep-give count +1 karo. Returns new count."""
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        k = f"{giver_id}_{date_str}"
+        result = self.rep_daily.find_one_and_update(
+            {"_id": k},
+            {"$inc": {"count": 1}, "$set": {"user_id": giver_id, "date": date_str}},
+            upsert=True,
+            return_document=True
+        )
+        return result.get("count", 1) if result else 1
+
+    # ── Reputation (group-wise) ───────────────────────────────────
     def add_reputation(self, chat_id, user_id, amount=1, display_name=None):
-        """Group-wise reputation point add karo."""
+        """Group-wise reputation point add karo + suhani points update."""
         k = f"{chat_id}_{user_id}"
         update = {"$inc": {"points": amount}, "$set": {"chat_id": chat_id, "user_id": user_id}}
         if display_name:
             update["$set"]["name"] = display_name
         self.reputation.update_one({"_id": k}, update, upsert=True)
+        # Suhani points: har 100 rep → 10 suhani pts
+        # Track total lifetime rep to compute suhani pts milestone
+        self._sync_suhani_points(user_id)
+
+    def _sync_suhani_points(self, user_id: int):
+        """All groups mein total rep count karo → suhani pts set karo."""
+        pipeline = [
+            {"$match": {"user_id": user_id}},
+            {"$group": {"_id": None, "total": {"$sum": "$points"}}}
+        ]
+        result = list(self.reputation.aggregate(pipeline))
+        total_rep = result[0]["total"] if result else 0
+        suhani_pts = (total_rep // 100) * 10
+        self.suhani_pts.update_one(
+            {"_id": user_id},
+            {"$set": {"user_id": user_id, "suhani_pts": suhani_pts, "total_rep": total_rep}},
+            upsert=True
+        )
 
     def get_reputation(self, chat_id, user_id):
         k = f"{chat_id}_{user_id}"
         doc = self.reputation.find_one({"_id": k})
         return doc.get("points", 0) if doc else 0
 
+    def get_total_reputation(self, user_id: int) -> int:
+        """User ka ALL groups mein total lifetime reputation."""
+        pipeline = [
+            {"$match": {"user_id": user_id}},
+            {"$group": {"_id": None, "total": {"$sum": "$points"}}}
+        ]
+        result = list(self.reputation.aggregate(pipeline))
+        return result[0]["total"] if result else 0
+
+    def get_suhani_points(self, user_id: int) -> dict:
+        """User ka suhani wallet return karo."""
+        doc = self.suhani_pts.find_one({"_id": user_id})
+        if not doc:
+            return {"suhani_pts": 0, "total_rep": 0}
+        return {"suhani_pts": doc.get("suhani_pts", 0), "total_rep": doc.get("total_rep", 0)}
+
     def get_reputation_top(self, chat_id, limit=10):
-        """Reputation ke hisaab se top users (alag feature, leaderboard se related nahi)."""
+        """Reputation ke hisaab se top users (group-wise)."""
         cursor = self.reputation.find({"chat_id": chat_id}).sort("points", -1).limit(limit)
         return list(cursor)
+
+    def get_global_reputation_top(self, limit=10):
+        """Sabse zyada total rep wale users (all groups combined)."""
+        pipeline = [
+            {"$group": {"_id": "$user_id", "total": {"$sum": "$points"},
+                        "name": {"$last": "$name"}}},
+            {"$sort": {"total": -1}},
+            {"$limit": limit}
+        ]
+        return list(self.reputation.aggregate(pipeline))
 
     # ── Activity / Message-count Leaderboard ──────────────────────
     # Leaderboard ab REPUTATION se nahi — kitne MESSAGES bheje hain usse decide hota hai.
@@ -1476,12 +1548,15 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{'─'*28}\n\n"
             f"📜 `/rules` — View group rules\n"
             f"⚠️ `/warnings` — Check your warnings\n"
-            f"⭐ `/rep` — Check your reputation (ya reply karo)\n"
-            f"🏆 `/leaderboard` — Group message-activity ranking\n"
+            f"⭐ `/rep` — Suhani Profile Card \\& Wallet\n"
+            f"💰 `/wallet` — Suhani Points \\& INR value\n"
+            f"🏆 `/repboard` — Group Reputation Ranking\n"
+            f"📊 `/leaderboard` — Group message-activity ranking\n"
             f"🌐 `/gleaderboard` — Global message-activity ranking\n"
             f"🆔 `/id` — Your Telegram ID\n\n"
             f"{'─'*28}\n"
-            f"_These commands work for all members._"
+            f"_100 Rep → 10 Suhani Pts → ₹1_\n"
+            f"_Min withdrawal: ₹10 \\(@suhan\\_support\\)_"
         )
         await query.edit_message_text(text, reply_markup=kb_back(), parse_mode='Markdown')
 
@@ -1718,11 +1793,14 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"{'─'*28}\n"
         f"📜 `/rules` — View group rules\n"
         f"⚠️ `/warnings` — Check your warnings\n"
-        f"⭐ `/rep` — Check reputation (reply karo kisi ko)\n"
-        f"🏆 `/leaderboard` — Group message-activity ranking\n"
+        f"⭐ `/rep` — Suhani Profile Card & Wallet\n"
+        f"💰 `/wallet` — Suhani Points & INR value\n"
+        f"🏆 `/repboard` — Group Reputation Ranking\n"
+        f"📊 `/leaderboard` — Group message-activity ranking\n"
         f"🌐 `/gleaderboard` — Global message-activity ranking\n"
         f"🆔 `/id` — Your Telegram ID\n"
         f"{'─'*28}\n\n"
+        f"_100 Rep → 10 Suhani Pts → ₹1 | Min ₹10 withdrawal_\n"
         f"_Add me to your group and make me admin to get started!_"
     )
     await update.message.reply_text(text, parse_mode='Markdown')
@@ -1745,11 +1823,14 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{'─'*28}\n\n"
             f"📜 `/rules` — View group rules\n"
             f"⚠️ `/warnings` — Check your warnings\n"
-            f"⭐ `/rep` — Check reputation (ya kisi ko reply karo)\n"
-            f"🏆 `/leaderboard` — Group message-activity ranking\n"
+            f"⭐ `/rep` — Suhani Profile Card & Wallet\n"
+            f"💰 `/wallet` — Suhani Points & INR value\n"
+            f"🏆 `/repboard` — Group Reputation Ranking\n"
+            f"📊 `/leaderboard` — Group message-activity ranking\n"
             f"🌐 `/gleaderboard` — Global message-activity ranking\n"
             f"🆔 `/id` — Your Telegram ID\n\n"
             f"{'─'*28}\n"
+            f"_100 Rep → 10 Suhani Pts → ₹1 | Min ₹10 withdrawal_\n"
             f"_Violations auto-detected. Stay within rules!_"
         )
         return await update.message.reply_text(text, parse_mode='Markdown')
@@ -3636,33 +3717,284 @@ async def leaderboard_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         pass
 
 
-# ─── /rep ─── Reputation check (all group users can use) ─────
+# ─── /rep ─── Suhani Points Wallet + Reputation Card ───────
 async def rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
-    if ch.type == "private":
-        return await update.message.reply_text("❌ Ise group mein use karo!")
-    # Agar reply kiya ho toh us user ka rep, warna apna
+    # Works in group + private (private mein sirf own wallet)
     if update.message.reply_to_message and update.message.reply_to_message.from_user:
         tgt = update.message.reply_to_message.from_user
     else:
         tgt = update.effective_user
     if not tgt:
         return await update.message.reply_text("❌ User identify nahi hua!")
-    points = db.get_reputation(ch.id, tgt.id)
-    top_list = db.get_reputation_top(ch.id, limit=10)
-    rank = next((i + 1 for i, d in enumerate(top_list) if d.get("user_id") == tgt.id), None)
-    rank_str = f"#{rank}" if rank else "Unranked"
-    stars = "⭐" * min(points, 10) if points > 0 else "_(none yet)_"
-    msg = await update.message.reply_text(
-        f"⭐ *REPUTATION*\n"
-        f"{'─'*25}\n\n"
-        f"👤 {user_name(tgt)}\n"
-        f"Points: `{points}` {stars}\n"
-        f"Rank: `{rank_str}`\n\n"
-        f"_Thank you bolne pe reputation milti hai!_",
-        parse_mode='Markdown'
+
+    # ── Data fetch ───────────────────────────────────────────
+    group_rep   = db.get_reputation(ch.id, tgt.id) if ch.type != "private" else 0
+    total_rep   = db.get_total_reputation(tgt.id)
+    wallet      = db.get_suhani_points(tgt.id)
+    suhani_pts  = wallet["suhani_pts"]
+    inr_val     = suhani_pts // 10  # 10 SP = 1 INR
+
+    # Group rank
+    if ch.type != "private":
+        top_list    = db.get_reputation_top(ch.id, limit=50)
+        group_rank  = next((i + 1 for i, d in enumerate(top_list) if d.get("user_id") == tgt.id), None)
+    else:
+        group_rank = None
+
+    # Global rank (all groups combined)
+    global_top  = db.get_global_reputation_top(limit=50)
+    global_rank = next((i + 1 for i, d in enumerate(global_top) if d.get("_id") == tgt.id), None)
+
+    # ── Progress bar toward next 100 rep milestone ───────────
+    progress = total_rep % 100
+    bar_filled = progress // 10
+    bar_empty  = 10 - bar_filled
+    prog_bar   = "█" * bar_filled + "░" * bar_empty
+    pts_needed = 100 - progress
+
+    # ── Rep tier badge ────────────────────────────────────────
+    def rep_tier(pts):
+        if pts >= 1000: return "💎 LEGENDARY"
+        if pts >= 500:  return "🔥 ELITE"
+        if pts >= 200:  return "⭐ VETERAN"
+        if pts >= 100:  return "🌟 RISING STAR"
+        if pts >= 50:   return "✨ ACTIVE"
+        if pts >= 10:   return "🌱 NEWCOMER"
+        return "🆕 STARTER"
+
+    tier = rep_tier(total_rep)
+
+    # ── Min withdrawal check ──────────────────────────────────
+    can_withdraw = suhani_pts >= 100  # 100 SP = 10 INR (minimum)
+
+    rank_group_txt = f"#{group_rank}" if group_rank else "Unranked"
+    rank_global_txt = f"#{global_rank}" if global_rank else "Unranked"
+
+    # ── Build reply text (MarkdownV2) ─────────────────────────
+    name_safe = user_name(tgt)  # already md_esc'd (v1)
+
+    text = (
+        f"╔══════════════════════════╗\n"
+        f"║  ⭐  SUHANI PROFILE CARD  ║\n"
+        f"╚══════════════════════════╝\n\n"
+        f"👤 *{name_safe}*\n"
+        f"🏷️ Tier: *{tier}*\n\n"
+        f"{'─'*28}\n"
+        f"📊 *REPUTATION*\n"
+        f"  🏠 Group Rep:  `{group_rep}` pts  •  Rank `{rank_group_txt}`\n"
+        f"  🌐 Total Rep:  `{total_rep}` pts  •  Global `{rank_global_txt}`\n\n"
+        f"⚡ *Next Milestone*\n"
+        f"  [{prog_bar}] `{progress}/100`\n"
+        f"  _{pts_needed} more rep → +10 Suhani Pts_\n\n"
+        f"{'─'*28}\n"
+        f"💰 *SUHANI WALLET*\n"
+        f"  💎 Suhani Points: `{suhani_pts} SP`\n"
+        f"  💵 INR Value:     `₹{inr_val}`\n"
+        f"  {'✅ Withdrawal available!' if can_withdraw else f'🔒 Min 100 SP needed  •  {max(0,100-suhani_pts)} SP remaining'}\n\n"
+        f"{'─'*28}\n"
+        f"📖 *HOW IT WORKS*\n"
+        f"  • Reply kisi ko *Thank You* → \\+1 Rep\n"
+        f"  • 3 reps max dene hain daily\n"
+        f"  • 100 Rep = 10 Suhani Points\n"
+        f"  • 10 SP = ₹1  •  Min ₹10 withdrawal\n\n"
+        f"{'─'*28}\n"
+        f"💸 *WITHDRAW* → @suhan\\_support pe message karo\n"
+        f"_/repboard — Group reputation ranking_"
     )
-    asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 300))
+
+    # ── Keyboard ──────────────────────────────────────────────
+    kb_rows = [
+        [InlineKeyboardButton("🏆 Rep Leaderboard", callback_data=f"rep:board:{ch.id}"),
+         InlineKeyboardButton("💰 My Wallet", callback_data=f"rep:wallet:{tgt.id}")]
+    ]
+    if can_withdraw:
+        kb_rows.append([InlineKeyboardButton(
+            "💸 Request Withdrawal", url="https://t.me/suhan_support"
+        )])
+    kb = InlineKeyboardMarkup(kb_rows)
+
+    msg = await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
+    if ch.type != "private":
+        asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 600))
+
+
+# ─── /wallet ─── Suhani Points wallet (DM + group) ───────────
+async def wallet_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    usr = update.effective_user
+    ch  = update.effective_chat
+    if not usr:
+        return
+    total_rep  = db.get_total_reputation(usr.id)
+    wallet     = db.get_suhani_points(usr.id)
+    suhani_pts = wallet["suhani_pts"]
+    inr_val    = suhani_pts // 10
+    progress   = total_rep % 100
+    bar_filled = progress // 10
+    prog_bar   = "█" * bar_filled + "░" * (10 - bar_filled)
+    can_withdraw = suhani_pts >= 100
+
+    text = (
+        f"╔═══════════════════════╗\n"
+        f"║  💰  SUHANI WALLET     ║\n"
+        f"╚═══════════════════════╝\n\n"
+        f"👤 *{user_name(usr)}*\n\n"
+        f"{'─'*26}\n"
+        f"💎 Suhani Points: `{suhani_pts} SP`\n"
+        f"🌐 Total Rep:     `{total_rep} pts`\n"
+        f"💵 INR Value:     `₹{inr_val}`\n\n"
+        f"⚡ *Next Conversion*\n"
+        f"  [{prog_bar}] `{progress}/100 rep`\n\n"
+        f"{'─'*26}\n"
+        f"📋 *CONVERSION RATES*\n"
+        f"  100 Rep  →  10 Suhani Pts\n"
+        f"  10 SP    →  ₹1\n"
+        f"  Min: 100 SP = ₹10 withdrawal\n\n"
+        f"{'─'*26}\n"
+        f"{'✅ *Withdrawal Ready\\!*' if can_withdraw else f'🔒 Need `{max(0,100-suhani_pts)}` more SP'}\n"
+        f"💸 Withdraw → @suhan\\_support"
+    )
+    kb_rows = [[InlineKeyboardButton("💸 Contact Support", url="https://t.me/suhan_support")]]
+    if can_withdraw:
+        kb_rows[0].insert(0, InlineKeyboardButton("✅ Request Withdrawal", url="https://t.me/suhan_support"))
+    kb = InlineKeyboardMarkup(kb_rows)
+    msg = await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
+    if ch.type != "private":
+        asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 300))
+
+
+# ─── /repboard ─── Reputation Leaderboard (group-wise) ────────
+async def repboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ch = update.effective_chat
+    if ch.type == "private":
+        return await update.message.reply_text("❌ Ise group mein use karo!")
+    top = db.get_reputation_top(ch.id, limit=10)
+    medals = ["🥇", "🥈", "🥉"]
+    if not top:
+        return await update.message.reply_text(
+            "🏆 *REP LEADERBOARD*\n\n📉 Abhi kisi ne reputation nahi kamai!\n"
+            "_Kisi ko thank you bolo shuru karo_ 😊",
+            parse_mode='Markdown'
+        )
+    lines = []
+    for i, doc in enumerate(top):
+        medal = medals[i] if i < 3 else f"`{i+1}.`"
+        raw_name = doc.get("name") or str(doc.get("user_id", "?"))
+        name = md_esc(str(raw_name))
+        pts  = doc.get("points", 0)
+        sp   = (pts // 100) * 10
+        lines.append(f"{medal} {name}  —  `{pts}` rep  •  `{sp}` SP")
+    text = (
+        f"🏆 *GROUP REP LEADERBOARD*\n"
+        f"{'─'*28}\n\n"
+        + "\n".join(lines) +
+        f"\n\n{'─'*28}\n"
+        f"_100 rep = 10 Suhani Points = ₹1_\n"
+        f"_/rep — apna card dekho_"
+    )
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔄 Refresh", callback_data=f"rep:board:{ch.id}"),
+        InlineKeyboardButton("🌐 Global Top", callback_data="rep:global:0")
+    ]])
+    msg = await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
+    asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 600))
+
+
+# ─── Reputation callbacks (repboard refresh + wallet) ─────────
+async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    try:
+        parts = query.data.split(":")
+        action = parts[1]
+
+        if action == "board":
+            chat_id = int(parts[2])
+            top = db.get_reputation_top(chat_id, limit=10)
+            medals = ["🥇", "🥈", "🥉"]
+            if not top:
+                await query.edit_message_text(
+                    "🏆 *GROUP REP LEADERBOARD*\n\n📉 Koi data nahi mila!",
+                    parse_mode='Markdown'
+                )
+                return
+            lines = []
+            for i, doc in enumerate(top):
+                medal = medals[i] if i < 3 else f"`{i+1}.`"
+                raw_name = doc.get("name") or str(doc.get("user_id", "?"))
+                name = md_esc(str(raw_name))
+                pts  = doc.get("points", 0)
+                sp   = (pts // 100) * 10
+                lines.append(f"{medal} {name}  —  `{pts}` rep  •  `{sp}` SP")
+            text = (
+                f"🏆 *GROUP REP LEADERBOARD*\n"
+                f"{'─'*28}\n\n"
+                + "\n".join(lines) +
+                f"\n\n{'─'*28}\n"
+                f"_100 rep = 10 Suhani Points = ₹1_"
+            )
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔄 Refresh", callback_data=f"rep:board:{chat_id}"),
+                InlineKeyboardButton("🌐 Global Top", callback_data="rep:global:0")
+            ]])
+            await query.edit_message_text(text, parse_mode='Markdown', reply_markup=kb)
+
+        elif action == "global":
+            top = db.get_global_reputation_top(limit=10)
+            medals = ["🥇", "🥈", "🥉"]
+            if not top:
+                await query.edit_message_text(
+                    "🌐 *GLOBAL REP LEADERBOARD*\n\n📉 Koi data nahi mila!",
+                    parse_mode='Markdown'
+                )
+                return
+            lines = []
+            for i, doc in enumerate(top):
+                medal = medals[i] if i < 3 else f"`{i+1}.`"
+                raw_name = doc.get("name") or str(doc.get("_id", "?"))
+                name = md_esc(str(raw_name))
+                pts  = doc.get("total", 0)
+                sp   = (pts // 100) * 10
+                lines.append(f"{medal} {name}  —  `{pts}` rep  •  `{sp}` SP")
+            text = (
+                f"🌐 *GLOBAL REP LEADERBOARD*\n"
+                f"{'─'*28}\n\n"
+                + "\n".join(lines) +
+                f"\n\n{'─'*28}\n"
+                f"_100 rep = 10 Suhani Points = ₹1_"
+            )
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔄 Refresh", callback_data="rep:global:0"),
+            ]])
+            await query.edit_message_text(text, parse_mode='Markdown', reply_markup=kb)
+
+        elif action == "wallet":
+            user_id = int(parts[2])
+            total_rep  = db.get_total_reputation(user_id)
+            wallet     = db.get_suhani_points(user_id)
+            suhani_pts = wallet["suhani_pts"]
+            inr_val    = suhani_pts // 10
+            progress   = total_rep % 100
+            prog_bar   = "█" * (progress // 10) + "░" * (10 - progress // 10)
+            can_wd     = suhani_pts >= 100
+            text = (
+                f"💰 *SUHANI WALLET*\n"
+                f"{'─'*26}\n\n"
+                f"💎 Points: `{suhani_pts} SP`\n"
+                f"🌐 Total Rep: `{total_rep} pts`\n"
+                f"💵 Value: `₹{inr_val}`\n\n"
+                f"[{prog_bar}] `{progress}/100`\n\n"
+                f"{'✅ Withdrawal ready!' if can_wd else f'🔒 {max(0,100-suhani_pts)} SP needed'}"
+            )
+            await query.edit_message_text(text, parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("💸 Withdraw", url="https://t.me/suhan_support")
+                ]]) if can_wd else None
+            )
+    except Exception:
+        pass
+
+
 
 
 # ═══════════════════════════════════════════════════════════
@@ -3842,13 +4174,38 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 parse_mode='Markdown'
             )
         else:
-            db.add_reputation(ch.id, target.id, 1, user_name(target))
-            new_rep = db.get_reputation(ch.id, target.id)
-            notice = await msg.reply_text(
-                f"💖 {user_name(usr)} ne {user_name(target)} ko thank you bola!\n\n"
-                f"⭐ Reputation +1 mil gaya — total: `{new_rep}` points.",
-                parse_mode='Markdown'
-            )
+            # ── Daily 3-rep limit check ───────────────────────────
+            given_today = db.get_rep_given_today(usr.id)
+            if given_today >= 3:
+                notice = await msg.reply_text(
+                    f"💖 {user_name(usr)} ne thank you bola — but\n\n"
+                    f"⚠️ *Daily limit reach ho gayi!*\n"
+                    f"Aaj 3/3 Suhani Points de chuke ho \\— kal phir dena 😊",
+                    parse_mode='Markdown'
+                )
+            else:
+                new_count = db.increment_rep_given(usr.id)
+                db.add_reputation(ch.id, target.id, 1, user_name(target, escape=False))
+                new_rep = db.get_reputation(ch.id, target.id)
+                wallet = db.get_suhani_points(target.id)
+                remaining = 3 - new_count
+                # Milestone check: kya naya suhani point convert hua?
+                milestone_txt = ""
+                if new_rep % 100 == 0 and new_rep > 0:
+                    sp = wallet["suhani_pts"]
+                    inr = sp // 10
+                    milestone_txt = (
+                        f"\n\n🎉 *MILESTONE\\!* {user_name(target)} ke `{new_rep}` rep points puri ho gayi\\!\n"
+                        f"💰 Wallet: `{sp}` Suhani Pts = ₹`{inr}`"
+                    )
+                notice = await msg.reply_text(
+                    f"💖 {user_name(usr)} ne {user_name(target)} ko thank you bola\\!\n\n"
+                    f"⭐ *\\+1 Suhani Point* mil gaya\\!\n"
+                    f"📊 Group Rep: `{new_rep}` pts\n"
+                    f"🎯 Aaj de sakte ho: `{remaining}/3`{milestone_txt}\n\n"
+                    f"_\\/rep karke apna wallet dekho\\!_",
+                    parse_mode='MarkdownV2'
+                )
         asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 60))
         return
 
@@ -4211,6 +4568,8 @@ def main():
     app.add_handler(CommandHandler("warnings",         warnings_cmd))
     app.add_handler(CommandHandler("resetwarnings",    reset_cmd))
     app.add_handler(CommandHandler("rep",              rep_cmd))
+    app.add_handler(CommandHandler("wallet",           wallet_cmd))
+    app.add_handler(CommandHandler("repboard",         repboard_cmd))
     app.add_handler(CommandHandler("del",              del_cmd))
     app.add_handler(CommandHandler("purge",            purge_cmd))
     app.add_handler(CommandHandler("immortal",         immortal_cmd))
@@ -4251,9 +4610,10 @@ def main():
     app.add_handler(CommandHandler("teachers",         teachers_cmd))
 
     # ── Callback Queries ─────────────────────────────────────
-    app.add_handler(CallbackQueryHandler(captcha_callback, pattern=r"^captcha_"))
-    app.add_handler(CallbackQueryHandler(menu_callback,    pattern=r"^(menu_|show_|unmute_|unban_|dismiss_)"))
+    app.add_handler(CallbackQueryHandler(captcha_callback,    pattern=r"^captcha_"))
+    app.add_handler(CallbackQueryHandler(menu_callback,       pattern=r"^(menu_|show_|unmute_|unban_|dismiss_)"))
     app.add_handler(CallbackQueryHandler(leaderboard_callback, pattern=r"^lbd:"))
+    app.add_handler(CallbackQueryHandler(rep_callback,        pattern=r"^rep:"))
 
     # ── Message Handlers ─────────────────────────────────────
     # Activity tracker (message-count leaderboard) — apna ALAG group (-1),
