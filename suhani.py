@@ -1266,7 +1266,15 @@ async def global_mute_user(ctx, user_id, display_name=None):
             await do_mute(ctx, gid, user_id, GMUTE_DURATION)
             notice = await ctx.bot.send_message(
                 gid,
-                f"👤 {display_name or user_id}\n\n{WARN_MSG[4]}",
+                f"╔{'═'*30}╗\n"
+                f"║   💀  GLOBAL MUTE EXECUTED   ║\n"
+                f"╚{'═'*30}╝\n\n"
+                f"👤 *{display_name or user_id}*\n\n"
+                f"🌐 Muted in *ALL* groups\n"
+                f"🗓️ Duration: *1 WEEK*\n"
+                f"🔐 Only admin can unmute manually\n\n"
+                f"_{'─'*30}_\n"
+                f"_{WARN_MSG[4]}_",
                 parse_mode='Markdown'
             )
             asyncio.create_task(delete_after(ctx, gid, notice.message_id, 600))
@@ -1281,8 +1289,8 @@ async def global_mute_user(ctx, user_id, display_name=None):
 def kb_main_menu():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("👤 User Cmds", callback_data="menu_user"),
-            InlineKeyboardButton("👮 Admin Cmds", callback_data="menu_admin"),
+            InlineKeyboardButton("👤 My Commands", callback_data="menu_user"),
+            InlineKeyboardButton("👮 Admin Panel", callback_data="menu_admin"),
         ],
         [
             InlineKeyboardButton("🛡️ Protections", callback_data="menu_protection"),
@@ -1290,13 +1298,25 @@ def kb_main_menu():
         ],
         [
             InlineKeyboardButton("⚠️ Warn System", callback_data="menu_warns"),
-            InlineKeyboardButton("📊 Stats", callback_data="menu_stats"),
+            InlineKeyboardButton("📊 Bot Stats", callback_data="menu_stats"),
+        ],
+        [
+            InlineKeyboardButton("🏆 Rep Board", callback_data="menu_repinfo"),
+            InlineKeyboardButton("🤖 AI Status", callback_data="menu_ai"),
         ],
     ])
 
 def kb_back():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("◀️ Back to Menu", callback_data="menu_main")]
+    ])
+
+def kb_back_with_help():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("◀️ Back", callback_data="menu_main"),
+            InlineKeyboardButton("📜 Rules", callback_data="show_rules"),
+        ]
     ])
 
 def kb_rules():
@@ -1327,8 +1347,11 @@ def kb_captcha(chat_id, user_id, options):
 def kb_join_welcome():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("📜 Rules", callback_data="show_rules"),
+            InlineKeyboardButton("📜 Group Rules", callback_data="show_rules"),
             InlineKeyboardButton("🆘 Help", callback_data="menu_user"),
+        ],
+        [
+            InlineKeyboardButton("⚠️ Warn System", callback_data="menu_warns"),
         ]
     ])
 
@@ -1537,24 +1560,31 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if data == "menu_main":
         text = (
-            f"🛡️ *SUHANI BOT v10.0*\n\n"
-            f"Choose a category below 👇"
+            f"╔{'═'*34}╗\n"
+            f"║   🛡️  SUHANI BOT v10.0        ║\n"
+            f"╠{'═'*34}╣\n"
+            f"║  Anime Hindi Dub Group Guard   ║\n"
+            f"╚{'═'*34}╝\n\n"
+            f"_Choose a category below 👇_"
         )
         await query.edit_message_text(text, reply_markup=kb_main_menu(), parse_mode='Markdown')
 
     elif data == "menu_user":
         text = (
-            f"👤 *YOUR COMMANDS*\n"
-            f"{'─'*28}\n\n"
+            f"╔{'═'*32}╗\n"
+            f"║   👤  YOUR COMMANDS          ║\n"
+            f"╚{'═'*32}╝\n\n"
+            f"{'─'*32}\n\n"
             f"📜 `/rules` — View group rules\n"
             f"⚠️ `/warnings` — Check your warnings\n"
             f"⭐ `/rep` — Suhani Profile Card \\& Wallet\n"
             f"💰 `/wallet` — Suhani Points \\& INR value\n"
-            f"🏆 `/repboard` — Group Reputation Ranking\n"
-            f"📊 `/leaderboard` — Group message-activity ranking\n"
-            f"🌐 `/gleaderboard` — Global message-activity ranking\n"
+            f"🏆 `/repboard` — Group \\+ Global Rep Board\n"
+            f"📊 `/leaderboard` — Group message\\-activity rank\n"
+            f"🌐 `/gleaderboard` — Global message\\-activity rank\n"
             f"🆔 `/id` — Your Telegram ID\n\n"
-            f"{'─'*28}\n"
+            f"{'─'*32}\n"
+            f"💎 *REWARD SYSTEM*\n"
             f"_100 Rep → 10 Suhani Pts → ₹1_\n"
             f"_Min withdrawal: ₹10 \\(@suhan\\_support\\)_"
         )
@@ -1567,75 +1597,100 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ Admins only!", show_alert=True)
             return
         text = (
-            f"👮 *ADMIN COMMANDS*\n"
-            f"{'─'*30}\n\n"
-            f"🔇 `/mute [sec]` — Mute a user\n"
-            f"🔊 `/unmute` — Unmute a user\n"
-            f"🔨 `/ban` — Ban a user\n"
-            f"🔓 `/unban <id>` — Unban a user\n"
-            f"⚠️ `/warn` — Give a warning\n"
-            f"♻️ `/resetwarnings` — Reset warnings\n"
-            f"🏆 `/leaderboard` — Group message-activity ranking\n"
-            f"🗑️ `/del` — Delete replied message\n"
-            f"🧹 `/purge` — Bulk delete messages\n"
-            f"🧪 `/testmute` — Test 35s mute\n"
+            f"╔{'═'*32}╗\n"
+            f"║   👮  ADMIN COMMANDS         ║\n"
+            f"╚{'═'*32}╝\n\n"
+            f"🔇 `/mute [sec]` — Mute _(reply)_\n"
+            f"🔊 `/unmute` — Unmute _(reply)_\n"
+            f"🔨 `/ban` — Ban _(reply)_\n"
+            f"🔓 `/unban <id>` — Unban user\n"
+            f"⚠️ `/warn` — Give warning _(reply)_\n"
+            f"♻️ `/resetwarnings` — Reset warns _(reply)_\n"
+            f"🗑️ `/del` — Delete message _(reply)_\n"
+            f"🧹 `/purge` — Bulk delete from reply\n"
+            f"🧪 `/testmute` — Test 35s mute _(reply)_\n"
             f"👑 `/immortal <id>` — Grant immunity\n"
             f"💀 `/unimmortal <id>` — Remove immunity\n"
             f"📋 `/immortals` — List immune users\n"
+            f"📚 `/addteacher` `/removeteacher` `/teachers`\n\n"
+            f"{'─'*32}\n"
+            f"📊 `/leaderboard` • `/gleaderboard` • `/repboard`"
         )
-        await query.edit_message_text(text, reply_markup=kb_back(), parse_mode='Markdown')
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("◀️ Back", callback_data="menu_main"),
+                    InlineKeyboardButton("⚙️ Settings", callback_data="menu_settings"),
+                ]
+            ]),
+            parse_mode='Markdown'
+        )
 
     elif data == "menu_protection":
         text = (
-            f"🛡️ *AUTO PROTECTIONS*\n"
-            f"{'─'*30}\n\n"
+            f"╔{'═'*32}╗\n"
+            f"║   🛡️  AUTO PROTECTIONS       ║\n"
+            f"╚{'═'*32}╝\n\n"
             f"🤖 External bot usernames\n"
-            f"👤 External @mentions (usernames)\n"
-            f"   ✅ _@admin @owner @request @sbnime: exempt_\n"
-            f"   ✅ _Whitelisted usernames: exempt_\n"
+            f"👤 External @mentions\n"
+            f"   ✅ _@admin @owner @request: exempt_\n"
+            f"   ✅ _Whitelisted & members: exempt_\n"
             f"🔗 All Links & URLs\n"
-            f"🕵️ Hidden links inside text (text_link entities)\n"
+            f"🕵️ Hidden hyperlinks \\(text\\_link entities\\)\n"
             f"✍️ Stylish / Unicode fancy fonts\n"
             f"↩️ Forwarded messages\n"
-            f"   ✅ _(Linked channel: allowed)_\n"
-            f"🔞 Adult emojis (2+ triggers)\n"
-            f"🚫 Bad words — Hindi + English\n"
+            f"   ✅ _Linked channel forwards: allowed_\n"
+            f"🔞 Adult emojis \\(2\\+ triggers action\\)\n"
+            f"🚫 Bad words — Hindi \\+ English built\\-in\n"
             f"⛔ Custom blacklist words\n"
-            f"🌊 Anti-Flood system\n"
+            f"🌐 Global blacklist \\(owner sets\\)\n"
+            f"🌊 Anti\\-Flood system\n"
             f"🎭 Captcha for new members\n"
-            f"🗑️ Sticker/GIF auto-delete\n"
+            f"🗑️ Sticker/GIF auto\\-delete\n"
+            f"⏱️ Message auto\\-delete timer\n\n"
+            f"{'─'*32}\n"
+            f"_All protections are automatic!_"
         )
         await query.edit_message_text(text, reply_markup=kb_back(), parse_mode='Markdown')
 
     elif data == "menu_settings":
         text = (
-            f"⚙️ *GROUP SETTINGS*\n"
-            f"{'─'*30}\n\n"
+            f"╔{'═'*32}╗\n"
+            f"║   ⚙️  GROUP SETTINGS         ║\n"
+            f"╚{'═'*32}╝\n\n"
             f"🔗 `/setlinked` — Set linked channel\n"
             f"📜 `/setrules <text>` — Set group rules\n"
-            f"⛔ `/addblacklist <word>` — Add banned word\n"
-            f"✅ `/addwhitelist <word>` — Whitelist word\n"
-            f"📋 `/blacklist` — Show banned words\n"
-            f"📋 `/whitelist` — Show allowed words\n"
-            f"🗑️ `/sticker_delete <min>` — Sticker auto-del\n"
-            f"⏱️ `/autodelete <min>` — Auto-delete all\n"
             f"🎭 `/captcha on|off` — Toggle captcha\n"
+            f"⛔ `/addblacklist <word>` — Ban a word\n"
+            f"✅ `/addwhitelist <word>` — Whitelist word\n"
+            f"📋 `/blacklist` • `/whitelist` — View lists\n"
+            f"🗑️ `/sticker_delete <min>` — Sticker auto\\-del\n"
+            f"⏱️ `/autodelete <min>` — Auto\\-delete msgs\n"
+            f"   _`/autodelete reset` → restore global default_\n"
+            f"🤖 `/aimod on|off` — AI moderation toggle\n\n"
+            f"{'─'*32}\n"
+            f"💡 _Settings apply only to this group_"
         )
         await query.edit_message_text(text, reply_markup=kb_back(), parse_mode='Markdown')
 
     elif data == "menu_warns":
         text = (
-            f"⚠️ *WARNING SYSTEM*\n"
-            f"{'─'*30}\n\n"
-            f"🟡 *W1* → 35s mute\n"
-            f"   ⏱ Expires in 6 hours\n\n"
-            f"🟠 *W2* → 60s mute\n"
-            f"   ⏱ Expires in 16 hours\n\n"
-            f"🔴 *W3* → 120s mute\n"
-            f"   ⏱ Expires in 27 hours\n\n"
-            f"💀 *W4* → 1 WEEK ban\n"
-            f"   🌐 Applied in ALL groups!\n"
-            f"   🔐 Admin must manually unmute.\n"
+            f"╔{'═'*32}╗\n"
+            f"║   ⚠️  WARNING SYSTEM         ║\n"
+            f"╚{'═'*32}╝\n\n"
+            f"🟡 *W1* → Muted 35 seconds\n"
+            f"   ⏱ _Expires in 6 hours_\n\n"
+            f"🟠 *W2* → Muted 60 seconds\n"
+            f"   ⏱ _Expires in 16 hours_\n\n"
+            f"🔴 *W3* → Muted 120 seconds\n"
+            f"   ⏱ _Expires in 27 hours_\n\n"
+            f"💀 *W4* → 1 WEEK BAN\n"
+            f"   🌐 _Applied in ALL groups!_\n"
+            f"   🔐 _Admin must manually unmute_\n\n"
+            f"{'─'*32}\n"
+            f"💡 *Tip:* Reply *Thank You* to remove 1 warning!\n"
+            f"_Violations auto\\-trigger warnings_"
         )
         await query.edit_message_text(text, reply_markup=kb_back(), parse_mode='Markdown')
 
@@ -1644,18 +1699,94 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         groups = db.get_all_groups()
         gmutes = db.get_all_gmutes()
         text = (
-            f"📊 *BOT STATISTICS*\n"
-            f"{'─'*30}\n\n"
-            f"👥 Groups Active: `{len(groups)}`\n"
-            f"⚠️ Warnings Given: `{s.get('warnings', 0)}`\n"
-            f"🔇 Mutes Executed: `{s.get('mutes', 0)}`\n"
-            f"📨 Messages Scanned: `{s.get('scanned', 0)}`\n"
-            f"🗓️ Global Mutes: `{len(gmutes)}`\n\n"
-            f"{'─'*30}\n"
-            f"🛡️ Status: {ICON_ON} *Active*\n"
-            f"🗄️ Database: {ICON_ON} *MongoDB*"
+            f"╔{'═'*32}╗\n"
+            f"║   📊  BOT STATISTICS         ║\n"
+            f"╚{'═'*32}╝\n\n"
+            f"👥 Groups Active:     `{len(groups)}`\n"
+            f"⚠️ Warnings Given:    `{s.get('warnings', 0)}`\n"
+            f"🔇 Mutes Executed:    `{s.get('mutes', 0)}`\n"
+            f"📨 Msgs Scanned:      `{s.get('scanned', 0)}`\n"
+            f"🗓️ Global Mutes:      `{len(gmutes)}`\n\n"
+            f"{'─'*32}\n"
+            f"🛡️ Status:  {ICON_ON} *Active & Running*\n"
+            f"🗄️ Database: {ICON_ON} *MongoDB Connected*\n"
+            f"🤖 AI Engine: {'🟢 Groq Active' if AI_API_KEY else '🔴 Not Configured'}"
         )
-        await query.edit_message_text(text, reply_markup=kb_back(), parse_mode='Markdown')
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🔄 Refresh", callback_data="menu_stats"),
+                    InlineKeyboardButton("◀️ Back", callback_data="menu_main"),
+                ]
+            ]),
+            parse_mode='Markdown'
+        )
+
+    elif data == "menu_repinfo":
+        text = (
+            f"╔{'═'*32}╗\n"
+            f"║   🏆  REPUTATION SYSTEM      ║\n"
+            f"╚{'═'*32}╝\n\n"
+            f"⭐ *HOW TO EARN REP:*\n"
+            f"  • Reply to someone with *Thank You*\n"
+            f"  • Shukriya, Thanks, TY bhi chalega\n"
+            f"  • Max *3 reps* de sakte ho daily\n\n"
+            f"{'─'*32}\n"
+            f"💰 *CONVERSION:*\n"
+            f"  100 Rep  →  10 Suhani Pts\n"
+            f"  10 SP    →  ₹1\n"
+            f"  Min: 100 SP = ₹10 withdrawal\n\n"
+            f"{'─'*32}\n"
+            f"🏅 *REP TIERS:*\n"
+            f"  🆕 0\\-9    → Starter\n"
+            f"  🌱 10\\-49  → Newcomer\n"
+            f"  ✨ 50\\-99  → Active\n"
+            f"  🌟 100\\-199 → Rising Star\n"
+            f"  ⭐ 200\\-499 → Veteran\n"
+            f"  🔥 500\\-999 → Elite\n"
+            f"  💎 1000\\+  → Legendary\n\n"
+            f"{'─'*32}\n"
+            f"💸 _Withdraw: @suhan\\_support_"
+        )
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("◀️ Back", callback_data="menu_main"),
+                    InlineKeyboardButton("💸 Withdraw", url="https://t.me/suhan_support"),
+                ]
+            ]),
+            parse_mode='Markdown'
+        )
+
+    elif data == "menu_ai":
+        text = (
+            f"╔{'═'*32}╗\n"
+            f"║   🤖  AI MODERATION          ║\n"
+            f"╚{'═'*32}╝\n\n"
+            f"AI Engine: {'🟢 *Groq Llama Active*' if AI_API_KEY else '🔴 *Not Configured*'}\n\n"
+            f"{'─'*32}\n"
+            f"*What AI Does:*\n"
+            f"  🚨 Detects promo/spam content\n"
+            f"  🎌 Knows anime names \\(search assist\\)\n"
+            f"  💬 Replies in Hinglish when needed\n"
+            f"  📋 Logs missing anime requests\n\n"
+            f"*Owner Commands:*\n"
+            f"  `/aiapprove` — Approve group\n"
+            f"  `/airevoke` — Revoke AI\n"
+            f"  `/aigroups` — List approved\n"
+            f"  `/missinganime` — Missing requests\n\n"
+            f"*Admin Command:*\n"
+            f"  `/aimod on|off` — Toggle AI\n\n"
+            f"{'─'*32}\n"
+            f"_AI requires owner approval per group_"
+        )
+        await query.edit_message_text(
+            text,
+            reply_markup=kb_back(),
+            parse_mode='Markdown'
+        )
 
     elif data == "show_rules":
         chat_id = update.effective_chat.id if update.effective_chat else 0
@@ -1754,56 +1885,104 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     u  = update.effective_user
     ch = update.effective_chat
 
-    # Group me /start → sirf ek line
+    # Group me /start → sirf ek line with button
     if ch.type != "private":
         await update.message.reply_text(
-            f"🛡️ *Suhani Bot* is active! Use /help for commands.",
-            parse_mode='Markdown'
+            f"🛡️ *Suhani Bot* is active & protecting this group!\n"
+            f"_Use /help for all commands._",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("📋 Commands", callback_data="menu_main"),
+                    InlineKeyboardButton("📜 Rules", callback_data="show_rules"),
+                ]
+            ])
         )
         return
 
     # DM — Owner panel
     if u.id == OWNER_ID:
         text = (
-            f"╔{'═'*36}╗\n"
-            f"║  🛡️  *SUHANI GROUP BOT v10.0*    ║\n"
-            f"╚{'═'*36}╝\n\n"
-            f"👑 *Owner Panel*\n"
-            f"{'─'*30}\n\n"
-            f"🌐 `/autodelete <min>` — Global auto-delete default\n"
-            f"📢 `/broadcast <msg>` — Message all groups\n"
-            f"👥 `/groups` — Active group count\n"
-            f"📊 `/stats` — Full bot stats\n"
-            f"🗓️ `/globalmutes` — Global mute list\n"
-            f"💀 `/fban <id> [reason]` — Global ban\n"
-            f"✅ `/gunban <id>` — Global unban\n"
-            f"🧹 `/gclearwarn <id>` — Saare groups se warnings clear\n"
-            f"⚡ `/power <id>` — Grant fban power\n"
-            f"🔻 `/unpower <id>` — Revoke fban power\n"
-            f"🌐 `/gblacklist` — Global blacklist\n"
-            f"✅ `/gwhitelist` — Global whitelist\n"
+            f"╔{'═'*38}╗\n"
+            f"║  👑  SUHANI BOT — OWNER PANEL   ║\n"
+            f"╠{'═'*38}╣\n"
+            f"║  v10.0  •  MongoDB  •  AI-Powered   ║\n"
+            f"╚{'═'*38}╝\n\n"
+            f"{'─'*38}\n"
+            f"🌐 *GLOBAL CONTROLS*\n\n"
+            f"  📢 `/broadcast <msg>` — All groups\n"
+            f"  👥 `/groups` — Active group count\n"
+            f"  📊 `/stats` — Full bot stats\n"
+            f"  🗓️ `/globalmutes` — Global mute list\n"
+            f"  🌐 `/autodelete <min>` — Global default\n\n"
+            f"{'─'*38}\n"
+            f"⚡ *MODERATION*\n\n"
+            f"  💀 `/fban <id> [reason]` — Global ban\n"
+            f"  ✅ `/gunban <id>` — Global unban\n"
+            f"  🧹 `/gclearwarn <id>` — Clear all warns\n"
+            f"  ⚡ `/power <id>` — Grant fban power\n"
+            f"  🔻 `/unpower <id>` — Revoke power\n\n"
+            f"{'─'*38}\n"
+            f"🤖 *AI CONTROLS*\n\n"
+            f"  ✅ `/aiapprove <id>` — Approve group\n"
+            f"  🔴 `/airevoke <id>` — Revoke AI\n"
+            f"  📋 `/aigroups` — AI approved list\n"
+            f"  🎌 `/missinganime` — Missing requests\n\n"
+            f"{'─'*38}\n"
+            f"🌐 `/gblacklist` • `/gwhitelist` — Global word lists\n"
+            f"🤖 `/adexempt` — Autodelete exemptions\n"
         )
-        await update.message.reply_text(text, parse_mode='Markdown')
+        await update.message.reply_text(
+            text,
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("📊 Stats", callback_data="menu_stats"),
+                    InlineKeyboardButton("🛡️ Protections", callback_data="menu_protection"),
+                ]
+            ])
+        )
         return
 
-    # DM — Regular user: sirf unke kaam ki cheezein
+    # DM — Regular user
     text = (
+        f"╔{'═'*34}╗\n"
+        f"║   🛡️  SUHANI PROTECTION BOT    ║\n"
+        f"╠{'═'*34}╣\n"
+        f"║   Anime Hindi Dub Group Guard   ║\n"
+        f"╚{'═'*34}╝\n\n"
         f"👋 *Hey {md_esc(u.first_name or 'there')}!*\n\n"
-        f"I protect Telegram groups. Here's what you can do:\n\n"
-        f"{'─'*28}\n"
-        f"📜 `/rules` — View group rules\n"
-        f"⚠️ `/warnings` — Check your warnings\n"
-        f"⭐ `/rep` — Suhani Profile Card & Wallet\n"
-        f"💰 `/wallet` — Suhani Points & INR value\n"
-        f"🏆 `/repboard` — Group Reputation Ranking\n"
-        f"📊 `/leaderboard` — Group message-activity ranking\n"
-        f"🌐 `/gleaderboard` — Global message-activity ranking\n"
-        f"🆔 `/id` — Your Telegram ID\n"
-        f"{'─'*28}\n\n"
-        f"_100 Rep → 10 Suhani Pts → ₹1 | Min ₹10 withdrawal_\n"
-        f"_Add me to your group and make me admin to get started!_"
+        f"Main groups ko protect karta hoon aur anime community\n"
+        f"ko safe aur spam-free rakhta hoon! 🔥\n\n"
+        f"{'─'*34}\n"
+        f"📱 *YOUR COMMANDS*\n\n"
+        f"  📜 `/rules` — Group ke rules dekho\n"
+        f"  ⚠️ `/warnings` — Apni warnings check karo\n"
+        f"  ⭐ `/rep` — Suhani Profile Card & Wallet\n"
+        f"  💰 `/wallet` — Suhani Points & INR\n"
+        f"  🏆 `/repboard` — Reputation Ranking\n"
+        f"  📊 `/leaderboard` — Message activity rank\n"
+        f"  🌐 `/gleaderboard` — Global activity rank\n"
+        f"  🆔 `/id` — Apna Telegram ID\n\n"
+        f"{'─'*34}\n"
+        f"💎 *REWARD SYSTEM*\n"
+        f"_100 Rep → 10 Suhani Pts → ₹1_\n"
+        f"_Min ₹10 withdrawal @suhan\\_support_\n\n"
+        f"_Add me to your group & make me admin!_"
     )
-    await update.message.reply_text(text, parse_mode='Markdown')
+    await update.message.reply_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📋 All Commands", callback_data="menu_user"),
+                InlineKeyboardButton("⚠️ Warn System", callback_data="menu_warns"),
+            ],
+            [
+                InlineKeyboardButton("💸 Withdraw", url="https://t.me/suhan_support"),
+            ]
+        ])
+    )
 
 
 # ─── /help ──────────────────────────────────────────────────
@@ -1819,85 +1998,104 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # ── User-only help (non-admins) ──────────────────────────
     if not caller_is_admin:
         text = (
-            f"ℹ️ *Commands you can use:*\n"
-            f"{'─'*28}\n\n"
+            f"╔{'═'*32}╗\n"
+            f"║   👤  YOUR COMMANDS & INFO    ║\n"
+            f"╚{'═'*32}╝\n\n"
+            f"{'─'*32}\n"
             f"📜 `/rules` — View group rules\n"
             f"⚠️ `/warnings` — Check your warnings\n"
             f"⭐ `/rep` — Suhani Profile Card & Wallet\n"
             f"💰 `/wallet` — Suhani Points & INR value\n"
-            f"🏆 `/repboard` — Group Reputation Ranking\n"
-            f"📊 `/leaderboard` — Group message-activity ranking\n"
-            f"🌐 `/gleaderboard` — Global message-activity ranking\n"
+            f"🏆 `/repboard` — Reputation Leaderboard\n"
+            f"📊 `/leaderboard` — Message activity rank\n"
+            f"🌐 `/gleaderboard` — Global activity rank\n"
             f"🆔 `/id` — Your Telegram ID\n\n"
-            f"{'─'*28}\n"
-            f"_100 Rep → 10 Suhani Pts → ₹1 | Min ₹10 withdrawal_\n"
+            f"{'─'*32}\n"
+            f"💡 _100 Rep → 10 SP → ₹1 | Min ₹10 withdraw_\n"
             f"_Violations auto-detected. Stay within rules!_"
         )
-        return await update.message.reply_text(text, parse_mode='Markdown')
-
+        return await update.message.reply_text(
+            text,
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("📜 Rules", callback_data="show_rules"),
+                    InlineKeyboardButton("⚠️ Warns Info", callback_data="menu_warns"),
+                ],
+                [
+                    InlineKeyboardButton("🛡️ Protections", callback_data="menu_protection"),
+                ]
+            ])
+        )
 
     # ── Admin / Owner full help ──────────────────────────────
     admin_text = (
-        f"👮 *ADMIN COMMANDS*\n"
-        f"{'─'*30}\n\n"
-        f"🔇 `/mute [sec]` — Mute user (reply)\n"
-        f"🔊 `/unmute` — Unmute user (reply)\n"
-        f"🔨 `/ban [reason]` — Ban user (reply)\n"
+        f"╔{'═'*34}╗\n"
+        f"║   👮  ADMIN COMMANDS PANEL    ║\n"
+        f"╚{'═'*34}╝\n\n"
+        f"🔇 `/mute [sec]` — Mute user _(reply)_\n"
+        f"🔊 `/unmute` — Unmute user _(reply)_\n"
+        f"🔨 `/ban [reason]` — Ban user _(reply)_\n"
         f"🔓 `/unban <id>` — Unban user\n"
-        f"⚠️ `/warn [reason]` — Warn user (reply)\n"
-        f"♻️ `/resetwarnings` — Reset warnings (reply)\n"
-        f"🏆 `/leaderboard` — Group message-activity ranking\n"
-        f"🌐 `/gleaderboard` — Global message-activity ranking\n"
-        f"⭐ `/rep` — Reputation check (sab use kar sakte hain)\n"
-        f"🗑️ `/del` — Delete message (reply)\n"
+        f"⚠️ `/warn [reason]` — Warn user _(reply)_\n"
+        f"♻️ `/resetwarnings` — Reset warnings _(reply)_\n"
+        f"🗑️ `/del` — Delete message _(reply)_\n"
         f"🧹 `/purge` — Bulk delete from reply\n"
-        f"🧪 `/testmute` — Test 35s mute (reply)\n"
+        f"🧪 `/testmute` — Test 35s mute _(reply)_\n"
         f"👑 `/immortal <id>` — Grant immunity\n"
-        f"💀 `/unimmortal <id>` — Remove immunity\n\n"
-        f"⚙️ *SETTINGS*\n"
-        f"{'─'*30}\n\n"
+        f"💀 `/unimmortal <id>` — Remove immunity\n"
+        f"📋 `/immortals` — List immune users\n\n"
+        f"{'─'*34}\n"
+        f"⚙️ *SETTINGS*\n\n"
         f"📜 `/setrules <text>` — Set rules\n"
         f"🔗 `/setlinked` — Set linked channel\n"
         f"🎭 `/captcha on|off` — Toggle captcha\n"
         f"🗑️ `/sticker_delete <min>` — Sticker auto-del\n"
-        f"⏱️ `/autodelete <min>` — Auto-delete messages\n"
-        f"   _`/autodelete reset` to restore global default_\n"
+        f"⏱️ `/autodelete <min>` — Auto-delete msgs\n"
         f"⛔ `/addblacklist <word>` — Ban a word\n"
         f"✅ `/addwhitelist <word>` — Whitelist word\n"
-        f"📋 `/blacklist` `/whitelist` — View lists\n"
+        f"📋 `/blacklist` • `/whitelist` — View lists\n"
         f"📚 `/addteacher` — Mark user as teacher\n"
-        f"❌ `/removeteacher` — Remove teacher status\n"
+        f"❌ `/removeteacher` — Remove teacher\n"
         f"📋 `/teachers` — List all teachers\n"
     )
 
     if is_owner:
         admin_text += (
-            f"\n👑 *OWNER ONLY*\n"
-            f"{'─'*30}\n\n"
-            f"🌐 `/autodelete <min>` _(in DM)_ — Global default\n"
-            f"💀 `/fban <id> [reason]` — Global ban all groups\n"
+            f"\n{'─'*34}\n"
+            f"👑 *OWNER ONLY*\n\n"
+            f"🌐 `/autodelete <min>` _(DM)_ — Global default\n"
+            f"💀 `/fban <id>` — Global ban all groups\n"
             f"✅ `/gunban <id>` — Global unban\n"
-            f"🧹 `/gclearwarn <id>` — Saare groups se warnings clear\n"
-            f"🔻 `/unpower <id>` — Revoke fban power\n"
+            f"🧹 `/gclearwarn <id>` — Clear all warns\n"
+            f"⚡ `/power <id>` • `/unpower <id>` — Fban perms\n"
             f"📢 `/broadcast <msg>` — Message all groups\n"
-            f"👥 `/groups` `/stats` — Bot stats\n"
-            f"🌐 `/gblacklist` `/gwhitelist` — Global word lists\n"
-            f"🤖 `/adexempt <id>` — Exempt bot from autodelete\n"
-            f"❌ `/unadexempt <id>` — Remove exemption\n"
-            f"🤖 `/aiapprove` — Approve group for AI _(in group)_\n"
-            f"🤖 `/aiapprove <id>` — Approve group for AI _(in DM)_\n"
-            f"🔴 `/airevoke` — Revoke AI from group\n"
-            f"📋 `/aigroups` — List all AI-approved groups\n"
-            f"🎌 `/missinganime` — Missing anime requests list\n"
-            f"🗑️ `/missinganime clear` — Clear missing list\n"
+            f"👥 `/groups` • `/stats` — Bot stats\n"
+            f"🌐 `/gblacklist` • `/gwhitelist` — Global lists\n"
+            f"🤖 `/adexempt <id>` — Autodelete exempt\n"
+            f"🤖 `/aiapprove` • `/airevoke` • `/aigroups`\n"
+            f"🎌 `/missinganime` — Missing anime requests\n"
         )
 
     admin_text += (
-        f"\n{'─'*30}\n"
-        f"⚠️ *Warn:* W1→35s | W2→60s | W3→120s | W4→1wk all groups"
+        f"\n{'─'*34}\n"
+        f"⚠️ *Warn Scale:* W1→35s | W2→60s | W3→120s | W4→1wk 🌐"
     )
 
-    await update.message.reply_text(admin_text, parse_mode='Markdown')
+    await update.message.reply_text(
+        admin_text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🛡️ Protections", callback_data="menu_protection"),
+                InlineKeyboardButton("⚙️ Settings", callback_data="menu_settings"),
+            ],
+            [
+                InlineKeyboardButton("⚠️ Warn System", callback_data="menu_warns"),
+                InlineKeyboardButton("📊 Stats", callback_data="menu_stats"),
+            ]
+        ])
+    )
 
 
 # ─── /rule ──────────────────────────────────────────────────
@@ -3863,39 +4061,69 @@ async def wallet_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 300))
 
 
-# ─── /repboard ─── Reputation Leaderboard (group-wise) ────────
+# ─── /repboard ─── Reputation Leaderboard (Group + Global) ────
 async def repboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
-        return await update.message.reply_text("❌ Ise group mein use karo!")
-    top = db.get_reputation_top(ch.id, limit=10)
-    medals = ["🥇", "🥈", "🥉"]
-    if not top:
         return await update.message.reply_text(
-            "🏆 *REP LEADERBOARD*\n\n📉 Abhi kisi ne reputation nahi kamai!\n"
-            "_Kisi ko thank you bolo shuru karo_ 😊",
+            "❌ Ise group mein use karo!",
             parse_mode='Markdown'
         )
-    lines = []
-    for i, doc in enumerate(top):
-        medal = medals[i] if i < 3 else f"`{i+1}.`"
-        raw_name = doc.get("name") or str(doc.get("user_id", "?"))
-        name = md_esc(str(raw_name))
-        pts  = doc.get("points", 0)
-        sp   = (pts // 100) * 10
-        lines.append(f"{medal} {name}  —  `{pts}` rep  •  `{sp}` SP")
+
+    medals = ["🥇", "🥈", "🥉"]
+    rank_emojis = ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
+
+    # ── Group leaderboard ──────────────────────────────────────
+    group_top = db.get_reputation_top(ch.id, limit=10)
+    # ── Global leaderboard ────────────────────────────────────
+    global_top = db.get_global_reputation_top(limit=10)
+
+    def build_board_lines(entries, key_pts="points", key_id="user_id"):
+        if not entries:
+            return ["  📉 _Koi data nahi mila!_"]
+        lines = []
+        for i, doc in enumerate(entries):
+            medal = medals[i] if i < 3 else (rank_emojis[i-3] if i-3 < len(rank_emojis) else f"`{i+1}.`")
+            raw_name = doc.get("name") or str(doc.get(key_id, "?"))
+            name = md_esc(str(raw_name))
+            pts  = doc.get(key_pts, 0)
+            sp   = (pts // 100) * 10
+            lines.append(f"{medal} {name}  —  `{pts}` rep  •  `{sp}` SP")
+        return lines
+
+    group_lines  = build_board_lines(group_top,  key_pts="points",  key_id="user_id")
+    global_lines = build_board_lines(global_top, key_pts="total",   key_id="_id")
+
+    group_count  = len(group_top)
+    global_count = len(global_top)
+
     text = (
-        f"🏆 *GROUP REP LEADERBOARD*\n"
-        f"{'─'*28}\n\n"
-        + "\n".join(lines) +
-        f"\n\n{'─'*28}\n"
-        f"_100 rep = 10 Suhani Points = ₹1_\n"
-        f"_/rep — apna card dekho_"
+        f"╔{'═'*34}╗\n"
+        f"║   🏆  SUHANI REPUTATION BOARD   ║\n"
+        f"╚{'═'*34}╝\n\n"
+        f"🏠 *GROUP TOP* — {md_esc(getattr(ch, 'title', 'This Group')[:22])}\n"
+        f"{'┄'*34}\n"
+        + "\n".join(group_lines) +
+        f"\n\n"
+        f"🌐 *GLOBAL TOP* — All Groups Combined\n"
+        f"{'┄'*34}\n"
+        + "\n".join(global_lines) +
+        f"\n\n{'─'*34}\n"
+        f"💡 _100 rep = 10 Suhani Pts = ₹1_\n"
+        f"_Reply *Thank You* to give rep  •  Max 3/day_"
     )
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🔄 Refresh", callback_data=f"rep:board:{ch.id}"),
-        InlineKeyboardButton("🌐 Global Top", callback_data="rep:global:0")
-    ]])
+
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔄 Refresh", callback_data=f"rep:board:{ch.id}"),
+            InlineKeyboardButton("⭐ My Profile", callback_data=f"rep:wallet:{update.effective_user.id}"),
+        ],
+        [
+            InlineKeyboardButton("🌐 Global Refresh", callback_data="rep:global:0"),
+            InlineKeyboardButton("💸 Withdraw", url="https://t.me/suhan_support"),
+        ]
+    ])
+
     msg = await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
     asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 600))
 
@@ -3910,38 +4138,53 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         if action == "board":
             chat_id = int(parts[2])
-            top = db.get_reputation_top(chat_id, limit=10)
+            group_top  = db.get_reputation_top(chat_id, limit=10)
+            global_top = db.get_global_reputation_top(limit=10)
             medals = ["🥇", "🥈", "🥉"]
-            if not top:
-                await query.edit_message_text(
-                    "🏆 *GROUP REP LEADERBOARD*\n\n📉 Koi data nahi mila!",
-                    parse_mode='Markdown'
-                )
-                return
-            lines = []
-            for i, doc in enumerate(top):
-                medal = medals[i] if i < 3 else f"`{i+1}.`"
-                raw_name = doc.get("name") or str(doc.get("user_id", "?"))
-                name = md_esc(str(raw_name))
-                pts  = doc.get("points", 0)
-                sp   = (pts // 100) * 10
-                lines.append(f"{medal} {name}  —  `{pts}` rep  •  `{sp}` SP")
+            rank_emojis = ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
+
+            def _lines(entries, key_pts, key_id):
+                if not entries:
+                    return ["  📉 _Koi data nahi mila!_"]
+                out = []
+                for i, doc in enumerate(entries):
+                    medal = medals[i] if i < 3 else (rank_emojis[i-3] if i-3 < len(rank_emojis) else f"`{i+1}.`")
+                    raw_name = doc.get("name") or str(doc.get(key_id, "?"))
+                    name = md_esc(str(raw_name))
+                    pts  = doc.get(key_pts, 0)
+                    sp   = (pts // 100) * 10
+                    out.append(f"{medal} {name}  —  `{pts}` rep  •  `{sp}` SP")
+                return out
+
+            group_lines  = _lines(group_top,  "points", "user_id")
+            global_lines = _lines(global_top, "total",  "_id")
+
             text = (
-                f"🏆 *GROUP REP LEADERBOARD*\n"
-                f"{'─'*28}\n\n"
-                + "\n".join(lines) +
-                f"\n\n{'─'*28}\n"
-                f"_100 rep = 10 Suhani Points = ₹1_"
+                f"╔{'═'*34}╗\n"
+                f"║   🏆  SUHANI REPUTATION BOARD   ║\n"
+                f"╚{'═'*34}╝\n\n"
+                f"🏠 *GROUP TOP*\n"
+                f"{'┄'*34}\n"
+                + "\n".join(group_lines) +
+                f"\n\n🌐 *GLOBAL TOP* — All Groups\n"
+                f"{'┄'*34}\n"
+                + "\n".join(global_lines) +
+                f"\n\n{'─'*34}\n"
+                f"_100 rep = 10 Suhani Pts = ₹1_"
             )
-            kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔄 Refresh", callback_data=f"rep:board:{chat_id}"),
-                InlineKeyboardButton("🌐 Global Top", callback_data="rep:global:0")
-            ]])
+            kb = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🔄 Refresh", callback_data=f"rep:board:{chat_id}"),
+                    InlineKeyboardButton("🌐 Global Refresh", callback_data="rep:global:0"),
+                ],
+                [InlineKeyboardButton("💸 Withdraw", url="https://t.me/suhan_support")]
+            ])
             await query.edit_message_text(text, parse_mode='Markdown', reply_markup=kb)
 
         elif action == "global":
             top = db.get_global_reputation_top(limit=10)
             medals = ["🥇", "🥈", "🥉"]
+            rank_emojis = ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
             if not top:
                 await query.edit_message_text(
                     "🌐 *GLOBAL REP LEADERBOARD*\n\n📉 Koi data nahi mila!",
@@ -3950,22 +4193,28 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 return
             lines = []
             for i, doc in enumerate(top):
-                medal = medals[i] if i < 3 else f"`{i+1}.`"
+                medal = medals[i] if i < 3 else (rank_emojis[i-3] if i-3 < len(rank_emojis) else f"`{i+1}.`")
                 raw_name = doc.get("name") or str(doc.get("_id", "?"))
                 name = md_esc(str(raw_name))
                 pts  = doc.get("total", 0)
                 sp   = (pts // 100) * 10
                 lines.append(f"{medal} {name}  —  `{pts}` rep  •  `{sp}` SP")
             text = (
-                f"🌐 *GLOBAL REP LEADERBOARD*\n"
-                f"{'─'*28}\n\n"
+                f"╔{'═'*34}╗\n"
+                f"║   🌐  GLOBAL REP LEADERBOARD   ║\n"
+                f"╚{'═'*34}╝\n\n"
+                f"{'┄'*34}\n"
                 + "\n".join(lines) +
-                f"\n\n{'─'*28}\n"
-                f"_100 rep = 10 Suhani Points = ₹1_"
+                f"\n\n{'─'*34}\n"
+                f"_100 rep = 10 Suhani Pts = ₹1_\n"
+                f"_Sab groups ka combined data_"
             )
-            kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔄 Refresh", callback_data="rep:global:0"),
-            ]])
+            kb = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🔄 Refresh", callback_data="rep:global:0"),
+                    InlineKeyboardButton("💸 Withdraw", url="https://t.me/suhan_support"),
+                ]
+            ])
             await query.edit_message_text(text, parse_mode='Markdown', reply_markup=kb)
 
         elif action == "wallet":
@@ -4428,13 +4677,20 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         bars = "🟥" * cnt + "⬜" * (4 - cnt)
         mute_sec = MUTE_TIME[cnt]
         mute_str = f"{mute_sec}s" if mute_sec < 3600 else "1 week"
-        next_str = "1 week ban 🌐" if cnt == 3 else f"W{cnt+1}"
+        next_str = "💀 1 week ban 🌐" if cnt == 3 else f"W{cnt+1}"
+
+        warn_colors = {1: "🟡", 2: "🟠", 3: "🔴", 4: "💀"}
+        color = warn_colors.get(cnt, "⚠️")
 
         notice = await ctx.bot.send_message(
             ch.id,
-            f"🚨 *{user_name(usr)}* warned! `(W{cnt}/4)`\n"
-            f"📌 {viol_txt}\n"
-            f"⏱ Muted `{mute_str}` • Next = {next_str}\n\n"
+            f"╔{'═'*28}╗\n"
+            f"║  {color} WARNING {cnt}/4 — ACTION TAKEN  ║\n"
+            f"╚{'═'*28}╝\n\n"
+            f"👤 *{user_name(usr)}*\n"
+            f"📌 _{viol_txt}_\n\n"
+            f"⏱ Muted: `{mute_str}` • Next: {next_str}\n"
+            f"{'─'*28}\n"
             f"Progress: {bars} `{cnt}/4`",
             parse_mode='Markdown',
             reply_markup=kb_warn_actions(ch.id, usr.id)
@@ -4469,23 +4725,28 @@ async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             except:
                 pass
             await update.message.reply_text(
-                f"╔{'═'*38}╗\n"
-                f"║  🛡️  *SUHANI BOT ACTIVATED!*      ║\n"
-                f"╚{'═'*38}╝\n\n"
-                f"⚡ I'm now protecting this group!\n\n"
-                f"📋 *Please give me admin rights with:*\n"
-                f"  • Delete Messages\n"
-                f"  • Restrict Members\n\n"
-                f"{'─'*38}\n\n"
-                f"🛡️ *Auto Protection Active:*\n"
-                f"  🤖 External bots\n"
-                f"  🔗 ALL Links & URLs\n"
+                f"╔{'═'*36}╗\n"
+                f"║  🛡️  SUHANI BOT — ACTIVATED!    ║\n"
+                f"╠{'═'*36}╣\n"
+                f"║   v10.0  •  AI-Powered Guard     ║\n"
+                f"╚{'═'*36}╝\n\n"
+                f"⚡ *Protection is now ACTIVE!*\n\n"
+                f"{'─'*36}\n"
+                f"📋 *Give me these admin rights:*\n"
+                f"  ✅ Delete Messages\n"
+                f"  ✅ Restrict Members\n"
+                f"  ✅ Ban Members\n\n"
+                f"{'─'*36}\n"
+                f"🛡️ *Auto-Protection Enabled:*\n"
+                f"  🤖 External bots & @mentions\n"
+                f"  🔗 Links & URLs\n"
                 f"  ↩️ Forwarded messages\n"
                 f"  🔞 Adult content\n"
                 f"  ⛔ Blacklist words\n"
                 f"  🌊 Anti-Flood\n"
-                f"  🎭 Captcha _(optional)_\n\n"
-                f"Use /help to see all commands!",
+                f"  🎭 Captcha _(optional)_\n"
+                f"  ⏱️ Auto-delete _(optional)_\n\n"
+                f"_Use /help to see all commands!_",
                 parse_mode='Markdown',
                 reply_markup=kb_bot_added()
             )
@@ -4497,14 +4758,20 @@ async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 )
             else:
                 msg = await update.message.reply_text(
-                    f"👋 *Welcome!*\n\n"
-                    f"Hey {user_name(member)}, glad to have you here!\n"
-                    f"Please read the group rules below. 👇",
+                    f"╔{'═'*30}╗\n"
+                    f"║   👋  WELCOME!              ║\n"
+                    f"╚{'═'*30}╝\n\n"
+                    f"Hey {user_name(member)}, glad to have you here! 🎉\n\n"
+                    f"{'─'*30}\n"
+                    f"📜 Please read the group rules\n"
+                    f"⚠️ Violations are auto\\-detected\n"
+                    f"⭐ Earn rep by being helpful!\n\n"
+                    f"_Enjoy the community!_ 🔥",
                     parse_mode='Markdown',
                     reply_markup=kb_join_welcome()
                 )
                 asyncio.create_task(
-                    delete_after(ctx, update.effective_chat.id, msg.message_id, 30)
+                    delete_after(ctx, update.effective_chat.id, msg.message_id, 60)
                 )
 
 
