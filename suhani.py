@@ -1402,6 +1402,7 @@ def kb_main_menu():
             InlineKeyboardButton("🏆 Rep Board", callback_data="menu_repboard"),
             InlineKeyboardButton("⭐ My Profile", callback_data="rep:myprofile"),
         ],
+        [InlineKeyboardButton("❌ Close", callback_data="close_menu")],
     ])
 
 def kb_back():
@@ -1487,6 +1488,7 @@ def ckb_main_menu():
             {"text": "🏆 Rep Board",     "callback_data": "menu_repboard",   "style": "success"},
             {"text": "⭐ My Profile",    "callback_data": "rep:myprofile",   "style": "success"},
         ],
+        [{"text": "❌ Close",            "callback_data": "close_menu",       "style": "danger"}],
     ]
 
 def ckb_back():
@@ -1753,9 +1755,11 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         # Try colored Bot API edit
         chat_id = update.effective_chat.id if update.effective_chat else 0
+        await query.answer()
         success = await edit_colored_message(chat_id, query.message.message_id, text, ckb_main_menu())
         if not success:
             await query.edit_message_text(text, reply_markup=kb_main_menu(), parse_mode='Markdown')
+        return
 
     elif data == "menu_user":
         text = (
@@ -1777,16 +1781,21 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"_Active raho → Auto earn! 🔥_\n"
             f"_Min withdrawal: ₹10 \\(@suhan\\_support\\)_"
         )
+        await query.answer()
         await query.edit_message_text(
             text,
             reply_markup=InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton("◀️ Back", callback_data="menu_main"),
                     InlineKeyboardButton("🏆 Rep Board", callback_data="menu_repboard"),
-                ]
+                ],
+                [InlineKeyboardButton("❌ Close", callback_data="close_menu")],
             ]),
             parse_mode='Markdown'
         )
+        return
+
+    elif data == "menu_admin":
         # Only admins / owner can see this panel
         ch_id = update.effective_chat.id if update.effective_chat else 0
         if query.from_user.id != OWNER_ID and not await is_adm(ctx, ch_id, query.from_user.id):
@@ -1812,16 +1821,19 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{'─'*32}\n"
             f"📊 `/leaderboard` • `/gleaderboard` • `/repboard`"
         )
+        await query.answer()
         await query.edit_message_text(
             text,
             reply_markup=InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton("◀️ Back", callback_data="menu_main"),
                     InlineKeyboardButton("⚙️ Settings", callback_data="menu_settings"),
-                ]
+                ],
+                [InlineKeyboardButton("❌ Close", callback_data="close_menu")],
             ]),
             parse_mode='Markdown'
         )
+        return
 
     elif data == "menu_protection":
         text = (
@@ -1846,11 +1858,16 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{'─'*32}\n"
             f"_All protections are automatic!_"
         )
+        await query.answer()
         await query.edit_message_text(
             text,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="menu_main")]]),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("◀️ Back", callback_data="menu_main")],
+                [InlineKeyboardButton("❌ Close", callback_data="close_menu")],
+            ]),
             parse_mode='Markdown'
         )
+        return
 
     elif data == "menu_settings":
         text = (
@@ -1870,11 +1887,16 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{'─'*32}\n"
             f"💡 _Settings apply only to this group_"
         )
+        await query.answer()
         await query.edit_message_text(
             text,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="menu_main")]]),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("◀️ Back", callback_data="menu_main")],
+                [InlineKeyboardButton("❌ Close", callback_data="close_menu")],
+            ]),
             parse_mode='Markdown'
         )
+        return
 
     elif data == "menu_warns":
         text = (
@@ -1894,16 +1916,19 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"💡 *Tip:* Reply *Thank You* to remove 1 warning!\n"
             f"_Violations auto\\-trigger warnings_"
         )
+        await query.answer()
         await query.edit_message_text(
             text,
             reply_markup=InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton("◀️ Back", callback_data="menu_main"),
                     InlineKeyboardButton("⚠️ My Warnings", callback_data="show_my_warnings"),
-                ]
+                ],
+                [InlineKeyboardButton("❌ Close", callback_data="close_menu")],
             ]),
             parse_mode='Markdown'
         )
+        return
 
     elif data == "menu_stats":
         s = db.get_stats()
@@ -1923,16 +1948,19 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"🗄️ Database: {ICON_ON} *MongoDB Connected*\n"
             f"🤖 AI Engine: {'🟢 Active' if AI_API_KEY else '🔴 Not Configured'}"
         )
+        await query.answer()
         await query.edit_message_text(
             text,
             reply_markup=InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton("🔄 Refresh", callback_data="menu_stats"),
                     InlineKeyboardButton("◀️ Back", callback_data="menu_main"),
-                ]
+                ],
+                [InlineKeyboardButton("❌ Close", callback_data="close_menu")],
             ]),
             parse_mode='Markdown'
         )
+        return
 
     elif data == "menu_repboard":
         # Actual leaderboard directly — group + global
@@ -1971,6 +1999,7 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"_Active raho → Auto earn! 🔥_"
         )
         user_id = query.from_user.id if query.from_user else 0
+        await query.answer()
         await query.edit_message_text(
             text,
             reply_markup=InlineKeyboardMarkup([
@@ -1982,10 +2011,14 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     InlineKeyboardButton("📊 Group Rank", callback_data=f"rep:board:{ch_id}"),
                     InlineKeyboardButton("🌐 Global Rank", callback_data="rep:global:0"),
                 ],
-                [InlineKeyboardButton("◀️ Back", callback_data="menu_main")],
+                [
+                    InlineKeyboardButton("◀️ Back", callback_data="menu_main"),
+                    InlineKeyboardButton("❌ Close", callback_data="close_menu"),
+                ],
             ]),
             parse_mode='Markdown'
         )
+        return
 
     elif data == "menu_repinfo":
         # Keep for backwards compat — redirect to repboard
@@ -2020,11 +2053,16 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{'─'*32}\n"
             f"_AI requires owner approval per group_"
         )
+        await query.answer()
         await query.edit_message_text(
             text,
-            reply_markup=kb_back(),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("◀️ Back", callback_data="menu_main")],
+                [InlineKeyboardButton("❌ Close", callback_data="close_menu")],
+            ]),
             parse_mode='Markdown'
         )
+        return
 
     elif data == "show_rules":
         chat_id = update.effective_chat.id if update.effective_chat else 0
@@ -2060,7 +2098,14 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"✅ _Respect the rules & enjoy the group!_"
             )
         await query.answer()
-        await query.message.reply_text(rules_text, parse_mode='Markdown')
+        await query.edit_message_text(
+            rules_text,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("◀️ Back", callback_data="menu_main")],
+                [InlineKeyboardButton("❌ Close", callback_data="close_menu")],
+            ]),
+            parse_mode='Markdown'
+        )
         return
 
     elif data == "show_id":
@@ -2127,6 +2172,13 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 pass
         else:
             await query.answer("❌ Admins only!", show_alert=True)
+        return
+
+    elif data == "close_menu":
+        try:
+            await query.message.delete()
+        except:
+            await query.answer("✅ Closed!")
         return
 
     await query.answer()
@@ -5221,7 +5273,7 @@ def main():
 
     # ── Callback Queries ─────────────────────────────────────
     app.add_handler(CallbackQueryHandler(captcha_callback,    pattern=r"^captcha_"))
-    app.add_handler(CallbackQueryHandler(menu_callback,       pattern=r"^(menu_|show_|unmute_|unban_|dismiss_)"))
+    app.add_handler(CallbackQueryHandler(menu_callback,       pattern=r"^(menu_|show_|unmute_|unban_|dismiss_|close_)"))
     app.add_handler(CallbackQueryHandler(leaderboard_callback, pattern=r"^lbd:"))
     app.add_handler(CallbackQueryHandler(rep_callback,        pattern=r"^rep:"))
 
