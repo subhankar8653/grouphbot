@@ -1018,11 +1018,21 @@ async def fetch_linked_channel(ctx, chat_id):
     return None
 
 
-def user_name(u):
+def md_esc(text: str) -> str:
+    """Markdown v1 ke special chars escape karo taaki parse entity error na aaye."""
+    # Markdown v1 mein sirf _ * ` [ problematic hain
+    for ch in ('_', '*', '`', '['):
+        text = text.replace(ch, f'\\{ch}')
+    return text
+
+
+def user_name(u, escape: bool = True) -> str:
+    """User ka display name return karo. escape=True (default) → Markdown-safe."""
     try:
-        return f"@{u.username}" if u.username else u.first_name or str(u.id)
-    except:
-        return "User"
+        raw = f"@{u.username}" if u.username else u.first_name or str(u.id)
+    except Exception:
+        raw = "User"
+    return md_esc(raw) if escape else raw
 
 
 def is_thank_you_text(text: str) -> bool:
@@ -1703,7 +1713,7 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # DM — Regular user: sirf unke kaam ki cheezein
     text = (
-        f"👋 *Hey {u.first_name}!*\n\n"
+        f"👋 *Hey {md_esc(u.first_name or 'there')}!*\n\n"
         f"I protect Telegram groups. Here's what you can do:\n\n"
         f"{'─'*28}\n"
         f"📜 `/rules` — View group rules\n"
@@ -2894,7 +2904,7 @@ async def fban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             try:
                 chat_obj = await ctx.bot.get_chat(f"@{uname}")
                 target_id   = chat_obj.id
-                target_name = chat_obj.first_name or uname
+                target_name = md_esc(chat_obj.first_name or uname)
             except Exception:
                 return await update.message.reply_text(
                     f"❌ Cannot find user: `{raw}`",
@@ -3036,7 +3046,7 @@ async def gclearwarn_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             try:
                 chat_obj = await ctx.bot.get_chat(f"@{uname}")
                 target_id = chat_obj.id
-                target_name = chat_obj.first_name or uname
+                target_name = md_esc(chat_obj.first_name or uname)
             except Exception:
                 return await update.message.reply_text(
                     f"❌ User nahi mila: `{raw}`", parse_mode='Markdown'
@@ -3324,7 +3334,7 @@ async def addteacher_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             try:
                 chat_obj = await ctx.bot.get_chat(f"@{uname}")
                 target_id = chat_obj.id
-                target_name = uname
+                target_name = md_esc(uname)
             except Exception:
                 return await update.message.reply_text(
                     f"❌ User nahi mila: `{ctx.args[0]}`", parse_mode='Markdown'
@@ -3557,7 +3567,8 @@ def build_lb_text(entries, period, scope_title):
     lines = []
     for i, entry in enumerate(entries):
         rank = medals[i] if i < 3 else f"`{i+1}.`"
-        name = entry.get("name") or str(entry.get("_id"))
+        raw_name = entry.get("name") or str(entry.get("_id"))
+        name = md_esc(str(raw_name))
         total = entry.get("total", 0)
         lines.append(f"{rank} {name} — *{total}* messages")
     return (
@@ -3864,7 +3875,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                         try:
                             chat_obj = await ctx.bot.get_chat(f"@{uname}")
                             target_id = chat_obj.id
-                            target_name = uname
+                            target_name = md_esc(uname)
                         except Exception:
                             pass
             if target_id and target_id != ctx.bot.id and target_id != OWNER_ID:
