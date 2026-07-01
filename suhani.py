@@ -3366,36 +3366,9 @@ async def groups_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ─── /Accept_rep ─── Owner-only: group ka reputation Suhani Coin ke liye accept karo ──
-async def accept_rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
-    if not ctx.args:
-        groups = db.get_accepted_rep_groups_full()
-        if not groups:
-            lines = "  <i>Koi group accepted nahi hai</i>"
-        else:
-            out = []
-            for g in groups:
-                title = html.escape(g.get("title") or str(g["_id"]))
-                link  = g.get("link")
-                if link:
-                    out.append(f"  • <a href=\"{html.escape(link)}\">{title}</a>  (<code>{g['_id']}</code>)")
-                else:
-                    out.append(f"  • {title}  (<code>{g['_id']}</code>)")
-            lines = "\n".join(out)
-        return await update.message.reply_text(
-            f"⚙️ <b>Usage:</b> <code>/Accept_rep &lt;group_id&gt;</code>\n\n"
-            f"✅ <b>Accepted Groups</b> (Suhani Coin convertible):\n{lines}\n\n"
-            f"👥 Members yeh list <code>/earn_groups</code> se dekh sakte hain.",
-            parse_mode='HTML', disable_web_page_preview=True
-        )
-    try:
-        gid = int(ctx.args[0])
-    except ValueError:
-        return await update.message.reply_text("❌ Group ID number mein do!")
-
-    # Group ka title aur invite link fetch karne ki koshish karo, taaki members
-    # ko /earn_groups mein ek clickable link dikh sake.
+# ─── Helper: accepted group ka title/public-link nikaalo (aur missing ho to backfill karo) ──
+async def _resolve_group_link(ctx: ContextTypes.DEFAULT_TYPE, gid: int):
+    """Live Telegram se group ka title + public link fetch karta hai."""
     title, link = str(gid), None
     try:
         chat = await ctx.bot.get_chat(gid)
@@ -3409,6 +3382,64 @@ async def accept_rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 link = None
     except Exception:
         pass
+    return title, link
+
+
+async def _accepted_groups_with_links(ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Sab accepted groups laata hai. Jin groups ka title/link pehle se DB mein
+    save nahi hai (purane /Accept_rep se add kiye gaye — feature ke pehle),
+    unke liye live fetch karke DB mein backfill (save) kar deta hai, taaki
+    dobara /Accept_rep chalane ki zaroorat na pade.
+    """
+    groups = db.get_accepted_rep_groups_full()
+    result = []
+    for g in groups:
+        gid = g["_id"]
+        title, link = g.get("title"), g.get("link")
+        if not link:
+            fetched_title, fetched_link = await _resolve_group_link(ctx, gid)
+            title = fetched_title or title
+            if fetched_link:
+                link = fetched_link
+            # Backfill DB taaki agli baar live-fetch na karna pade
+            if title or link:
+                db.accept_rep_group(gid, title=title, link=link)
+        result.append({"_id": gid, "title": title or str(gid), "link": link})
+    return result
+
+
+# ─── /Accept_rep ─── Owner-only: group ka reputation Suhani Coin ke liye accept karo ──
+async def accept_rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return
+    if not ctx.args:
+        groups = await _accepted_groups_with_links(ctx)
+        if not groups:
+            lines = "  <i>Koi group accepted nahi hai</i>"
+        else:
+            out = []
+            for g in groups:
+                title = html.escape(g["title"])
+                link  = g.get("link")
+                if link:
+                    out.append(f"  • <a href=\"{html.escape(link)}\">{title}</a>  (<code>{g['_id']}</code>)")
+                else:
+                    out.append(f"  • {title}  (<code>{g['_id']}</code>) — ⚠️ link nahi mila")
+            lines = "\n".join(out)
+        return await update.message.reply_text(
+            f"⚙️ <b>Usage:</b> <code>/Accept_rep &lt;group_id&gt;</code>\n\n"
+            f"✅ <b>Accepted Groups</b> (Suhani Coin convertible):\n{lines}\n\n"
+            f"👥 Members yeh list <code>/earn_groups</code> se dekh sakte hain.",
+            parse_mode='HTML', disable_web_page_preview=True
+        )
+    try:
+        gid = int(ctx.args[0])
+    except ValueError:
+        return await update.message.reply_text("❌ Group ID number mein do!")
+
+    # Group ka title aur public/invite link fetch karo, taaki members
+    # ko /earn_groups mein ek clickable link dikh sake.
+    title, link = await _resolve_group_link(ctx, gid)
 
     db.accept_rep_group(gid, title=title, link=link)
     link_note = f"\n🔗 Link: {html.escape(link)}" if link else \
@@ -3428,7 +3459,7 @@ async def earn_groups_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     unke clickable invite link ke saath dikhata hai — taaki members ko pata chale
     konse group mein message karke paisa kama sakte hain.
     """
-    groups = db.get_accepted_rep_groups_full()
+    groups = await _accepted_groups_with_links(ctx)
     if not groups:
         return await update.message.reply_text(
             "📉 <i>Abhi koi group Suhani Coin ke liye accepted nahi hai.</i>",
@@ -3436,12 +3467,12 @@ async def earn_groups_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
     lines = []
     for i, g in enumerate(groups, 1):
-        title = html.escape(g.get("title") or str(g["_id"]))
+        title = html.escape(g["title"])
         link  = g.get("link")
         if link:
             lines.append(f"{i}. <a href=\"{html.escape(link)}\">{title}</a>")
         else:
-            lines.append(f"{i}. {title}")
+            lines.append(f"{i}. {title} — ⚠️ link jald aayega")
     text = (
         f"💰 <b>EARN GROUPS</b>\n"
         f"<i>Inme active rehke Suhani Coin (₹) kamao</i>\n"
@@ -4421,7 +4452,13 @@ def build_lb_text(entries, period, scope_title):
         rank = medals[i] if i < 3 else f"<code>{i+1}.</code>"
         uid = entry.get("_id")
         raw_name = entry.get("name") or str(uid)
-        name_esc = html.escape(str(raw_name))
+        # Purane data mein pehle se md_esc() se escape hoke backslash "\_" jaisa
+        # literally save ho chuka ho sakta hai (old bug) — usko yahin clean karo,
+        # taaki naya message aane ka wait kiye bina bhi turant sahi dikhe.
+        # Real Telegram username/name mein backslash kabhi valid nahi hota,
+        # isliye ise hata dena hamesha safe hai.
+        clean_name = str(raw_name).replace('\\', '')
+        name_esc = html.escape(clean_name)
         # tg://user link — hamesha clickable, chahe @username ho ya na ho
         name_html = f'<a href="tg://user?id={uid}">{name_esc}</a>' if uid else name_esc
         total = entry.get("total", 0)
