@@ -24,6 +24,7 @@ from threading import Thread
 from flask import Flask
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
+from telegram.error import RetryAfter, Forbidden
 import aiohttp
 
 # ═══════════════════════════════════════════════════════════
@@ -3435,13 +3436,24 @@ async def groups_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
     lines = [f"👥 <b>Active Groups:</b> {len(group_ids)}\n"]
+    kicked_ids = []
     for i, gid in enumerate(group_ids, 1):
-        title, link = await _resolve_group_link(ctx, gid)
+        title, link, members, kicked = await _resolve_group_full(ctx, gid)
+        if kicked:
+            kicked_ids.append(gid)
         title_safe = html.escape(title)
-        if link:
-            lines.append(f"{i}. <a href=\"{html.escape(link)}\">{title_safe}</a>")
+        mem_txt = f" — 👤 {members}" if members is not None else ""
+        if kicked:
+            lines.append(f"{i}. {title_safe} <i>(bot removed)</i>")
+        elif link:
+            lines.append(f"{i}. <a href=\"{html.escape(link)}\">{title_safe}</a>{mem_txt}")
         else:
-            lines.append(f"{i}. {title_safe}")
+            lines.append(f"{i}. {title_safe}{mem_txt}")
+        await asyncio.sleep(0.1)  # flood-control se bachne ke liye
+
+    if kicked_ids:
+        for gid in kicked_ids:
+            db.remove_group(gid)
 
     text = "\n".join(lines)
     # Telegram message limit ~4096 chars — split into chunks agar zyada groups hain
@@ -3453,21 +3465,56 @@ async def groups_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ─── Helper: accepted group ka title/public-link nikaalo (aur missing ho to backfill karo) ──
 async def _resolve_group_link(ctx: ContextTypes.DEFAULT_TYPE, gid: int):
-    """Live Telegram se group ka title + public link fetch karta hai."""
+    """Live Telegram se group ka title + public link fetch karta hai (retries once on flood-wait)."""
     title, link = str(gid), None
-    try:
-        chat = await ctx.bot.get_chat(gid)
-        title = chat.title or str(gid)
-        if chat.username:
-            link = f"https://t.me/{chat.username}"
-        else:
-            try:
-                link = await ctx.bot.export_chat_invite_link(gid)
-            except Exception:
-                link = None
-    except Exception:
-        pass
+    for attempt in range(2):
+        try:
+            chat = await ctx.bot.get_chat(gid)
+            title = chat.title or str(gid)
+            if chat.username:
+                link = f"https://t.me/{chat.username}"
+            else:
+                try:
+                    link = await ctx.bot.export_chat_invite_link(gid)
+                except Exception:
+                    link = None
+            break
+        except RetryAfter as e:
+            await asyncio.sleep(e.retry_after + 0.5)
+            continue
+        except Exception:
+            break
     return title, link
+
+
+async def _resolve_group_full(ctx: ContextTypes.DEFAULT_TYPE, gid: int):
+    """Title + link + member count + kicked-status, retry once on flood-wait."""
+    title, link, members, kicked = str(gid), None, None, False
+    for attempt in range(2):
+        try:
+            chat = await ctx.bot.get_chat(gid)
+            title = chat.title or str(gid)
+            if chat.username:
+                link = f"https://t.me/{chat.username}"
+            else:
+                try:
+                    link = await ctx.bot.export_chat_invite_link(gid)
+                except Exception:
+                    link = None
+            try:
+                members = await ctx.bot.get_chat_member_count(gid)
+            except Exception:
+                members = None
+            break
+        except RetryAfter as e:
+            await asyncio.sleep(e.retry_after + 0.5)
+            continue
+        except Forbidden:
+            kicked = True
+            break
+        except Exception:
+            break
+    return title, link, members, kicked
 
 
 async def _accepted_groups_with_links(ctx: ContextTypes.DEFAULT_TYPE):
@@ -3495,41 +3542,53 @@ async def _accepted_groups_with_links(ctx: ContextTypes.DEFAULT_TYPE):
 
 
 # ─── /reputation ─── Owner-only: kisi bhi user ko manually rep do/kaato ────
+GLOBAL_REP_ID = 0  # owner DM se diya gaya reputation isi "virtual group" mein store hota hai
+
+
 async def reputation_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
-    Usage: /reputation <user_id> <amount>   (group mein chalao — usi group mein credit hota hai)
-    Ya kisi user ko reply karke: /reputation <amount>
+    Owner-only command. Teen tarike se chalti hai:
+      1) Bot ki DM se:            /reputation <user_id> <amount>
+         → is user ka GLOBAL rep (total_rep mein count hoga, kisi ek
+           group se bandha nahi hai, isliye Suhani Coin mein convert
+           nahi hota — sirf tier/display ke liye).
+      2) Group mein, kisi user ko reply karke: /reputation <amount>
+         → usi group ke rep balance mein credit/debit hota hai.
+      3) Group mein directly:      /reputation <user_id> <amount>
+         → usi group ke rep balance mein credit/debit hota hai.
     Amount negative bhi ho sakta hai (rep kaatne ke liye).
     """
     if update.effective_user.id != OWNER_ID: return
     ch = update.effective_chat
     args = ctx.args
 
-    target_id, amount = None, None
+    target_id, amount, chat_id = None, None, None
+
     if update.message.reply_to_message and args and len(args) >= 1:
+        # Group mein reply karke — sirf amount chahiye
         try:
             target_id = update.message.reply_to_message.from_user.id
             amount = int(args[0])
+            chat_id = ch.id
         except ValueError:
             pass
     elif args and len(args) >= 2:
         try:
             target_id = int(args[0])
             amount = int(args[1])
+            # Private (DM) mein → global rep. Group mein → usi group ka rep.
+            chat_id = GLOBAL_REP_ID if (not ch or ch.type == "private") else ch.id
         except ValueError:
             pass
 
-    if target_id is None or amount is None:
+    if target_id is None or amount is None or chat_id is None:
         return await update.message.reply_text(
-            "⚙️ *Usage:*\n"
+            "⚙️ *Usage:*\n\n"
+            "*Bot ki DM se (global rep):*\n"
+            "`/reputation <user_id> <amount>`\n\n"
+            "*Kisi group mein:*\n"
             "`/reputation <user_id> <amount>`\n"
-            "_ya kisi user ko reply karke:_ `/reputation <amount>`\n\n"
-            "_Group mein chalao — usi group ke rep balance mein credit\\/debit hoga._",
-            parse_mode='Markdown'
-        )
-    if not ch or ch.type == "private":
-        return await update.message.reply_text(
-            "❌ Ise kisi group mein chalao (jis group ka rep balance update karna hai).",
+            "_ya kisi user ko reply karke:_ `/reputation <amount>`",
             parse_mode='Markdown'
         )
 
@@ -3539,11 +3598,12 @@ async def reputation_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception:
         name = str(target_id)
 
-    db.add_reputation(ch.id, target_id, amount, name)
-    new_rep = db.get_reputation(ch.id, target_id)
+    db.add_reputation(chat_id, target_id, amount, name)
+    new_rep = db.get_reputation(chat_id, target_id)
     action = "diye gaye" if amount >= 0 else "kaate gaye"
+    scope = "🌐 *Global* (DM se diya gaya)" if chat_id == GLOBAL_REP_ID else "is group mein"
     await update.message.reply_text(
-        f"✅ `{abs(amount)}` reputation points user `{target_id}` ko {action} is group mein.\n"
+        f"✅ `{abs(amount)}` reputation points user `{target_id}` ko {action} {scope}.\n"
         f"📊 Naya balance: `{new_rep}` rep",
         parse_mode='Markdown'
     )
