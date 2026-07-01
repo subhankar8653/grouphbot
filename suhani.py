@@ -17,7 +17,7 @@
 """
 
 import re, os, asyncio, time, random, string, json, html
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dtime
 from telegram import Update, ChatPermissions, ChatMember, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from threading import Thread
@@ -478,6 +478,7 @@ class DB:
         self.rep_daily  = self.db["rep_daily_limit"] # daily rep-give tracking (3/day cap)
         self.accepted_rep_groups = self.db["accepted_rep_groups"]  # groups jinka rep Suhani Coin mein convert hota hai
         self.withdrawals = self.db["withdrawals"]    # Suhani Coin withdrawal requests
+        self.daily_winners = self.db["daily_winners"] # daily #1 global-ranking auto-reward log
 
         if not self.stats_c.find_one({"_id": "global"}):
             self.stats_c.insert_one({"_id": "global", "warnings": 0, "mutes": 0, "scanned": 0, "gmutes": 0})
@@ -669,23 +670,23 @@ class DB:
     #  SUHANI POINTS SYSTEM
     #  10,000 Reputation Points (accepted groups only) → 1 Suhani Coin → ₹1
     #  Min withdrawal: 10 INR (100 Suhani Points)
-    #  Daily rep-give cap: 3 per user per day (cross-group global)
+    #  Daily rep-give cap: SAME target ko max 3x/din (alag logon ko UNLIMITED baar de sakte ho)
     # ══════════════════════════════════════════════════════════════
 
-    # ── Daily rep-give limit ──────────────────────────────────────
-    def get_rep_given_today(self, giver_id: int) -> int:
-        """Aaj kitni baar is user ne rep diya (global, cross-group)."""
+    # ── Daily rep-give limit (PER giver→target pair, cross-group global) ──
+    def get_rep_given_today_to(self, giver_id: int, target_id: int) -> int:
+        """Aaj is giver ne ISI target ko kitni baar rep diya (global, cross-group)."""
         date_str = datetime.now().strftime("%Y-%m-%d")
-        doc = self.rep_daily.find_one({"_id": f"{giver_id}_{date_str}"})
+        doc = self.rep_daily.find_one({"_id": f"{giver_id}_{target_id}_{date_str}"})
         return doc.get("count", 0) if doc else 0
 
-    def increment_rep_given(self, giver_id: int) -> int:
-        """Rep-give count +1 karo. Returns new count."""
+    def increment_rep_given_to(self, giver_id: int, target_id: int) -> int:
+        """Is giver→target pair ka aaj ka rep-give count +1 karo. Returns new count."""
         date_str = datetime.now().strftime("%Y-%m-%d")
-        k = f"{giver_id}_{date_str}"
+        k = f"{giver_id}_{target_id}_{date_str}"
         result = self.rep_daily.find_one_and_update(
             {"_id": k},
-            {"$inc": {"count": 1}, "$set": {"user_id": giver_id, "date": date_str}},
+            {"$inc": {"count": 1}, "$set": {"giver_id": giver_id, "target_id": target_id, "date": date_str}},
             upsert=True,
             return_document=True
         )
@@ -927,6 +928,39 @@ class DB:
             {"$limit": limit},
         ]
         return list(self.activity.aggregate(pipeline))
+
+    # ── Daily #1 global-ranking auto-reward ─────────────────────────
+    def get_global_activity_top_for_date(self, date_str, limit=1):
+        """EXACT date (YYYY-MM-DD) ke liye global (saare groups) top message-senders."""
+        pipeline = [
+            {"$match": {"date": date_str}},
+            {"$group": {
+                "_id": "$user_id",
+                "total": {"$sum": "$count"},
+                "name": {"$last": "$name"},
+            }},
+            {"$sort": {"total": -1}},
+            {"$limit": limit},
+        ]
+        return list(self.activity.aggregate(pipeline))
+
+    def get_most_active_group_for_user_on_date(self, user_id, date_str):
+        """Us din user sabse zyada kis group mein active tha — wahi group rep credit ke liye use hota hai."""
+        cursor = self.activity.find(
+            {"user_id": user_id, "date": date_str}
+        ).sort("count", -1).limit(1)
+        doc = next(cursor, None)
+        return doc.get("chat_id") if doc else None
+
+    def was_daily_winner_awarded(self, date_str) -> bool:
+        return self.daily_winners.find_one({"_id": date_str}) is not None
+
+    def mark_daily_winner_awarded(self, date_str, user_id, chat_id):
+        self.daily_winners.update_one(
+            {"_id": date_str},
+            {"$set": {"user_id": user_id, "chat_id": chat_id, "awarded_at": time.time()}},
+            upsert=True
+        )
 
     def add_immortal(self, chat_id, user_id):
         k = f"{chat_id}_{user_id}"
@@ -1533,6 +1567,9 @@ def kb_main_menu():
             InlineKeyboardButton("🏆 Rep Board", callback_data="menu_repboard"),
             InlineKeyboardButton("⭐ My Profile", callback_data="rep:myprofile"),
         ],
+        [
+            InlineKeyboardButton("📊 Rankings", callback_data="menu_rankings"),
+        ],
         [InlineKeyboardButton("❌ Close", callback_data="close_menu")],
     ])
 
@@ -1618,6 +1655,9 @@ def ckb_main_menu():
         [
             {"text": "🏆 Rep Board",     "callback_data": "menu_repboard",   "style": "success"},
             {"text": "⭐ My Profile",    "callback_data": "rep:myprofile",   "style": "success"},
+        ],
+        [
+            {"text": "📊 Rankings",      "callback_data": "menu_rankings",   "style": "success"},
         ],
         [{"text": "❌ Close",            "callback_data": "close_menu",       "style": "danger"}],
     ]
@@ -1880,7 +1920,7 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"╔{'═'*34}╗\n"
             f"║   🛡️  SUHANI BOT v10.0        ║\n"
             f"╠{'═'*34}╣\n"
-            f"║  Anime Hindi Dub Group Guard   ║\n"
+            f"║      Group Protection Bot      ║\n"
             f"╚{'═'*34}╝\n\n"
             f"_Choose a category below 👇_"
         )
@@ -2152,6 +2192,31 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    elif data == "menu_rankings":
+        # /rankings ka main-menu version — Group/Global + period buttons ke saath
+        ch = update.effective_chat
+        origin_id = ch.id if ch and ch.type != "private" else 0
+        scope = "g" if origin_id else "a"
+        if scope == "g":
+            entries = db.get_activity_leaderboard(origin_id, period="today", limit=10)
+            text = build_lb_text(entries, "today", "GROUP RANKINGS")
+        else:
+            entries = db.get_global_activity_leaderboard(period="today", limit=10)
+            text = build_lb_text(entries, "today", "GLOBAL RANKINGS")
+        kb_rows = list(build_rankings_keyboard(scope, origin_id, "today").inline_keyboard)
+        kb_rows.append([
+            InlineKeyboardButton("◀️ Back", callback_data="menu_main"),
+            InlineKeyboardButton("❌ Close", callback_data="close_menu"),
+        ])
+        await query.answer()
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(kb_rows),
+            parse_mode='HTML',
+            disable_web_page_preview=True
+        )
+        return
+
     elif data == "menu_repinfo":
         # Keep for backwards compat — redirect to repboard
         ch_id = update.effective_chat.id if update.effective_chat else 0
@@ -2400,7 +2465,7 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"╔{'═'*34}╗\n"
         f"║   🛡️  SUHANI PROTECTION BOT    ║\n"
         f"╠{'═'*34}╣\n"
-        f"║   Anime Hindi Dub Group Guard   ║\n"
+        f"║      Group Protection Bot      ║\n"
         f"╚{'═'*34}╝\n\n"
         f"👋 *Hey {md_esc(u.first_name or 'there')}!*\n\n"
         f"Main groups ko protect karta hoon aur anime community\n"
@@ -3407,6 +3472,61 @@ async def _accepted_groups_with_links(ctx: ContextTypes.DEFAULT_TYPE):
                 db.accept_rep_group(gid, title=title, link=link)
         result.append({"_id": gid, "title": title or str(gid), "link": link})
     return result
+
+
+# ─── /reputation ─── Owner-only: kisi bhi user ko manually rep do/kaato ────
+async def reputation_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Usage: /reputation <user_id> <amount>   (group mein chalao — usi group mein credit hota hai)
+    Ya kisi user ko reply karke: /reputation <amount>
+    Amount negative bhi ho sakta hai (rep kaatne ke liye).
+    """
+    if update.effective_user.id != OWNER_ID: return
+    ch = update.effective_chat
+    args = ctx.args
+
+    target_id, amount = None, None
+    if update.message.reply_to_message and args and len(args) >= 1:
+        try:
+            target_id = update.message.reply_to_message.from_user.id
+            amount = int(args[0])
+        except ValueError:
+            pass
+    elif args and len(args) >= 2:
+        try:
+            target_id = int(args[0])
+            amount = int(args[1])
+        except ValueError:
+            pass
+
+    if target_id is None or amount is None:
+        return await update.message.reply_text(
+            "⚙️ *Usage:*\n"
+            "`/reputation <user_id> <amount>`\n"
+            "_ya kisi user ko reply karke:_ `/reputation <amount>`\n\n"
+            "_Group mein chalao — usi group ke rep balance mein credit\\/debit hoga\\._",
+            parse_mode='Markdown'
+        )
+    if not ch or ch.type == "private":
+        return await update.message.reply_text(
+            "❌ Ise kisi group mein chalao \\(jis group ka rep balance update karna hai\\)\\.",
+            parse_mode='Markdown'
+        )
+
+    try:
+        target_chat = await ctx.bot.get_chat(target_id)
+        name = target_chat.first_name or str(target_id)
+    except Exception:
+        name = str(target_id)
+
+    db.add_reputation(ch.id, target_id, amount, name)
+    new_rep = db.get_reputation(ch.id, target_id)
+    action = "diye gaye" if amount >= 0 else "kaate gaye"
+    await update.message.reply_text(
+        f"✅ `{abs(amount)}` reputation points user `{target_id}` ko {action} is group mein\\.\n"
+        f"📊 Naya balance: `{new_rep}` rep",
+        parse_mode='Markdown'
+    )
 
 
 # ─── /Accept_rep ─── Owner-only: group ka reputation Suhani Coin ke liye accept karo ──
@@ -4518,6 +4638,68 @@ async def rankings_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         pass
 
 
+# ═══════════════════════════════════════════════════════════
+#  DAILY GLOBAL #1 AUTO-REWARD
+#  Har din (server-time midnight ke thodi der baad) chalta hai —
+#  PICHLE poore din ka GLOBAL (sab groups milaake) #1 message-sender
+#  ko 1000 Reputation Points FREE mein milte hain, uske sabse active
+#  group mein credit hoke (taaki warn-maafi/Suhani-Coin dono kaam karein
+#  agar wo group accepted hai).
+# ═══════════════════════════════════════════════════════════
+DAILY_WINNER_REWARD = 1000
+
+async def daily_global_winner_job(ctx: ContextTypes.DEFAULT_TYPE):
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    # Idempotency — agar bot restart hoke job dobara chal jaye to dobara na de
+    if db.was_daily_winner_awarded(yesterday):
+        return
+
+    top = db.get_global_activity_top_for_date(yesterday, limit=1)
+    if not top:
+        return
+
+    winner = top[0]
+    user_id = winner.get("_id")
+    if not user_id:
+        return
+
+    win_chat_id = db.get_most_active_group_for_user_on_date(user_id, yesterday)
+    if not win_chat_id:
+        return
+
+    name = winner.get("name") or str(user_id)
+    db.add_reputation(win_chat_id, user_id, DAILY_WINNER_REWARD, name)
+    db.mark_daily_winner_awarded(yesterday, user_id, win_chat_id)
+
+    total_msgs = winner.get("total", 0)
+    announce = (
+        f"🏆 <b>DAILY GLOBAL #1!</b>\n\n"
+        f'🎉 <a href="tg://user?id={user_id}">{html.escape(str(name))}</a> ne kal '
+        f"({html.escape(yesterday)}) sabse zyada <b>{total_msgs}</b> messages bheje "
+        f"— sabhi groups milaake!\n\n"
+        f"⭐ Reward: <b>+{DAILY_WINNER_REWARD} Reputation Points</b> (free!) 🎁"
+    )
+    # Winner ke sabse active group mein announce karo
+    try:
+        await ctx.bot.send_message(win_chat_id, announce, parse_mode='HTML')
+    except Exception:
+        pass
+    # Owner ko bhi log bhej do
+    try:
+        if OWNER_ID:
+            await ctx.bot.send_message(
+                OWNER_ID,
+                f"🏆 Daily Global Winner ({html.escape(yesterday)}): "
+                f'<a href="tg://user?id={user_id}">{html.escape(str(name))}</a> '
+                f"(id <code>{user_id}</code>) ko group <code>{win_chat_id}</code> mein "
+                f"+{DAILY_WINNER_REWARD} free rep mila!",
+                parse_mode='HTML'
+            )
+    except Exception:
+        pass
+
+
 # ─── /withdraw ─── Suhani Coin withdrawal request ───────────
 async def withdraw_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
@@ -4844,7 +5026,7 @@ async def repboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"\n\n{'─'*34}\n"
         f"💡 _Thank You = \\+{REP_PER_THANK} rep  •  1 warn maaf \\= {REP_PER_WARN_REMOVE} rep_\n"
         f"💡 _{REP_PER_SUHANI_COIN} convertible rep \\= 1 Suhani Coin \\= ₹1_\n"
-        f"_Reply *Thank You* to give rep  •  Max 3/day_"
+        f"_Reply *Thank You* to give rep  •  Max 3/day per person_"
     )
 
     kb = InlineKeyboardMarkup([
@@ -5239,20 +5421,23 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ):
         target = msg.reply_to_message.from_user
 
-        # ── Daily 3-rep-give limit check (giver ke liye, spam-rokne) ──
-        given_today = db.get_rep_given_today(usr.id)
+        # ── Daily 3-rep-give limit PER TARGET (spam-rokne ke liye) ──
+        # Ek hi bande ko din mein max 3 baar thanks ka fayda milega, uske baad
+        # usi bande ko thanks bolne se kuch nahi hoga — lekin KISI DUSRE bande ko
+        # thanks bolna bilkul unlimited hai.
+        given_today = db.get_rep_given_today_to(usr.id, target.id)
         if given_today >= 3:
             notice = await msg.reply_text(
                 f"💖 {user_name(usr)} ne thank you bola — but\n\n"
-                f"⚠️ *Daily limit reach ho gayi!*\n"
-                f"Aaj 3/3 baar rep de chuke ho \\— kal phir dena 😊",
+                f"⚠️ *Isi bande ko aaj 3/3 baar thanks bol chuke ho!*\n"
+                f"Kal phir dena 😊 — _dusre members ko thanks bolna abhi bhi unlimited hai_\\.",
                 parse_mode='Markdown'
             )
             asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 60))
             return
 
         current_warns = db.get_warnings(ch.id, target.id)
-        new_count = db.increment_rep_given(usr.id)
+        new_count = db.increment_rep_given_to(usr.id, target.id)
         db.add_reputation(ch.id, target.id, REP_PER_THANK, user_name(target, escape=False))
         new_rep = db.get_reputation(ch.id, target.id)
         remaining = 3 - new_count
@@ -5283,7 +5468,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         if warn_removed:
             base_msg += f"✅ Bonus: ek warning bhi maaf ho gayi \\(100 rep kat gaye\\)\\!\n"
-        base_msg += f"🎯 Aaj de sakte ho: `{remaining}/3`\n"
+        base_msg += f"🎯 Isi bande ko aaj aur de sakte ho: `{remaining}/3`\n"
         if not is_accepted:
             base_msg += f"_ℹ️ Yeh group Suhani Coin ke liye accepted nahi hai — rep sirf warn maaf karne ke kaam aayega\\._\n"
         base_msg += f"{milestone_txt}\n\n_\\/rep karke apna wallet dekho\\!_"
@@ -5693,6 +5878,7 @@ def main():
     app.add_handler(CommandHandler("unaccept_rep",     unaccept_rep_cmd))
     app.add_handler(CommandHandler("earn_groups",      earn_groups_cmd))
     app.add_handler(CommandHandler("earngroups",       earn_groups_cmd))
+    app.add_handler(CommandHandler("reputation",       reputation_cmd))
     app.add_handler(CommandHandler("del",              del_cmd))
     app.add_handler(CommandHandler("purge",            purge_cmd))
     app.add_handler(CommandHandler("immortal",         immortal_cmd))
@@ -5763,6 +5949,12 @@ def main():
     ), group=2)
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_join))
     app.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER,  on_leave))
+
+    # ── Daily job: global #1 message-sender ko 1000 free rep (pichle din ka) ──
+    if app.job_queue:
+        app.job_queue.run_daily(daily_global_winner_job, time=dtime(hour=0, minute=5))
+    else:
+        print("⚠️ job_queue unavailable — 'python-telegram-bot[job-queue]' install karo daily reward ke liye.")
 
     print("✅ Bot Started! Polling...")
     app.run_polling(drop_pending_updates=True)
