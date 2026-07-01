@@ -16,7 +16,7 @@
 ╚══════════════════════════════════════════════════╝
 """
 
-import re, os, asyncio, time, random, string, json
+import re, os, asyncio, time, random, string, json, html
 from datetime import datetime, timedelta
 from telegram import Update, ChatPermissions, ChatMember, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
@@ -719,10 +719,13 @@ class DB:
         return True
 
     # ── Accepted groups (jinka reputation Suhani Coin mein convert hota hai) ──
-    def accept_rep_group(self, chat_id):
-        self.accepted_rep_groups.update_one(
-            {"_id": chat_id}, {"$set": {"_id": chat_id, "accepted_at": time.time()}}, upsert=True
-        )
+    def accept_rep_group(self, chat_id, title=None, link=None):
+        update = {"$set": {"_id": chat_id, "accepted_at": time.time()}}
+        if title:
+            update["$set"]["title"] = title
+        if link:
+            update["$set"]["link"] = link
+        self.accepted_rep_groups.update_one({"_id": chat_id}, update, upsert=True)
 
     def unaccept_rep_group(self, chat_id):
         self.accepted_rep_groups.delete_one({"_id": chat_id})
@@ -732,6 +735,10 @@ class DB:
 
     def get_accepted_rep_groups(self):
         return [g["_id"] for g in self.accepted_rep_groups.find({}, {"_id": 1})]
+
+    def get_accepted_rep_groups_full(self):
+        """Poori detail (title + invite link) ke saath accepted groups — /earn_groups ke liye."""
+        return list(self.accepted_rep_groups.find({}))
 
     def _sync_suhani_points(self, user_id: int):
         """
@@ -1896,8 +1903,8 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"⭐ `/rep` — Suhani Profile Card \\& Wallet\n"
             f"💰 `/wallet` — Suhani Points \\& INR value\n"
             f"🏆 `/repboard` — Group \\+ Global Rep Board\n"
-            f"📊 `/leaderboard` — Group message\\-activity rank\n"
-            f"🌐 `/gleaderboard` — Global message\\-activity rank\n"
+            f"📊 `/rankings` — Group \\& Global message\\-activity rank\n"
+            f"💰 `/earn_groups` — Groups jaha msg karke paisa kamao\n"
             f"🆔 `/id` — Your Telegram ID\n\n"
             f"{'─'*32}\n"
             f"💎 *REWARD SYSTEM*\n"
@@ -1944,7 +1951,7 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"📋 `/immortals` — List immune users\n"
             f"📚 `/addteacher` `/removeteacher` `/teachers`\n\n"
             f"{'─'*32}\n"
-            f"📊 `/leaderboard` • `/gleaderboard` • `/repboard`"
+            f"📊 `/rankings` • `/repboard`"
         )
         await query.answer()
         await query.edit_message_text(
@@ -2370,6 +2377,7 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"🪙 *SUHANI COIN CONTROLS*\n\n"
             f"  ✅ `/Accept_rep <group_id>` — Group ka rep coin\\-convertible banao\n"
             f"  🔒 `/Unaccept_rep <group_id>` — Coin\\-convertible hatao\n"
+            f"  👥 `/earn_groups` — Members ke liye accepted groups ki link\\-list\n"
             f"  💸 Withdrawals — approve/reject buttons DM mein aate hain\n\n"
             f"{'─'*38}\n"
             f"🌐 `/gblacklist` • `/gwhitelist` — Global word lists\n"
@@ -2404,8 +2412,8 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"  ⭐ `/rep` — Suhani Profile Card & Wallet\n"
         f"  💰 `/wallet` — Suhani Points & INR\n"
         f"  🏆 `/repboard` — Reputation Ranking\n"
-        f"  📊 `/leaderboard` — Message activity rank\n"
-        f"  🌐 `/gleaderboard` — Global activity rank\n"
+        f"  📊 `/rankings` — Message activity rank \\(Group & Global\\)\n"
+        f"  💰 `/earn_groups` — Groups jaha msg karke paisa kamao\n"
         f"  🆔 `/id` — Apna Telegram ID\n\n"
         f"{'─'*34}\n"
         f"💎 *REWARD SYSTEM*\n"
@@ -2451,8 +2459,8 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"⭐ `/rep` — Suhani Profile Card & Wallet\n"
             f"💰 `/wallet` — Suhani Points & INR value\n"
             f"🏆 `/repboard` — Reputation Leaderboard\n"
-            f"📊 `/leaderboard` — Message activity rank\n"
-            f"🌐 `/gleaderboard` — Global activity rank\n"
+            f"📊 `/rankings` — Message activity rank \\(Group & Global\\)\n"
+            f"💰 `/earn_groups` — Groups jaha msg karke paisa kamao\n"
             f"🆔 `/id` — Your Telegram ID\n\n"
             f"{'─'*32}\n"
             f"💡 _Thank You → \\+100 Rep \\| 10,000 Rep → 1 Coin → ₹1_\n"
@@ -3362,23 +3370,85 @@ async def groups_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def accept_rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     if not ctx.args:
-        accepted = db.get_accepted_rep_groups()
-        lines = "\n".join(f"  • `{gid}`" for gid in accepted) or "  _Koi group accepted nahi hai_"
+        groups = db.get_accepted_rep_groups_full()
+        if not groups:
+            lines = "  <i>Koi group accepted nahi hai</i>"
+        else:
+            out = []
+            for g in groups:
+                title = html.escape(g.get("title") or str(g["_id"]))
+                link  = g.get("link")
+                if link:
+                    out.append(f"  • <a href=\"{html.escape(link)}\">{title}</a>  (<code>{g['_id']}</code>)")
+                else:
+                    out.append(f"  • {title}  (<code>{g['_id']}</code>)")
+            lines = "\n".join(out)
         return await update.message.reply_text(
-            f"⚙️ *Usage:* `/Accept_rep <group_id>`\n\n"
-            f"✅ *Accepted Groups* \\(Suhani Coin convertible\\):\n{lines}",
-            parse_mode='Markdown'
+            f"⚙️ <b>Usage:</b> <code>/Accept_rep &lt;group_id&gt;</code>\n\n"
+            f"✅ <b>Accepted Groups</b> (Suhani Coin convertible):\n{lines}\n\n"
+            f"👥 Members yeh list <code>/earn_groups</code> se dekh sakte hain.",
+            parse_mode='HTML', disable_web_page_preview=True
         )
     try:
         gid = int(ctx.args[0])
     except ValueError:
         return await update.message.reply_text("❌ Group ID number mein do!")
-    db.accept_rep_group(gid)
+
+    # Group ka title aur invite link fetch karne ki koshish karo, taaki members
+    # ko /earn_groups mein ek clickable link dikh sake.
+    title, link = str(gid), None
+    try:
+        chat = await ctx.bot.get_chat(gid)
+        title = chat.title or str(gid)
+        if chat.username:
+            link = f"https://t.me/{chat.username}"
+        else:
+            try:
+                link = await ctx.bot.export_chat_invite_link(gid)
+            except Exception:
+                link = None
+    except Exception:
+        pass
+
+    db.accept_rep_group(gid, title=title, link=link)
+    link_note = f"\n🔗 Link: {html.escape(link)}" if link else \
+        "\n⚠️ Invite link nahi mil paya — bot ko is group mein admin (invite-link permission ke saath) banao."
     await update.message.reply_text(
-        f"✅ Group `{gid}` ab *accepted* hai\\!\n"
-        f"Ab is group ka reputation Suhani Coin \\(₹\\) mein convert ho sakta hai\\.",
-        parse_mode='Markdown'
+        f"✅ Group <code>{gid}</code> (<b>{html.escape(title)}</b>) ab <b>accepted</b> hai!\n"
+        f"Ab is group ka reputation Suhani Coin (₹) mein convert ho sakta hai."
+        + link_note,
+        parse_mode='HTML'
     )
+
+
+# ─── /earn_groups ─── Public: accepted groups ki list, link ke saath ────
+async def earn_groups_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Sabhi 'accepted' groups (jinka reputation Suhani Coin/₹ mein convert hota hai)
+    unke clickable invite link ke saath dikhata hai — taaki members ko pata chale
+    konse group mein message karke paisa kama sakte hain.
+    """
+    groups = db.get_accepted_rep_groups_full()
+    if not groups:
+        return await update.message.reply_text(
+            "📉 <i>Abhi koi group Suhani Coin ke liye accepted nahi hai.</i>",
+            parse_mode='HTML'
+        )
+    lines = []
+    for i, g in enumerate(groups, 1):
+        title = html.escape(g.get("title") or str(g["_id"]))
+        link  = g.get("link")
+        if link:
+            lines.append(f"{i}. <a href=\"{html.escape(link)}\">{title}</a>")
+        else:
+            lines.append(f"{i}. {title}")
+    text = (
+        f"💰 <b>EARN GROUPS</b>\n"
+        f"<i>Inme active rehke Suhani Coin (₹) kamao</i>\n"
+        f"{'─'*28}\n\n" + "\n".join(lines) +
+        f"\n\n💡 <i>Thank You reply se rep milta hai • 10,000 rep = ₹1</i>"
+    )
+    await update.message.reply_text(text, parse_mode='HTML', disable_web_page_preview=True)
 
 
 # ─── /Unaccept_rep ─── Owner-only: group ka reputation coin-convertible band karo ──
@@ -4300,79 +4370,91 @@ async def stats_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 # ═══════════════════════════════════════════════════════════
-#  LEADERBOARD — Message-count based (Today / 2 Weeks / Month)
+#  /rankings — Message-count based (Today / 2 Weeks / Month)
+#  Group + Global dono ek hi command mein, button se switch hota hai.
 #  NOTE: Yeh REPUTATION se ALAG hai — sirf "kitne message bheje"
 #  ke hisaab se ranking hoti hai.
+#
+#  Names ab tg://user?id=<id> link ke roop mein clickable hain —
+#  isse @username na hone par bhi profile khulta hai, aur usernames
+#  mein underscore (_) hone par koi backslash/parsing bug nahi aata
+#  (HTML parse_mode + html.escape use hota hai, Markdown escaping nahi).
 # ═══════════════════════════════════════════════════════════
 LB_PERIOD_LABEL = {"today": "📅 Today", "2weeks": "🗓 Last 2 Weeks", "month": "📆 Last Month"}
 LB_PERIOD_ORDER = ["today", "2weeks", "month"]
 
-def build_lb_keyboard(scope, chat_id, active_period):
-    """scope: 'g' (group) ya 'a' (all/global)."""
-    row = []
+def build_rankings_keyboard(scope, chat_id, active_period):
+    """
+    scope: 'g' (group) ya 'a' (all/global).
+    chat_id: origin GROUP chat id (0 agar command private mein aur koi group context nahi hai) —
+             yeh hamesha group id rehta hai, scope switch karne par bhi, taaki "Group" button
+             wapas usi group ki ranking dikha sake.
+    """
+    scope_row = []
+    if chat_id:
+        label_g = "• 👥 Group •" if scope == "g" else "👥 Group"
+        scope_row.append(InlineKeyboardButton(label_g, callback_data=f"lbd:g:{active_period}:{chat_id}"))
+    label_a = "• 🌐 Global •" if scope == "a" else "🌐 Global"
+    scope_row.append(InlineKeyboardButton(label_a, callback_data=f"lbd:a:{active_period}:{chat_id}"))
+
+    period_row = []
     for p in LB_PERIOD_ORDER:
         label = LB_PERIOD_LABEL[p]
         if p == active_period:
             label = f"• {label} •"
-        row.append(InlineKeyboardButton(label, callback_data=f"lbd:{scope}:{p}:{chat_id}"))
-    return InlineKeyboardMarkup([row])
+        period_row.append(InlineKeyboardButton(label, callback_data=f"lbd:{scope}:{p}:{chat_id}"))
+
+    return InlineKeyboardMarkup([scope_row, period_row])
 
 def build_lb_text(entries, period, scope_title):
     period_label = LB_PERIOD_LABEL[period]
     if not entries:
         return (
-            f"🏆 *{scope_title}*\n"
-            f"_{period_label}_\n"
+            f"🏆 <b>{html.escape(scope_title)}</b>\n"
+            f"<i>{html.escape(period_label)}</i>\n"
             f"{'─'*28}\n\n"
             f"📉 Is period mein koi message activity nahi mili!"
         )
     medals = ["🥇", "🥈", "🥉"]
     lines = []
     for i, entry in enumerate(entries):
-        rank = medals[i] if i < 3 else f"`{i+1}.`"
-        raw_name = entry.get("name") or str(entry.get("_id"))
-        name = md_esc(str(raw_name))
+        rank = medals[i] if i < 3 else f"<code>{i+1}.</code>"
+        uid = entry.get("_id")
+        raw_name = entry.get("name") or str(uid)
+        name_esc = html.escape(str(raw_name))
+        # tg://user link — hamesha clickable, chahe @username ho ya na ho
+        name_html = f'<a href="tg://user?id={uid}">{name_esc}</a>' if uid else name_esc
         total = entry.get("total", 0)
-        lines.append(f"{rank} {name} — *{total}* messages")
+        lines.append(f"{rank} {name_html} — <b>{total}</b> messages")
     return (
-        f"🏆 *{scope_title}*\n"
-        f"_{period_label}_\n"
+        f"🏆 <b>{html.escape(scope_title)}</b>\n"
+        f"<i>{html.escape(period_label)}</i>\n"
         f"{'─'*28}\n\n" + "\n".join(lines)
     )
 
 
-# ─── /leaderboard ─── Group-wise message-count ranking ───────
-async def leaderboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+# ─── /rankings ─── Group + Global message-activity ranking, button se toggle ──
+async def rankings_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
-    if ch.type == "private": return
+    origin_id = ch.id if ch.type != "private" else 0
+    scope = "g" if origin_id else "a"
     try:
-        entries = db.get_activity_leaderboard(ch.id, period="today", limit=10)
-        text = build_lb_text(entries, "today", "GROUP LEADERBOARD")
-        kb = build_lb_keyboard("g", ch.id, "today")
-        msg = await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
-        asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 600))
-    except Exception as e:
-        await update.message.reply_text(f"❌ Leaderboard load nahi hua: `{e}`", parse_mode='Markdown')
-
-
-# ─── /gleaderboard ─── Global message-count ranking (all groups) ─
-async def gleaderboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    try:
-        entries = db.get_global_activity_leaderboard(period="today", limit=10)
-        text = build_lb_text(entries, "today", "GLOBAL LEADERBOARD")
-        kb = build_lb_keyboard("a", 0, "today")
-        ch = update.effective_chat
-        if ch.type == "private":
-            await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
+        if scope == "g":
+            entries = db.get_activity_leaderboard(origin_id, period="today", limit=10)
+            text = build_lb_text(entries, "today", "GROUP RANKINGS")
         else:
-            msg = await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
-            asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 600))
+            entries = db.get_global_activity_leaderboard(period="today", limit=10)
+            text = build_lb_text(entries, "today", "GLOBAL RANKINGS")
+        kb = build_rankings_keyboard(scope, origin_id, "today")
+        msg = await update.message.reply_text(text, parse_mode='HTML', reply_markup=kb, disable_web_page_preview=True)
+        if origin_id:
+            asyncio.create_task(delete_after(ctx, origin_id, msg.message_id, 600))
     except Exception as e:
-        await update.message.reply_text(f"❌ Global leaderboard load nahi hua: `{e}`", parse_mode='Markdown')
+        await update.message.reply_text(f"❌ Rankings load nahi hui: <code>{html.escape(str(e))}</code>", parse_mode='HTML')
 
 
-# ─── Leaderboard period-switch button callback ───────────────
-async def leaderboard_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+# ─── /rankings button callback — scope (Group/Global) aur period switch ───
+async def rankings_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     try:
@@ -4385,16 +4467,16 @@ async def leaderboard_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        if scope == "g":
+        if scope == "g" and chat_id:
             entries = db.get_activity_leaderboard(chat_id, period=period, limit=10)
-            text = build_lb_text(entries, period, "GROUP LEADERBOARD")
-            kb = build_lb_keyboard("g", chat_id, period)
+            text = build_lb_text(entries, period, "GROUP RANKINGS")
         else:
+            scope = "a"
             entries = db.get_global_activity_leaderboard(period=period, limit=10)
-            text = build_lb_text(entries, period, "GLOBAL LEADERBOARD")
-            kb = build_lb_keyboard("a", 0, period)
+            text = build_lb_text(entries, period, "GLOBAL RANKINGS")
+        kb = build_rankings_keyboard(scope, chat_id, period)
 
-        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=kb)
+        await query.edit_message_text(text, parse_mode='HTML', reply_markup=kb, disable_web_page_preview=True)
     except Exception:
         pass
 
@@ -4978,7 +5060,7 @@ async def track_bot_reply(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def track_activity_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
     Har message (text/media/sticker/command — sab) ko count karo, taaki
-    /leaderboard aur /gleaderboard sahi "kitne message bheje" dikha sakein.
+    /rankings sahi "kitne message bheje" dikha sake.
     Apne alag handler-group mein chalta hai, isliye kisi aur logic
     (warnings/violations/etc.) se conflict nahi karta.
     """
@@ -4994,7 +5076,7 @@ async def track_activity_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ANON_BOT_ID = 1087968824
     if usr.id == ANON_BOT_ID:
         return
-    db.track_activity(ch.id, usr.id, user_name(usr))
+    db.track_activity(ch.id, usr.id, user_name(usr, escape=False))
 
     # ── Auto-Reputation: har 100 messages pe 100 rep points ──────
     total_msgs = db.get_total_msg_count(ch.id, usr.id)
@@ -5572,6 +5654,8 @@ def main():
     app.add_handler(CommandHandler("accept_rep",       accept_rep_cmd))
     app.add_handler(CommandHandler("Unaccept_rep",     unaccept_rep_cmd))
     app.add_handler(CommandHandler("unaccept_rep",     unaccept_rep_cmd))
+    app.add_handler(CommandHandler("earn_groups",      earn_groups_cmd))
+    app.add_handler(CommandHandler("earngroups",       earn_groups_cmd))
     app.add_handler(CommandHandler("del",              del_cmd))
     app.add_handler(CommandHandler("purge",            purge_cmd))
     app.add_handler(CommandHandler("immortal",         immortal_cmd))
@@ -5593,8 +5677,7 @@ def main():
     app.add_handler(CommandHandler("gblacklist",       gblacklist_cmd))
     app.add_handler(CommandHandler("gwhitelist",       gwhitelist_cmd))
     app.add_handler(CommandHandler("stats",            stats_cmd))
-    app.add_handler(CommandHandler("leaderboard",       leaderboard_cmd))
-    app.add_handler(CommandHandler("gleaderboard",      gleaderboard_cmd))
+    app.add_handler(CommandHandler("rankings",          rankings_cmd))
     app.add_handler(CommandHandler("power",            power_cmd))
     app.add_handler(CommandHandler("unpower",          unpower_cmd))
     app.add_handler(CommandHandler("fban",             fban_cmd))
@@ -5614,7 +5697,7 @@ def main():
     # ── Callback Queries ─────────────────────────────────────
     app.add_handler(CallbackQueryHandler(captcha_callback,    pattern=r"^captcha_"))
     app.add_handler(CallbackQueryHandler(menu_callback,       pattern=r"^(menu_|show_|unmute_|unban_|dismiss_|close_)"))
-    app.add_handler(CallbackQueryHandler(leaderboard_callback, pattern=r"^lbd:"))
+    app.add_handler(CallbackQueryHandler(rankings_callback, pattern=r"^lbd:"))
     app.add_handler(CallbackQueryHandler(rep_callback,        pattern=r"^rep:"))
     app.add_handler(CallbackQueryHandler(withdraw_approval_callback, pattern=r"^wd:"))
 
