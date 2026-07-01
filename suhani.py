@@ -141,6 +141,21 @@ THANK_YOU_WORDS = {
 }
 
 # ═══════════════════════════════════════════════════════════
+#  SUHANI COIN / REPUTATION ECONOMY — CONFIG
+#  • Har "Thank You" = 100 Reputation Points
+#  • 1 warning maaf karne ka cost = 100 Reputation Points
+#  • 10,000 Reputation Points = 1 Suhani Coin = ₹1
+#  • Suhani Coin sirf "accepted" groups ke reputation se banta hai.
+#    Non-accepted group ka reputation SIRF warning maaf karne ke
+#    kaam aata hai, coin mein convert nahi hota.
+#  • Min withdrawal = 10 Suhani Coins (₹10)
+# ═══════════════════════════════════════════════════════════
+REP_PER_THANK        = 100      # 1 thank you = 100 rep points
+REP_PER_WARN_REMOVE  = 100      # 1 warning maaf = 100 rep points
+REP_PER_SUHANI_COIN  = 10000    # 10,000 rep = 1 Suhani Coin (₹1)
+MIN_WITHDRAW_COINS   = 10       # Min ₹10 withdrawal
+
+# ═══════════════════════════════════════════════════════════
 #  DETECTION PATTERNS
 # ═══════════════════════════════════════════════════════════
 BOT_RE = re.compile(r'@(\w{5,}bot)\b', re.I)
@@ -461,6 +476,8 @@ class DB:
         self.activity  = self.db["activity"]      # daily message-count tracking (leaderboard source)
         self.suhani_pts = self.db["suhani_points"]   # global suhani points wallet per user
         self.rep_daily  = self.db["rep_daily_limit"] # daily rep-give tracking (3/day cap)
+        self.accepted_rep_groups = self.db["accepted_rep_groups"]  # groups jinka rep Suhani Coin mein convert hota hai
+        self.withdrawals = self.db["withdrawals"]    # Suhani Coin withdrawal requests
 
         if not self.stats_c.find_one({"_id": "global"}):
             self.stats_c.insert_one({"_id": "global", "warnings": 0, "mutes": 0, "scanned": 0, "gmutes": 0})
@@ -650,7 +667,7 @@ class DB:
 
     # ══════════════════════════════════════════════════════════════
     #  SUHANI POINTS SYSTEM
-    #  100 Reputation Points → 10 Suhani Points → 1 INR
+    #  10,000 Reputation Points (accepted groups only) → 1 Suhani Coin → ₹1
     #  Min withdrawal: 10 INR (100 Suhani Points)
     #  Daily rep-give cap: 3 per user per day (cross-group global)
     # ══════════════════════════════════════════════════════════════
@@ -675,29 +692,81 @@ class DB:
         return result.get("count", 1) if result else 1
 
     # ── Reputation (group-wise) ───────────────────────────────────
-    def add_reputation(self, chat_id, user_id, amount=1, display_name=None):
-        """Group-wise reputation point add karo + suhani points update."""
+    def add_reputation(self, chat_id, user_id, amount=REP_PER_THANK, display_name=None):
+        """Group-wise reputation point add karo + suhani wallet resync karo."""
         k = f"{chat_id}_{user_id}"
         update = {"$inc": {"points": amount}, "$set": {"chat_id": chat_id, "user_id": user_id}}
         if display_name:
             update["$set"]["name"] = display_name
         self.reputation.update_one({"_id": k}, update, upsert=True)
-        # Suhani points: har 100 rep → 10 suhani pts
-        # Track total lifetime rep to compute suhani pts milestone
         self._sync_suhani_points(user_id)
 
+    def spend_reputation(self, chat_id, user_id, amount=REP_PER_WARN_REMOVE) -> bool:
+        """
+        Kisi ek group ka reputation kharch karo (warning maaf karne ke liye).
+        Yeh HAR group (accepted ho ya na ho) mein kaam karta hai — reputation
+        hamesha warn-se-bachne ke liye valid hota hai, sirf Suhani Coin
+        conversion accepted groups tak limited hai.
+        Returns True agar kharch ho gaya, False agar balance kam tha.
+        """
+        k = f"{chat_id}_{user_id}"
+        doc = self.reputation.find_one({"_id": k})
+        current = doc.get("points", 0) if doc else 0
+        if current < amount:
+            return False
+        self.reputation.update_one({"_id": k}, {"$inc": {"points": -amount}})
+        self._sync_suhani_points(user_id)
+        return True
+
+    # ── Accepted groups (jinka reputation Suhani Coin mein convert hota hai) ──
+    def accept_rep_group(self, chat_id):
+        self.accepted_rep_groups.update_one(
+            {"_id": chat_id}, {"$set": {"_id": chat_id, "accepted_at": time.time()}}, upsert=True
+        )
+
+    def unaccept_rep_group(self, chat_id):
+        self.accepted_rep_groups.delete_one({"_id": chat_id})
+
+    def is_rep_group_accepted(self, chat_id) -> bool:
+        return self.accepted_rep_groups.find_one({"_id": chat_id}) is not None
+
+    def get_accepted_rep_groups(self):
+        return [g["_id"] for g in self.accepted_rep_groups.find({}, {"_id": 1})]
+
     def _sync_suhani_points(self, user_id: int):
-        """All groups mein total rep count karo → suhani pts set karo."""
-        pipeline = [
+        """
+        Do cheezein calculate karo:
+          • total_rep        → SAB groups (accepted + non-accepted) ka total,
+                                sirf tier-badge / display ke liye use hota hai
+          • convertible_rep  → SIRF accepted groups ka total, isi se
+                                Suhani Coin banta hai (10,000 rep = 1 coin)
+        """
+        accepted_ids = self.get_accepted_rep_groups()
+
+        pipeline_total = [
             {"$match": {"user_id": user_id}},
             {"$group": {"_id": None, "total": {"$sum": "$points"}}}
         ]
-        result = list(self.reputation.aggregate(pipeline))
-        total_rep = result[0]["total"] if result else 0
-        suhani_pts = (total_rep // 100) * 10
+        result_total = list(self.reputation.aggregate(pipeline_total))
+        total_rep = result_total[0]["total"] if result_total else 0
+
+        if accepted_ids:
+            pipeline_conv = [
+                {"$match": {"user_id": user_id, "chat_id": {"$in": accepted_ids}}},
+                {"$group": {"_id": None, "total": {"$sum": "$points"}}}
+            ]
+            result_conv = list(self.reputation.aggregate(pipeline_conv))
+            convertible_rep = result_conv[0]["total"] if result_conv else 0
+        else:
+            convertible_rep = 0
+
         self.suhani_pts.update_one(
             {"_id": user_id},
-            {"$set": {"user_id": user_id, "suhani_pts": suhani_pts, "total_rep": total_rep}},
+            {"$set": {
+                "user_id": user_id,
+                "total_rep": total_rep,
+                "convertible_rep": convertible_rep,
+            }},
             upsert=True
         )
 
@@ -716,11 +785,66 @@ class DB:
         return result[0]["total"] if result else 0
 
     def get_suhani_points(self, user_id: int) -> dict:
-        """User ka suhani wallet return karo."""
+        """
+        User ka suhani wallet return karo.
+        coins = floor(convertible_rep / 10000) − ab tak withdraw kiye gaye coins
+        """
         doc = self.suhani_pts.find_one({"_id": user_id})
-        if not doc:
-            return {"suhani_pts": 0, "total_rep": 0}
-        return {"suhani_pts": doc.get("suhani_pts", 0), "total_rep": doc.get("total_rep", 0)}
+        total_rep       = doc.get("total_rep", 0) if doc else 0
+        convertible_rep = doc.get("convertible_rep", 0) if doc else 0
+        withdrawn_coins = doc.get("withdrawn_coins", 0) if doc else 0
+        earned_coins    = convertible_rep // REP_PER_SUHANI_COIN
+        available_coins = max(0, earned_coins - withdrawn_coins)
+        return {
+            "total_rep": total_rep,
+            "convertible_rep": convertible_rep,
+            "earned_coins": earned_coins,
+            "withdrawn_coins": withdrawn_coins,
+            "coins": available_coins,
+            # backward-compat key used elsewhere in file
+            "suhani_pts": available_coins,
+        }
+
+    # ── Withdrawals ─────────────────────────────────────────────
+    def create_withdrawal(self, user_id, username, coins, detail):
+        req_id = f"{user_id}_{int(time.time()*1000)}"
+        self.withdrawals.insert_one({
+            "_id": req_id,
+            "user_id": user_id,
+            "username": username,
+            "coins": coins,
+            "inr": coins,   # 1 coin = ₹1
+            "detail": detail,
+            "status": "pending",
+            "created_at": time.time(),
+        })
+        return req_id
+
+    def get_withdrawal(self, req_id):
+        return self.withdrawals.find_one({"_id": req_id})
+
+    def get_pending_withdrawal_coins(self, user_id) -> int:
+        """User ke sab PENDING requests ka total coins (double-spend rokne ke liye)."""
+        pipeline = [
+            {"$match": {"user_id": user_id, "status": "pending"}},
+            {"$group": {"_id": None, "total": {"$sum": "$coins"}}}
+        ]
+        result = list(self.withdrawals.aggregate(pipeline))
+        return result[0]["total"] if result else 0
+
+    def set_withdrawal_status(self, req_id, status):
+        self.withdrawals.update_one({"_id": req_id}, {"$set": {"status": status, "resolved_at": time.time()}})
+        if status == "paid":
+            doc = self.get_withdrawal(req_id)
+            if doc:
+                self.suhani_pts.update_one(
+                    {"_id": doc["user_id"]},
+                    {"$inc": {"withdrawn_coins": doc["coins"]}},
+                    upsert=True
+                )
+
+    def get_pending_withdrawals(self, limit=20):
+        return list(self.withdrawals.find({"status": "pending"}).sort("created_at", 1).limit(limit))
 
     def get_reputation_top(self, chat_id, limit=10):
         """Reputation ke hisaab se top users (group-wise)."""
@@ -1500,10 +1624,10 @@ def ckb_stats_refresh():
         {"text": "◀️ Back",     "callback_data": "menu_main",  "style": "primary"},
     ]]
 
-def ckb_repinfo(withdraw_url="https://t.me/suhan_support"):
+def ckb_repinfo(user_id=0):
     return [[
         {"text": "◀️ Back",     "callback_data": "menu_main",  "style": "primary"},
-        {"text": "💸 Withdraw", "url": withdraw_url,           "style": "success"},
+        {"text": "💸 Withdraw", "callback_data": f"rep:wdinfo:{user_id}", "style": "success"},
     ]]
 
 def ckb_warn_actions(chat_id, user_id):
@@ -1534,7 +1658,7 @@ def ckb_bot_added():
         ]
     ]
 
-def ckb_rep_board(chat_id, user_id, withdraw_url="https://t.me/suhan_support"):
+def ckb_rep_board(chat_id, user_id):
     return [
         [
             {"text": "🔄 Refresh",       "callback_data": f"rep:board:{chat_id}", "style": "primary"},
@@ -1542,7 +1666,7 @@ def ckb_rep_board(chat_id, user_id, withdraw_url="https://t.me/suhan_support"):
         ],
         [
             {"text": "🌐 Global Refresh","callback_data": "rep:global:0",          "style": "primary"},
-            {"text": "💸 Withdraw",      "url": withdraw_url,                       "style": "success"},
+            {"text": "💸 Withdraw",      "callback_data": f"rep:wdinfo:{user_id}", "style": "success"},
         ]
     ]
 
@@ -1777,9 +1901,10 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"🆔 `/id` — Your Telegram ID\n\n"
             f"{'─'*32}\n"
             f"💎 *REWARD SYSTEM*\n"
-            f"_100 Rep → 10 Suhani Pts → ₹1_\n"
+            f"_Thank You → \\+100 Rep \\| Warn maaf → 100 Rep_\n"
+            f"_10,000 Rep \\(accepted group\\) → 1 Suhani Coin → ₹1_\n"
             f"_Active raho → Auto earn! 🔥_\n"
-            f"_Min withdrawal: ₹10 \\(@suhan\\_support\\)_"
+            f"_Min withdrawal: ₹10 → `/withdraw`_"
         )
         await query.answer()
         await query.edit_message_text(
@@ -2242,6 +2367,11 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"  📋 `/aigroups` — AI approved list\n"
             f"  🎌 `/missinganime` — Missing requests\n\n"
             f"{'─'*38}\n"
+            f"🪙 *SUHANI COIN CONTROLS*\n\n"
+            f"  ✅ `/Accept_rep <group_id>` — Group ka rep coin\\-convertible banao\n"
+            f"  🔒 `/Unaccept_rep <group_id>` — Coin\\-convertible hatao\n"
+            f"  💸 Withdrawals — approve/reject buttons DM mein aate hain\n\n"
+            f"{'─'*38}\n"
             f"🌐 `/gblacklist` • `/gwhitelist` — Global word lists\n"
             f"🤖 `/adexempt` — Autodelete exemptions\n"
         )
@@ -2279,8 +2409,9 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"  🆔 `/id` — Apna Telegram ID\n\n"
         f"{'─'*34}\n"
         f"💎 *REWARD SYSTEM*\n"
-        f"_100 Rep → 10 Suhani Pts → ₹1_\n"
-        f"_Min ₹10 withdrawal @suhan\\_support_\n\n"
+        f"_Thank You → \\+100 Rep \\| Warn maaf → 100 Rep_\n"
+        f"_10,000 Rep \\(accepted group\\) → 1 Coin → ₹1_\n"
+        f"_Min ₹10 withdrawal → `/withdraw`_\n\n"
         f"_Add me to your group & make me admin!_"
     )
     await update.message.reply_text(
@@ -2292,7 +2423,7 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton("⚠️ Warn System", callback_data="menu_warns"),
             ],
             [
-                InlineKeyboardButton("💸 Withdraw", url="https://t.me/suhan_support"),
+                InlineKeyboardButton("💸 Withdraw Info", callback_data=f"rep:wdinfo:{update.effective_user.id}"),
             ]
         ])
     )
@@ -2324,8 +2455,8 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"🌐 `/gleaderboard` — Global activity rank\n"
             f"🆔 `/id` — Your Telegram ID\n\n"
             f"{'─'*32}\n"
-            f"💡 _100 Rep → 10 SP → ₹1 | Min ₹10 withdraw_\n"
-            f"_Violations auto-detected. Stay within rules!_"
+            f"💡 _Thank You → \\+100 Rep \\| 10,000 Rep → 1 Coin → ₹1_\n"
+            f"_Min ₹10 withdraw → `/withdraw` \\| Violations auto\\-detected\\!_"
         )
         return await update.message.reply_text(
             text,
@@ -3223,6 +3354,46 @@ async def groups_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     groups = db.get_all_groups()
     await update.message.reply_text(
         f"👥 *Active Groups:* `{len(groups)}`",
+        parse_mode='Markdown'
+    )
+
+
+# ─── /Accept_rep ─── Owner-only: group ka reputation Suhani Coin ke liye accept karo ──
+async def accept_rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return
+    if not ctx.args:
+        accepted = db.get_accepted_rep_groups()
+        lines = "\n".join(f"  • `{gid}`" for gid in accepted) or "  _Koi group accepted nahi hai_"
+        return await update.message.reply_text(
+            f"⚙️ *Usage:* `/Accept_rep <group_id>`\n\n"
+            f"✅ *Accepted Groups* \\(Suhani Coin convertible\\):\n{lines}",
+            parse_mode='Markdown'
+        )
+    try:
+        gid = int(ctx.args[0])
+    except ValueError:
+        return await update.message.reply_text("❌ Group ID number mein do!")
+    db.accept_rep_group(gid)
+    await update.message.reply_text(
+        f"✅ Group `{gid}` ab *accepted* hai\\!\n"
+        f"Ab is group ka reputation Suhani Coin \\(₹\\) mein convert ho sakta hai\\.",
+        parse_mode='Markdown'
+    )
+
+
+# ─── /Unaccept_rep ─── Owner-only: group ka reputation coin-convertible band karo ──
+async def unaccept_rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID: return
+    if not ctx.args:
+        return await update.message.reply_text("⚙️ *Usage:* `/Unaccept_rep <group_id>`", parse_mode='Markdown')
+    try:
+        gid = int(ctx.args[0])
+    except ValueError:
+        return await update.message.reply_text("❌ Group ID number mein do!")
+    db.unaccept_rep_group(gid)
+    await update.message.reply_text(
+        f"🔒 Group `{gid}` ab *not accepted* hai\\.\n"
+        f"Is group ka reputation ab sirf warn maaf karne ke kaam aayega, coin nahi banega\\.",
         parse_mode='Markdown'
     )
 
@@ -4228,6 +4399,128 @@ async def leaderboard_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         pass
 
 
+# ─── /withdraw ─── Suhani Coin withdrawal request ───────────
+async def withdraw_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Usage: /withdraw <coins> <upi_id/detail>
+    User apna Suhani Coin withdrawal request bhejta hai — owner ko notify
+    hota hai approve/reject buttons ke saath. Coins tabhi minus hote hain
+    (via withdrawn_coins ledger) jab owner APPROVE kare — reject par kuch
+    nahi katega, user dobara request kar sakta hai.
+    """
+    usr = update.effective_user
+    if not usr:
+        return
+    if not ctx.args or len(ctx.args) < 2:
+        wallet = db.get_suhani_points(usr.id)
+        return await update.message.reply_text(
+            f"⚙️ *Usage:* `/withdraw <coins> <UPI ID / payment detail>`\n\n"
+            f"🪙 Available Coins: `{wallet['coins']}` \\(₹{wallet['coins']}\\)\n"
+            f"Min withdrawal: `{MIN_WITHDRAW_COINS}` coins \\(₹{MIN_WITHDRAW_COINS}\\)\n\n"
+            f"_Example:_ `/withdraw 10 rahul@upi`",
+            parse_mode='Markdown'
+        )
+    try:
+        req_coins = int(ctx.args[0])
+    except ValueError:
+        return await update.message.reply_text("❌ Coins ek number hona chahiye! Example: `/withdraw 10 rahul@upi`", parse_mode='Markdown')
+
+    detail = ' '.join(ctx.args[1:]).strip()
+    if req_coins < MIN_WITHDRAW_COINS:
+        return await update.message.reply_text(
+            f"❌ Min withdrawal `{MIN_WITHDRAW_COINS}` coins hai \\(₹{MIN_WITHDRAW_COINS}\\)\\.",
+            parse_mode='Markdown'
+        )
+
+    wallet = db.get_suhani_points(usr.id)
+    pending_already = db.get_pending_withdrawal_coins(usr.id)
+    if req_coins + pending_already > wallet["coins"]:
+        return await update.message.reply_text(
+            f"❌ Insufficient balance\\!\n"
+            f"🪙 Available: `{wallet['coins']}`  •  Already pending: `{pending_already}`",
+            parse_mode='Markdown'
+        )
+
+    req_id = db.create_withdrawal(usr.id, user_name(usr, escape=False), req_coins, detail)
+    await update.message.reply_text(
+        f"✅ *Withdrawal Request Submitted\\!*\n\n"
+        f"🪙 Coins: `{req_coins}` \\(₹{req_coins}\\)\n"
+        f"💳 Detail: `{md_esc(detail)}`\n"
+        f"🆔 Request ID: `{req_id}`\n\n"
+        f"_Owner review karega aur payment jaldi bhej dega\\._",
+        parse_mode='MarkdownV2'
+    )
+
+    # ── Owner ko notify karo, approve/reject buttons ke saath ──
+    try:
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Approve & Paid", callback_data=f"wd:approve:{req_id}"),
+            InlineKeyboardButton("❌ Reject",          callback_data=f"wd:reject:{req_id}"),
+        ]])
+        await ctx.bot.send_message(
+            OWNER_ID,
+            f"💸 *NEW WITHDRAWAL REQUEST*\n{'─'*26}\n\n"
+            f"👤 User: {user_name(usr)} \\(`{usr.id}`\\)\n"
+            f"🪙 Coins: `{req_coins}` \\(₹{req_coins}\\)\n"
+            f"💳 Detail: `{md_esc(detail)}`\n"
+            f"🆔 ID: `{req_id}`",
+            parse_mode='MarkdownV2',
+            reply_markup=kb
+        )
+    except Exception:
+        pass
+
+
+async def withdraw_approval_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Owner-only: withdrawal request ko approve (paid) ya reject karo."""
+    query = update.callback_query
+    if not query or not query.from_user or query.from_user.id != OWNER_ID:
+        return await query.answer("❌ Sirf owner isse use kar sakta hai!", show_alert=True)
+    await query.answer()
+    try:
+        _, action, req_id = query.data.split(":", 2)
+    except ValueError:
+        return
+    req = db.get_withdrawal(req_id)
+    if not req:
+        return await query.edit_message_text("❌ Request nahi mili \\(shayad already resolved\\)\\.", parse_mode='MarkdownV2')
+    if req.get("status") != "pending":
+        return await query.edit_message_text(f"ℹ️ Yeh request already `{req['status']}` hai\\.", parse_mode='MarkdownV2')
+
+    if action == "approve":
+        db.set_withdrawal_status(req_id, "paid")
+        await query.edit_message_text(
+            f"✅ *PAID* — `{req['coins']}` coins \\(₹{req['coins']}\\) settle ho gaye\\.\n"
+            f"👤 User ID: `{req['user_id']}`",
+            parse_mode='MarkdownV2'
+        )
+        try:
+            await ctx.bot.send_message(
+                req["user_id"],
+                f"✅ *Aapki withdrawal approve ho gayi\\!*\n\n"
+                f"🪙 Coins: `{req['coins']}` \\(₹{req['coins']}\\) bhej diye gaye hain\\.",
+                parse_mode='MarkdownV2'
+            )
+        except Exception:
+            pass
+    elif action == "reject":
+        db.set_withdrawal_status(req_id, "rejected")
+        await query.edit_message_text(
+            f"❌ *REJECTED* — `{req['coins']}` coins ka request reject kiya gaya\\.\n"
+            f"👤 User ID: `{req['user_id']}`",
+            parse_mode='MarkdownV2'
+        )
+        try:
+            await ctx.bot.send_message(
+                req["user_id"],
+                f"❌ *Aapki withdrawal request reject ho gayi\\.*\n\n"
+                f"Coins wapas balance mein available hain, dobara request kar sakte ho\\.",
+                parse_mode='MarkdownV2'
+            )
+        except Exception:
+            pass
+
+
 # ─── /rep ─── Suhani Points Wallet + Reputation Card ───────
 async def rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
@@ -4243,8 +4536,8 @@ async def rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     group_rep   = db.get_reputation(ch.id, tgt.id) if ch.type != "private" else 0
     total_rep   = db.get_total_reputation(tgt.id)
     wallet      = db.get_suhani_points(tgt.id)
-    suhani_pts  = wallet["suhani_pts"]
-    inr_val     = suhani_pts // 10  # 10 SP = 1 INR
+    coins       = wallet["coins"]
+    is_accepted = db.is_rep_group_accepted(ch.id) if ch.type != "private" else False
 
     # Group rank
     if ch.type != "private":
@@ -4257,33 +4550,35 @@ async def rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     global_top  = db.get_global_reputation_top(limit=50)
     global_rank = next((i + 1 for i, d in enumerate(global_top) if d.get("_id") == tgt.id), None)
 
-    # ── Progress bar toward next 100 rep milestone ───────────
-    progress = total_rep % 100
-    bar_filled = progress // 10
+    # ── Progress bar toward next Suhani Coin (10,000 rep, convertible groups only) ──
+    progress   = wallet["convertible_rep"] % REP_PER_SUHANI_COIN
+    bar_filled = progress // (REP_PER_SUHANI_COIN // 10)
     bar_empty  = 10 - bar_filled
     prog_bar   = "█" * bar_filled + "░" * bar_empty
-    pts_needed = 100 - progress
+    pts_needed = REP_PER_SUHANI_COIN - progress
 
     # ── Rep tier badge ────────────────────────────────────────
     def rep_tier(pts):
-        if pts >= 1000: return "💎 LEGENDARY"
-        if pts >= 500:  return "🔥 ELITE"
-        if pts >= 200:  return "⭐ VETERAN"
-        if pts >= 100:  return "🌟 RISING STAR"
-        if pts >= 50:   return "✨ ACTIVE"
-        if pts >= 10:   return "🌱 NEWCOMER"
+        if pts >= 100000: return "💎 LEGENDARY"
+        if pts >= 50000:  return "🔥 ELITE"
+        if pts >= 20000:  return "⭐ VETERAN"
+        if pts >= 10000:  return "🌟 RISING STAR"
+        if pts >= 5000:   return "✨ ACTIVE"
+        if pts >= 1000:   return "🌱 NEWCOMER"
         return "🆕 STARTER"
 
     tier = rep_tier(total_rep)
 
     # ── Min withdrawal check ──────────────────────────────────
-    can_withdraw = suhani_pts >= 100  # 100 SP = 10 INR (minimum)
+    can_withdraw = coins >= MIN_WITHDRAW_COINS
 
     rank_group_txt = f"#{group_rank}" if group_rank else "Unranked"
     rank_global_txt = f"#{global_rank}" if global_rank else "Unranked"
 
     # ── Build reply text (MarkdownV2) ─────────────────────────
     name_safe = user_name(tgt)  # already md_esc'd (v1)
+    accepted_line = "✅ Yeh group Suhani Coin ke liye *accepted* hai" if is_accepted else \
+                    ("🔒 Yeh group accepted nahi hai — rep sirf warn maaf karne ke kaam aayega" if ch.type != "private" else "")
 
     text = (
         f"╔══════════════════════════╗\n"
@@ -4294,23 +4589,26 @@ async def rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"{'─'*28}\n"
         f"📊 *REPUTATION*\n"
         f"  🏠 Group Rep:  `{group_rep}` pts  •  Rank `{rank_group_txt}`\n"
-        f"  🌐 Total Rep:  `{total_rep}` pts  •  Global `{rank_global_txt}`\n\n"
-        f"⚡ *Next Milestone*\n"
-        f"  [{prog_bar}] `{progress}/100`\n"
-        f"  _{pts_needed} more rep → +10 Suhani Pts_\n\n"
+        f"  🌐 Total Rep:  `{total_rep}` pts  •  Global `{rank_global_txt}`\n"
+        f"  💠 Convertible Rep: `{wallet['convertible_rep']}` pts\n"
+        + (f"  {accepted_line}\n" if accepted_line else "") +
+        f"\n⚡ *Next Suhani Coin*\n"
+        f"  [{prog_bar}] `{progress}/{REP_PER_SUHANI_COIN}`\n"
+        f"  _{pts_needed} more convertible rep → \\+1 Suhani Coin_\n\n"
         f"{'─'*28}\n"
         f"💰 *SUHANI WALLET*\n"
-        f"  💎 Suhani Points: `{suhani_pts} SP`\n"
-        f"  💵 INR Value:     `₹{inr_val}`\n"
-        f"  {'✅ Withdrawal available!' if can_withdraw else f'🔒 Min 100 SP needed  •  {max(0,100-suhani_pts)} SP remaining'}\n\n"
+        f"  🪙 Suhani Coins: `{coins}`\n"
+        f"  💵 INR Value:    `₹{coins}`\n"
+        f"  {'✅ Withdrawal available!' if can_withdraw else f'🔒 Min {MIN_WITHDRAW_COINS} coins needed  •  {max(0,MIN_WITHDRAW_COINS-coins)} more remaining'}\n\n"
         f"{'─'*28}\n"
         f"📖 *HOW IT WORKS*\n"
-        f"  • Reply kisi ko *Thank You* → \\+1 Rep\n"
-        f"  • 3 reps max dene hain daily\n"
-        f"  • 100 Rep = 10 Suhani Points\n"
-        f"  • 10 SP = ₹1  •  Min ₹10 withdrawal\n\n"
+        f"  • Reply kisi ko *Thank You* → \\+{REP_PER_THANK} Rep\n"
+        f"  • 3 baar max de sakte ho daily\n"
+        f"  • 1 warning maaf \\= {REP_PER_WARN_REMOVE} rep \\(auto\\-deduct\\)\n"
+        f"  • {REP_PER_SUHANI_COIN} Convertible Rep \\= 1 Suhani Coin \\= ₹1\n"
+        f"  • Min ₹{MIN_WITHDRAW_COINS} withdrawal • /withdraw se request karo\n\n"
         f"{'─'*28}\n"
-        f"💸 *WITHDRAW* → @suhan\\_support pe message karo\n"
+        f"💸 *WITHDRAW* → `/withdraw` command use karo\n"
         f"_/repboard — Group reputation ranking_"
     )
 
@@ -4321,7 +4619,7 @@ async def rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ]
     if can_withdraw:
         kb_rows.append([InlineKeyboardButton(
-            "💸 Request Withdrawal", url="https://t.me/suhan_support"
+            "💸 Request Withdrawal", callback_data=f"rep:wdinfo:{tgt.id}"
         )])
     kb = InlineKeyboardMarkup(kb_rows)
 
@@ -4338,12 +4636,11 @@ async def wallet_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     total_rep  = db.get_total_reputation(usr.id)
     wallet     = db.get_suhani_points(usr.id)
-    suhani_pts = wallet["suhani_pts"]
-    inr_val    = suhani_pts // 10
-    progress   = total_rep % 100
-    bar_filled = progress // 10
+    coins      = wallet["coins"]
+    progress   = wallet["convertible_rep"] % REP_PER_SUHANI_COIN
+    bar_filled = progress // (REP_PER_SUHANI_COIN // 10)
     prog_bar   = "█" * bar_filled + "░" * (10 - bar_filled)
-    can_withdraw = suhani_pts >= 100
+    can_withdraw = coins >= MIN_WITHDRAW_COINS
 
     text = (
         f"╔═══════════════════════╗\n"
@@ -4351,23 +4648,25 @@ async def wallet_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"╚═══════════════════════╝\n\n"
         f"👤 *{user_name(usr)}*\n\n"
         f"{'─'*26}\n"
-        f"💎 Suhani Points: `{suhani_pts} SP`\n"
-        f"🌐 Total Rep:     `{total_rep} pts`\n"
-        f"💵 INR Value:     `₹{inr_val}`\n\n"
-        f"⚡ *Next Conversion*\n"
-        f"  [{prog_bar}] `{progress}/100 rep`\n\n"
+        f"🪙 Suhani Coins:   `{coins}`\n"
+        f"🌐 Total Rep:      `{total_rep} pts`\n"
+        f"💠 Convertible Rep: `{wallet['convertible_rep']} pts`\n"
+        f"💵 INR Value:      `₹{coins}`\n\n"
+        f"⚡ *Next Coin*\n"
+        f"  [{prog_bar}] `{progress}/{REP_PER_SUHANI_COIN} rep`\n\n"
         f"{'─'*26}\n"
         f"📋 *CONVERSION RATES*\n"
-        f"  100 Rep  →  10 Suhani Pts\n"
-        f"  10 SP    →  ₹1\n"
-        f"  Min: 100 SP = ₹10 withdrawal\n\n"
+        f"  {REP_PER_SUHANI_COIN} Convertible Rep  →  1 Suhani Coin\n"
+        f"  1 Coin  →  ₹1\n"
+        f"  Min: {MIN_WITHDRAW_COINS} Coins \\= ₹{MIN_WITHDRAW_COINS} withdrawal\n\n"
         f"{'─'*26}\n"
-        f"{'✅ *Withdrawal Ready\\!*' if can_withdraw else f'🔒 Need `{max(0,100-suhani_pts)}` more SP'}\n"
-        f"💸 Withdraw → @suhan\\_support"
+        f"ℹ️ _Sirf accepted groups ka rep hi coin banta hai\\._\n"
+        f"{'✅ *Withdrawal Ready\\!*' if can_withdraw else f'🔒 Need `{max(0,MIN_WITHDRAW_COINS-coins)}` more Coins'}\n"
+        f"💸 Withdraw → `/withdraw` command use karo"
     )
-    kb_rows = [[InlineKeyboardButton("💸 Contact Support", url="https://t.me/suhan_support")]]
+    kb_rows = [[InlineKeyboardButton("🏆 Rep Board", callback_data="rep:board:0")]]
     if can_withdraw:
-        kb_rows[0].insert(0, InlineKeyboardButton("✅ Request Withdrawal", url="https://t.me/suhan_support"))
+        kb_rows[0].insert(0, InlineKeyboardButton("✅ Request Withdrawal", callback_data=f"rep:wdinfo:{usr.id}"))
     kb = InlineKeyboardMarkup(kb_rows)
     msg = await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
     if ch.type != "private":
@@ -4386,6 +4685,8 @@ async def repboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     medals = ["🥇", "🥈", "🥉"]
     rank_emojis = ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
 
+    is_accepted = db.is_rep_group_accepted(ch.id)
+
     # ── Group leaderboard ──────────────────────────────────────
     group_top = db.get_reputation_top(ch.id, limit=10)
     # ── Global leaderboard ────────────────────────────────────
@@ -4400,21 +4701,21 @@ async def repboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             raw_name = doc.get("name") or str(doc.get(key_id, "?"))
             name = md_esc(str(raw_name))
             pts  = doc.get(key_pts, 0)
-            sp   = (pts // 100) * 10
-            lines.append(f"{medal} {name}  —  `{pts}` rep  •  `{sp}` SP")
+            lines.append(f"{medal} {name}  —  `{pts}` rep")
         return lines
 
     group_lines  = build_board_lines(group_top,  key_pts="points",  key_id="user_id")
     global_lines = build_board_lines(global_top, key_pts="total",   key_id="_id")
 
-    group_count  = len(group_top)
-    global_count = len(global_top)
+    accepted_note = "✅ *Accepted* — is group ka rep Suhani Coin mein convert hota hai" if is_accepted \
+        else "🔒 *Not Accepted* — is group ka rep sirf warn maaf karne ke kaam aayega"
 
     text = (
         f"╔{'═'*34}╗\n"
         f"║   🏆  SUHANI REPUTATION BOARD   ║\n"
         f"╚{'═'*34}╝\n\n"
         f"🏠 *GROUP TOP* — {md_esc(getattr(ch, 'title', 'This Group')[:22])}\n"
+        f"{accepted_note}\n"
         f"{'┄'*34}\n"
         + "\n".join(group_lines) +
         f"\n\n"
@@ -4422,7 +4723,8 @@ async def repboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"{'┄'*34}\n"
         + "\n".join(global_lines) +
         f"\n\n{'─'*34}\n"
-        f"💡 _100 rep = 10 Suhani Pts = ₹1_\n"
+        f"💡 _Thank You = \\+{REP_PER_THANK} rep  •  1 warn maaf \\= {REP_PER_WARN_REMOVE} rep_\n"
+        f"💡 _{REP_PER_SUHANI_COIN} convertible rep \\= 1 Suhani Coin \\= ₹1_\n"
         f"_Reply *Thank You* to give rep  •  Max 3/day_"
     )
 
@@ -4433,7 +4735,7 @@ async def repboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ],
         [
             InlineKeyboardButton("🌐 Global Refresh", callback_data="rep:global:0"),
-            InlineKeyboardButton("💸 Withdraw", url="https://t.me/suhan_support"),
+            InlineKeyboardButton("💸 Withdraw", callback_data=f"rep:wdinfo:{update.effective_user.id}"),
         ]
     ])
 
@@ -4456,8 +4758,7 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             medal = medals[i] if i < 3 else (rank_emojis[i-3] if i-3 < len(rank_emojis) else f"`{i+1}.`")
             name  = md_esc(str(doc.get("name") or doc.get(key_id, "?")))
             pts   = doc.get(key_pts, 0)
-            sp    = (pts // 100) * 10
-            out.append(f"{medal} {name}  —  `{pts}` rep  •  `{sp}` SP")
+            out.append(f"{medal} {name}  —  `{pts}` rep")
         return out
 
     try:
@@ -4473,20 +4774,19 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             group_rep   = db.get_reputation(ch_id, usr.id) if ch_id else 0
             total_rep   = db.get_total_reputation(usr.id)
             wallet      = db.get_suhani_points(usr.id)
-            suhani_pts  = wallet["suhani_pts"]
-            inr_val     = suhani_pts // 10
-            progress    = total_rep % 100
-            prog_bar    = "█" * (progress // 10) + "░" * (10 - progress // 10)
-            pts_needed  = 100 - progress
-            can_wd      = suhani_pts >= 100
+            coins       = wallet["coins"]
+            progress    = wallet["convertible_rep"] % REP_PER_SUHANI_COIN
+            prog_bar    = "█" * (progress // (REP_PER_SUHANI_COIN // 10)) + "░" * (10 - progress // (REP_PER_SUHANI_COIN // 10))
+            pts_needed  = REP_PER_SUHANI_COIN - progress
+            can_wd      = coins >= MIN_WITHDRAW_COINS
 
             def rep_tier(p):
-                if p >= 1000: return "💎 LEGENDARY"
-                if p >= 500:  return "🔥 ELITE"
-                if p >= 200:  return "⭐ VETERAN"
-                if p >= 100:  return "🌟 RISING STAR"
-                if p >= 50:   return "✨ ACTIVE"
-                if p >= 10:   return "🌱 NEWCOMER"
+                if p >= 100000: return "💎 LEGENDARY"
+                if p >= 50000:  return "🔥 ELITE"
+                if p >= 20000:  return "⭐ VETERAN"
+                if p >= 10000:  return "🌟 RISING STAR"
+                if p >= 5000:   return "✨ ACTIVE"
+                if p >= 1000:   return "🌱 NEWCOMER"
                 return "🆕 STARTER"
 
             tier = rep_tier(total_rep)
@@ -4500,15 +4800,16 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"{'─'*28}\n"
                 f"📊 *REPUTATION*\n"
                 f"  🏠 Group Rep:  `{group_rep}` pts\n"
-                f"  🌐 Total Rep:  `{total_rep}` pts\n\n"
-                f"⚡ *Next Milestone*\n"
-                f"  \\[{prog_bar}\\] `{progress}/100`\n"
-                f"  _{pts_needed} more rep → \\+10 Suhani Pts_\n\n"
+                f"  🌐 Total Rep:  `{total_rep}` pts\n"
+                f"  💠 Convertible: `{wallet['convertible_rep']}` pts\n\n"
+                f"⚡ *Next Suhani Coin*\n"
+                f"  \\[{prog_bar}\\] `{progress}/{REP_PER_SUHANI_COIN}`\n"
+                f"  _{pts_needed} more convertible rep → \\+1 Coin_\n\n"
                 f"{'─'*28}\n"
                 f"💰 *WALLET*\n"
-                f"  💎 Suhani Points: `{suhani_pts} SP`\n"
-                f"  💵 INR Value:     `₹{inr_val}`\n"
-                f"  {'✅ Withdrawal ready\\!' if can_wd else f'🔒 Need {max(0,100-suhani_pts)} more SP'}"
+                f"  🪙 Suhani Coins: `{coins}`\n"
+                f"  💵 INR Value:    `₹{coins}`\n"
+                f"  {'✅ Withdrawal ready\\!' if can_wd else f'🔒 Need {max(0,MIN_WITHDRAW_COINS-coins)} more Coins'}"
             )
             kb_rows = [
                 [
@@ -4518,26 +4819,29 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("◀️ Back", callback_data="menu_main")],
             ]
             if can_wd:
-                kb_rows.insert(1, [InlineKeyboardButton("💸 Withdraw", url="https://t.me/suhan_support")])
+                kb_rows.insert(1, [InlineKeyboardButton("💸 Withdraw", callback_data=f"rep:wdinfo:{usr.id}")])
             await query.edit_message_text(text, parse_mode='Markdown',
                 reply_markup=InlineKeyboardMarkup(kb_rows))
 
         elif action == "board":
             chat_id = int(parts[2]) if len(parts) > 2 else ch_id
+            is_accepted = db.is_rep_group_accepted(chat_id)
             group_top  = db.get_reputation_top(chat_id, limit=7)
             global_top = db.get_global_reputation_top(limit=7)
             group_lines  = _rep_lines(group_top,  "points", "user_id")
             global_lines = _rep_lines(global_top, "total",  "_id")
+            accepted_note = "✅ Accepted group \\(Coin\\-convertible\\)" if is_accepted else "🔒 Not accepted \\(warn\\-only rep\\)"
             text = (
                 f"╔{'═'*32}╗\n"
                 f"║   🏆  REPUTATION BOARD       ║\n"
                 f"╚{'═'*32}╝\n\n"
+                f"{accepted_note}\n\n"
                 f"🏠 *GROUP TOP*\n{'┄'*32}\n"
                 + "\n".join(group_lines) +
                 f"\n\n🌐 *GLOBAL TOP*\n{'┄'*32}\n"
                 + "\n".join(global_lines) +
                 f"\n\n{'─'*32}\n"
-                f"_100 rep = 10 SP = ₹1_"
+                f"_{REP_PER_SUHANI_COIN} convertible rep = 1 Coin = ₹1_"
             )
             await query.edit_message_text(
                 text, parse_mode='Markdown',
@@ -4565,7 +4869,7 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 + "\n".join(lines) +
                 f"\n\n{'─'*32}\n"
                 f"_Sab groups ka combined data_\n"
-                f"_100 rep = 10 SP = ₹1_"
+                f"_Coin sirf accepted groups ke rep se banta hai_"
             )
             await query.edit_message_text(
                 text, parse_mode='Markdown',
@@ -4585,24 +4889,42 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             user_id    = int(parts[2]) if len(parts) > 2 else (query.from_user.id if query.from_user else 0)
             total_rep  = db.get_total_reputation(user_id)
             wallet     = db.get_suhani_points(user_id)
-            suhani_pts = wallet["suhani_pts"]
-            inr_val    = suhani_pts // 10
-            progress   = total_rep % 100
-            prog_bar   = "█" * (progress // 10) + "░" * (10 - progress // 10)
-            can_wd     = suhani_pts >= 100
+            coins      = wallet["coins"]
+            progress   = wallet["convertible_rep"] % REP_PER_SUHANI_COIN
+            prog_bar   = "█" * (progress // (REP_PER_SUHANI_COIN // 10)) + "░" * (10 - progress // (REP_PER_SUHANI_COIN // 10))
+            can_wd     = coins >= MIN_WITHDRAW_COINS
             text = (
                 f"💰 *SUHANI WALLET*\n{'─'*26}\n\n"
-                f"💎 Points: `{suhani_pts} SP`\n"
+                f"🪙 Coins: `{coins}`\n"
                 f"🌐 Total Rep: `{total_rep} pts`\n"
-                f"💵 Value: `₹{inr_val}`\n\n"
-                f"\\[{prog_bar}\\] `{progress}/100`\n\n"
-                f"{'✅ Withdrawal ready\\!' if can_wd else f'🔒 {max(0,100-suhani_pts)} SP needed'}"
+                f"💠 Convertible Rep: `{wallet['convertible_rep']} pts`\n"
+                f"💵 Value: `₹{coins}`\n\n"
+                f"\\[{prog_bar}\\] `{progress}/{REP_PER_SUHANI_COIN}`\n\n"
+                f"{'✅ Withdrawal ready\\!' if can_wd else f'🔒 {max(0,MIN_WITHDRAW_COINS-coins)} Coins needed'}"
             )
             kb_rows = [[InlineKeyboardButton("◀️ Back", callback_data="rep:myprofile")]]
             if can_wd:
-                kb_rows.insert(0, [InlineKeyboardButton("💸 Withdraw", url="https://t.me/suhan_support")])
+                kb_rows.insert(0, [InlineKeyboardButton("💸 Withdraw", callback_data=f"rep:wdinfo:{user_id}")])
             await query.edit_message_text(text, parse_mode='Markdown',
                 reply_markup=InlineKeyboardMarkup(kb_rows))
+
+        elif action == "wdinfo":
+            # Withdrawal info — /withdraw command ka pointer
+            usr_id = int(parts[2]) if len(parts) > 2 else (query.from_user.id if query.from_user else 0)
+            if query.from_user and query.from_user.id != usr_id:
+                return
+            wallet = db.get_suhani_points(usr_id)
+            coins  = wallet["coins"]
+            text = (
+                f"💸 *WITHDRAWAL REQUEST*\n{'─'*26}\n\n"
+                f"🪙 Available Coins: `{coins}` \\(₹{coins}\\)\n\n"
+                f"Withdraw karne ke liye DM mein ye bhejo:\n"
+                f"`/withdraw <amount> <UPI ID>`\n\n"
+                f"_Example:_ `/withdraw {min(coins, MIN_WITHDRAW_COINS)} name@upi`\n\n"
+                f"Min withdrawal: `{MIN_WITHDRAW_COINS}` coins \\(₹{MIN_WITHDRAW_COINS}\\)"
+            )
+            await query.edit_message_text(text, parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="rep:myprofile")]]))
 
     except Exception:
         pass
@@ -4674,16 +4996,16 @@ async def track_activity_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     db.track_activity(ch.id, usr.id, user_name(usr))
 
-    # ── Auto-Reputation: har 100 messages pe 1 rep point ──────
+    # ── Auto-Reputation: har 100 messages pe 100 rep points ──────
     total_msgs = db.get_total_msg_count(ch.id, usr.id)
     if total_msgs > 0 and total_msgs % 100 == 0:
-        db.add_reputation(ch.id, usr.id, 1, user_name(usr, escape=False))
+        db.add_reputation(ch.id, usr.id, REP_PER_THANK, user_name(usr, escape=False))
         new_rep = db.get_reputation(ch.id, usr.id)
         try:
             notice = await ctx.bot.send_message(
                 ch.id,
                 f"🎉 *{user_name(usr)}* ne group mein `{total_msgs}` messages complete kiye\\!\n"
-                f"⭐ *\\+1 Reputation Point* auto\\-earn hua\\! Total: `{new_rep}` rep",
+                f"⭐ *\\+{REP_PER_THANK} Reputation Points* auto\\-earn hue\\! Total: `{new_rep}` rep",
                 parse_mode='MarkdownV2'
             )
             asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 30))
@@ -4784,8 +5106,11 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     txt_lower = txt.lower().strip()
 
     # ── Reply karke "thank you/shukriya" type bole to: ──────────
-    #    - target ki 1 warning kam ho jaayegi (agar koi warning hai)
-    #    - warna target ko 1 reputation point milega
+    #    - target ko HAMESHA +100 Reputation Points milte hain (is group mein)
+    #    - agar target ke paas active warning hai aur balance ≥100 hai,
+    #      to 100 rep apne aap kat ke 1 warning maaf ho jaati hai
+    #    - reputation sirf "accepted" group mein Suhani Coin banta hai —
+    #      baaki sab groups mein sirf warn-se-bachne ke kaam aata hai
     if (
         msg.reply_to_message
         and msg.reply_to_message.from_user
@@ -4794,47 +5119,57 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         and is_thank_you_text(txt_lower)
     ):
         target = msg.reply_to_message.from_user
-        current_warns = db.get_warnings(ch.id, target.id)
-        if current_warns > 0:
-            db.remove_one_warning(ch.id, target.id)
+
+        # ── Daily 3-rep-give limit check (giver ke liye, spam-rokne) ──
+        given_today = db.get_rep_given_today(usr.id)
+        if given_today >= 3:
             notice = await msg.reply_text(
-                f"💖 {user_name(usr)} ne {user_name(target)} ko thank you bola!\n\n"
-                f"✅ 1 warning maaf ho gayi — ab `{current_warns - 1}/4` warnings hain.",
+                f"💖 {user_name(usr)} ne thank you bola — but\n\n"
+                f"⚠️ *Daily limit reach ho gayi!*\n"
+                f"Aaj 3/3 baar rep de chuke ho \\— kal phir dena 😊",
                 parse_mode='Markdown'
             )
-        else:
-            # ── Daily 3-rep limit check ───────────────────────────
-            given_today = db.get_rep_given_today(usr.id)
-            if given_today >= 3:
-                notice = await msg.reply_text(
-                    f"💖 {user_name(usr)} ne thank you bola — but\n\n"
-                    f"⚠️ *Daily limit reach ho gayi!*\n"
-                    f"Aaj 3/3 Suhani Points de chuke ho \\— kal phir dena 😊",
-                    parse_mode='Markdown'
-                )
-            else:
-                new_count = db.increment_rep_given(usr.id)
-                db.add_reputation(ch.id, target.id, 1, user_name(target, escape=False))
+            asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 60))
+            return
+
+        current_warns = db.get_warnings(ch.id, target.id)
+        new_count = db.increment_rep_given(usr.id)
+        db.add_reputation(ch.id, target.id, REP_PER_THANK, user_name(target, escape=False))
+        new_rep = db.get_reputation(ch.id, target.id)
+        remaining = 3 - new_count
+        is_accepted = db.is_rep_group_accepted(ch.id)
+
+        # ── Agar target ke paas warning hai aur balance sufficient hai → auto-redeem ──
+        warn_removed = False
+        if current_warns > 0 and new_rep >= REP_PER_WARN_REMOVE:
+            if db.spend_reputation(ch.id, target.id, REP_PER_WARN_REMOVE):
+                db.remove_one_warning(ch.id, target.id)
+                warn_removed = True
                 new_rep = db.get_reputation(ch.id, target.id)
-                wallet = db.get_suhani_points(target.id)
-                remaining = 3 - new_count
-                # Milestone check: kya naya suhani point convert hua?
-                milestone_txt = ""
-                if new_rep % 100 == 0 and new_rep > 0:
-                    sp = wallet["suhani_pts"]
-                    inr = sp // 10
-                    milestone_txt = (
-                        f"\n\n🎉 *MILESTONE\\!* {user_name(target)} ke `{new_rep}` rep points puri ho gayi\\!\n"
-                        f"💰 Wallet: `{sp}` Suhani Pts = ₹`{inr}`"
-                    )
-                notice = await msg.reply_text(
-                    f"💖 {user_name(usr)} ne {user_name(target)} ko thank you bola\\!\n\n"
-                    f"⭐ *\\+1 Suhani Point* mil gaya\\!\n"
-                    f"📊 Group Rep: `{new_rep}` pts\n"
-                    f"🎯 Aaj de sakte ho: `{remaining}/3`{milestone_txt}\n\n"
-                    f"_\\/rep karke apna wallet dekho\\!_",
-                    parse_mode='MarkdownV2'
-                )
+
+        wallet = db.get_suhani_points(target.id)
+
+        # ── Milestone: naya Suhani Coin ban gaya kya? (sirf accepted group) ──
+        milestone_txt = ""
+        if is_accepted and wallet["convertible_rep"] % REP_PER_SUHANI_COIN < REP_PER_THANK and wallet["coins"] > 0:
+            milestone_txt = (
+                f"\n\n🎉 *MILESTONE\\!* Naya Suhani Coin ban gaya\\!\n"
+                f"💰 Wallet: `{wallet['coins']}` Suhani Coin \\= ₹`{wallet['coins']}`"
+            )
+
+        base_msg = (
+            f"💖 {user_name(usr)} ne {user_name(target)} ko thank you bola\\!\n\n"
+            f"⭐ *\\+{REP_PER_THANK} Reputation Points* mil gaye\\!\n"
+            f"📊 Is group ka Rep: `{new_rep}` pts\n"
+        )
+        if warn_removed:
+            base_msg += f"✅ Bonus: ek warning bhi maaf ho gayi \\(100 rep kat gaye\\)\\!\n"
+        base_msg += f"🎯 Aaj de sakte ho: `{remaining}/3`\n"
+        if not is_accepted:
+            base_msg += f"_ℹ️ Yeh group Suhani Coin ke liye accepted nahi hai — rep sirf warn maaf karne ke kaam aayega\\._\n"
+        base_msg += f"{milestone_txt}\n\n_\\/rep karke apna wallet dekho\\!_"
+
+        notice = await msg.reply_text(base_msg, parse_mode='MarkdownV2')
         asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 60))
         return
 
@@ -5232,6 +5567,11 @@ def main():
     app.add_handler(CommandHandler("rep",              rep_cmd))
     app.add_handler(CommandHandler("wallet",           wallet_cmd))
     app.add_handler(CommandHandler("repboard",         repboard_cmd))
+    app.add_handler(CommandHandler("withdraw",         withdraw_cmd))
+    app.add_handler(CommandHandler("Accept_rep",       accept_rep_cmd))
+    app.add_handler(CommandHandler("accept_rep",       accept_rep_cmd))
+    app.add_handler(CommandHandler("Unaccept_rep",     unaccept_rep_cmd))
+    app.add_handler(CommandHandler("unaccept_rep",     unaccept_rep_cmd))
     app.add_handler(CommandHandler("del",              del_cmd))
     app.add_handler(CommandHandler("purge",            purge_cmd))
     app.add_handler(CommandHandler("immortal",         immortal_cmd))
@@ -5276,6 +5616,7 @@ def main():
     app.add_handler(CallbackQueryHandler(menu_callback,       pattern=r"^(menu_|show_|unmute_|unban_|dismiss_|close_)"))
     app.add_handler(CallbackQueryHandler(leaderboard_callback, pattern=r"^lbd:"))
     app.add_handler(CallbackQueryHandler(rep_callback,        pattern=r"^rep:"))
+    app.add_handler(CallbackQueryHandler(withdraw_approval_callback, pattern=r"^wd:"))
 
     # ── Message Handlers ─────────────────────────────────────
     # Activity tracker (message-count leaderboard) — apna ALAG group (-1),
