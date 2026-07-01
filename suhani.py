@@ -1361,8 +1361,10 @@ def md_esc(text: str) -> str:
     return text
 
 
-def user_name(u, escape: bool = True) -> str:
-    """User ka display name return karo. escape=True (default) → Markdown-safe."""
+def user_name(u, escape: bool = False) -> str:
+    """User ka display name return karo. Default escape=False kyunki legacy
+    Markdown mode mein backslash-escape render nahi hota, ulta literal
+    backslash dikhta hai."""
     try:
         raw = f"@{u.username}" if u.username else u.first_name or str(u.id)
     except Exception:
@@ -1942,14 +1944,14 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"⚠️ `/warnings` — Check your warnings\n"
             f"⭐ `/rep` — Suhani Profile Card \\& Wallet\n"
             f"💰 `/wallet` — Suhani Points \\& INR value\n"
-            f"🏆 `/repboard` — Group \\+ Global Rep Board\n"
-            f"📊 `/rankings` — Group \\& Global message\\-activity rank\n"
+            f"🏆 `/repboard` — Group + Global Rep Board\n"
+            f"📊 `/rankings` — Group \\& Global message-activity rank\n"
             f"💰 `/earn_groups` — Groups jaha msg karke paisa kamao\n"
             f"🆔 `/id` — Your Telegram ID\n\n"
             f"{'─'*32}\n"
             f"💎 *REWARD SYSTEM*\n"
-            f"_Thank You → \\+100 Rep \\| Warn maaf → 100 Rep_\n"
-            f"_10,000 Rep \\(accepted group\\) → 1 Suhani Coin → ₹1_\n"
+            f"_Thank You → +100 Rep | Warn maaf → 100 Rep_\n"
+            f"_10,000 Rep (accepted group) → 1 Suhani Coin → ₹1_\n"
             f"_Active raho → Auto earn! 🔥_\n"
             f"_Min withdrawal: ₹10 → `/withdraw`_"
         )
@@ -2015,18 +2017,18 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"   ✅ _@admin @owner @request: exempt_\n"
             f"   ✅ _Whitelisted & members: exempt_\n"
             f"🔗 All Links & URLs\n"
-            f"🕵️ Hidden hyperlinks \\(text\\_link entities\\)\n"
+            f"🕵️ Hidden hyperlinks (text_link entities)\n"
             f"✍️ Stylish / Unicode fancy fonts\n"
             f"↩️ Forwarded messages\n"
             f"   ✅ _Linked channel forwards: allowed_\n"
-            f"🔞 Adult emojis \\(2\\+ triggers action\\)\n"
-            f"🚫 Bad words — Hindi \\+ English built\\-in\n"
+            f"🔞 Adult emojis (2+ triggers action)\n"
+            f"🚫 Bad words — Hindi + English built-in\n"
             f"⛔ Custom blacklist words\n"
-            f"🌐 Global blacklist \\(owner sets\\)\n"
-            f"🌊 Anti\\-Flood system\n"
+            f"🌐 Global blacklist (owner sets)\n"
+            f"🌊 Anti-Flood system\n"
             f"🎭 Captcha for new members\n"
-            f"🗑️ Sticker/GIF auto\\-delete\n"
-            f"⏱️ Message auto\\-delete timer\n\n"
+            f"🗑️ Sticker/GIF auto-delete\n"
+            f"⏱️ Message auto-delete timer\n\n"
             f"{'─'*32}\n"
             f"_All protections are automatic!_"
         )
@@ -2052,8 +2054,8 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"⛔ `/addblacklist <word>` — Ban a word\n"
             f"✅ `/addwhitelist <word>` — Whitelist word\n"
             f"📋 `/blacklist` • `/whitelist` — View lists\n"
-            f"🗑️ `/sticker_delete <min>` — Sticker auto\\-del\n"
-            f"⏱️ `/autodelete <min>` — Auto\\-delete msgs\n"
+            f"🗑️ `/sticker_delete <min>` — Sticker auto-del\n"
+            f"⏱️ `/autodelete <min>` — Auto-delete msgs\n"
             f"   _`/autodelete reset` → restore global default_\n"
             f"🤖 `/aimod on|off` — AI moderation toggle\n\n"
             f"{'─'*32}\n"
@@ -2086,7 +2088,7 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"   🔐 _Admin must manually unmute_\n\n"
             f"{'─'*32}\n"
             f"💡 *Tip:* Reply *Thank You* to remove 1 warning!\n"
-            f"_Violations auto\\-trigger warnings_"
+            f"_Violations auto-trigger warnings_"
         )
         await query.answer()
         await query.edit_message_text(
@@ -2167,7 +2169,7 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{'┄'*32}\n"
             + "\n".join(global_lines) +
             f"\n\n{'─'*32}\n"
-            f"💡 _Reply 'Thank You' → \\+1 Rep_\n"
+            f"💡 _Reply 'Thank You' → +1 Rep_\n"
             f"_Active raho → Auto earn! 🔥_"
         )
         user_id = query.from_user.id if query.from_user else 0
@@ -2237,7 +2239,7 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{'─'*32}\n"
             f"*What AI Does:*\n"
             f"  🚨 Detects promo/spam content\n"
-            f"  🎌 Knows anime names \\(search assist\\)\n"
+            f"  🎌 Knows anime names (search assist)\n"
             f"  💬 Replies in Hinglish when needed\n"
             f"  📋 Logs missing anime requests\n\n"
             f"*Owner Commands:*\n"
@@ -2440,9 +2442,9 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"  🎌 `/missinganime` — Missing requests\n\n"
             f"{'─'*38}\n"
             f"🪙 *SUHANI COIN CONTROLS*\n\n"
-            f"  ✅ `/Accept_rep <group_id>` — Group ka rep coin\\-convertible banao\n"
-            f"  🔒 `/Unaccept_rep <group_id>` — Coin\\-convertible hatao\n"
-            f"  👥 `/earn_groups` — Members ke liye accepted groups ki link\\-list\n"
+            f"  ✅ `/Accept_rep <group_id>` — Group ka rep coin-convertible banao\n"
+            f"  🔒 `/Unaccept_rep <group_id>` — Coin-convertible hatao\n"
+            f"  👥 `/earn_groups` — Members ke liye accepted groups ki link-list\n"
             f"  💸 Withdrawals — approve/reject buttons DM mein aate hain\n\n"
             f"{'─'*38}\n"
             f"🌐 `/gblacklist` • `/gwhitelist` — Global word lists\n"
@@ -2477,13 +2479,13 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"  ⭐ `/rep` — Suhani Profile Card & Wallet\n"
         f"  💰 `/wallet` — Suhani Points & INR\n"
         f"  🏆 `/repboard` — Reputation Ranking\n"
-        f"  📊 `/rankings` — Message activity rank \\(Group & Global\\)\n"
+        f"  📊 `/rankings` — Message activity rank (Group & Global)\n"
         f"  💰 `/earn_groups` — Groups jaha msg karke paisa kamao\n"
         f"  🆔 `/id` — Apna Telegram ID\n\n"
         f"{'─'*34}\n"
         f"💎 *REWARD SYSTEM*\n"
-        f"_Thank You → \\+100 Rep \\| Warn maaf → 100 Rep_\n"
-        f"_10,000 Rep \\(accepted group\\) → 1 Coin → ₹1_\n"
+        f"_Thank You → +100 Rep | Warn maaf → 100 Rep_\n"
+        f"_10,000 Rep (accepted group) → 1 Coin → ₹1_\n"
         f"_Min ₹10 withdrawal → `/withdraw`_\n\n"
         f"_Add me to your group & make me admin!_"
     )
@@ -2524,12 +2526,12 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"⭐ `/rep` — Suhani Profile Card & Wallet\n"
             f"💰 `/wallet` — Suhani Points & INR value\n"
             f"🏆 `/repboard` — Reputation Leaderboard\n"
-            f"📊 `/rankings` — Message activity rank \\(Group & Global\\)\n"
+            f"📊 `/rankings` — Message activity rank (Group & Global)\n"
             f"💰 `/earn_groups` — Groups jaha msg karke paisa kamao\n"
             f"🆔 `/id` — Your Telegram ID\n\n"
             f"{'─'*32}\n"
-            f"💡 _Thank You → \\+100 Rep \\| 10,000 Rep → 1 Coin → ₹1_\n"
-            f"_Min ₹10 withdraw → `/withdraw` \\| Violations auto\\-detected\\!_"
+            f"💡 _Thank You → +100 Rep | 10,000 Rep → 1 Coin → ₹1_\n"
+            f"_Min ₹10 withdraw → `/withdraw` | Violations auto-detected!_"
         )
         return await update.message.reply_text(
             text,
@@ -3424,11 +3426,29 @@ async def broadcast_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def groups_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    groups = db.get_all_groups()
-    await update.message.reply_text(
-        f"👥 *Active Groups:* `{len(groups)}`",
-        parse_mode='Markdown'
+    group_ids = db.get_all_groups()
+    if not group_ids:
+        return await update.message.reply_text("👥 Koi group nahi mila.")
+
+    status_msg = await update.message.reply_text(
+        f"⏳ {len(group_ids)} groups ki details fetch ho rahi hain..."
     )
+
+    lines = [f"👥 <b>Active Groups:</b> {len(group_ids)}\n"]
+    for i, gid in enumerate(group_ids, 1):
+        title, link = await _resolve_group_link(ctx, gid)
+        title_safe = html.escape(title)
+        if link:
+            lines.append(f"{i}. <a href=\"{html.escape(link)}\">{title_safe}</a>")
+        else:
+            lines.append(f"{i}. {title_safe}")
+
+    text = "\n".join(lines)
+    # Telegram message limit ~4096 chars — split into chunks agar zyada groups hain
+    chunks = [text[j:j+4000] for j in range(0, len(text), 4000)]
+    await status_msg.delete()
+    for chunk in chunks:
+        await update.message.reply_text(chunk, parse_mode='HTML', disable_web_page_preview=True)
 
 
 # ─── Helper: accepted group ka title/public-link nikaalo (aur missing ho to backfill karo) ──
@@ -3504,12 +3524,12 @@ async def reputation_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "⚙️ *Usage:*\n"
             "`/reputation <user_id> <amount>`\n"
             "_ya kisi user ko reply karke:_ `/reputation <amount>`\n\n"
-            "_Group mein chalao — usi group ke rep balance mein credit\\/debit hoga\\._",
+            "_Group mein chalao — usi group ke rep balance mein credit\\/debit hoga._",
             parse_mode='Markdown'
         )
     if not ch or ch.type == "private":
         return await update.message.reply_text(
-            "❌ Ise kisi group mein chalao \\(jis group ka rep balance update karna hai\\)\\.",
+            "❌ Ise kisi group mein chalao (jis group ka rep balance update karna hai).",
             parse_mode='Markdown'
         )
 
@@ -3523,7 +3543,7 @@ async def reputation_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     new_rep = db.get_reputation(ch.id, target_id)
     action = "diye gaye" if amount >= 0 else "kaate gaye"
     await update.message.reply_text(
-        f"✅ `{abs(amount)}` reputation points user `{target_id}` ko {action} is group mein\\.\n"
+        f"✅ `{abs(amount)}` reputation points user `{target_id}` ko {action} is group mein.\n"
         f"📊 Naya balance: `{new_rep}` rep",
         parse_mode='Markdown'
     )
@@ -3613,8 +3633,8 @@ async def unaccept_rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text("❌ Group ID number mein do!")
     db.unaccept_rep_group(gid)
     await update.message.reply_text(
-        f"🔒 Group `{gid}` ab *not accepted* hai\\.\n"
-        f"Is group ka reputation ab sirf warn maaf karne ke kaam aayega, coin nahi banega\\.",
+        f"🔒 Group `{gid}` ab *not accepted* hai.\n"
+        f"Is group ka reputation ab sirf warn maaf karne ke kaam aayega, coin nahi banega.",
         parse_mode='Markdown'
     )
 
@@ -4716,8 +4736,8 @@ async def withdraw_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         wallet = db.get_suhani_points(usr.id)
         return await update.message.reply_text(
             f"⚙️ *Usage:* `/withdraw <coins> <UPI ID / payment detail>`\n\n"
-            f"🪙 Available Coins: `{wallet['coins']}` \\(₹{wallet['coins']}\\)\n"
-            f"Min withdrawal: `{MIN_WITHDRAW_COINS}` coins \\(₹{MIN_WITHDRAW_COINS}\\)\n\n"
+            f"🪙 Available Coins: `{wallet['coins']}` (₹{wallet['coins']})\n"
+            f"Min withdrawal: `{MIN_WITHDRAW_COINS}` coins (₹{MIN_WITHDRAW_COINS})\n\n"
             f"_Example:_ `/withdraw 10 rahul@upi`",
             parse_mode='Markdown'
         )
@@ -4729,7 +4749,7 @@ async def withdraw_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     detail = ' '.join(ctx.args[1:]).strip()
     if req_coins < MIN_WITHDRAW_COINS:
         return await update.message.reply_text(
-            f"❌ Min withdrawal `{MIN_WITHDRAW_COINS}` coins hai \\(₹{MIN_WITHDRAW_COINS}\\)\\.",
+            f"❌ Min withdrawal `{MIN_WITHDRAW_COINS}` coins hai (₹{MIN_WITHDRAW_COINS}).",
             parse_mode='Markdown'
         )
 
@@ -4737,7 +4757,7 @@ async def withdraw_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     pending_already = db.get_pending_withdrawal_coins(usr.id)
     if req_coins + pending_already > wallet["coins"]:
         return await update.message.reply_text(
-            f"❌ Insufficient balance\\!\n"
+            f"❌ Insufficient balance!\n"
             f"🪙 Available: `{wallet['coins']}`  •  Already pending: `{pending_already}`",
             parse_mode='Markdown'
         )
@@ -4876,8 +4896,8 @@ async def rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     rank_group_txt = f"#{group_rank}" if group_rank else "Unranked"
     rank_global_txt = f"#{global_rank}" if global_rank else "Unranked"
 
-    # ── Build reply text (MarkdownV2) ─────────────────────────
-    name_safe = user_name(tgt)  # already md_esc'd (v1)
+    # ── Build reply text (Markdown v1) ─────────────────────────
+    name_safe = user_name(tgt, escape=False)
     accepted_line = "✅ Yeh group Suhani Coin ke liye *accepted* hai" if is_accepted else \
                     ("🔒 Yeh group accepted nahi hai — rep sirf warn maaf karne ke kaam aayega" if ch.type != "private" else "")
 
@@ -4895,7 +4915,7 @@ async def rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         + (f"  {accepted_line}\n" if accepted_line else "") +
         f"\n⚡ *Next Suhani Coin*\n"
         f"  [{prog_bar}] `{progress}/{REP_PER_SUHANI_COIN}`\n"
-        f"  _{pts_needed} more convertible rep → \\+1 Suhani Coin_\n\n"
+        f"  _{pts_needed} more convertible rep → +1 Suhani Coin_\n\n"
         f"{'─'*28}\n"
         f"💰 *SUHANI WALLET*\n"
         f"  🪙 Suhani Coins: `{coins}`\n"
@@ -4903,10 +4923,10 @@ async def rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"  {'✅ Withdrawal available!' if can_withdraw else f'🔒 Min {MIN_WITHDRAW_COINS} coins needed  •  {max(0,MIN_WITHDRAW_COINS-coins)} more remaining'}\n\n"
         f"{'─'*28}\n"
         f"📖 *HOW IT WORKS*\n"
-        f"  • Reply kisi ko *Thank You* → \\+{REP_PER_THANK} Rep\n"
+        f"  • Reply kisi ko *Thank You* → +{REP_PER_THANK} Rep\n"
         f"  • 3 baar max de sakte ho daily\n"
-        f"  • 1 warning maaf \\= {REP_PER_WARN_REMOVE} rep \\(auto\\-deduct\\)\n"
-        f"  • {REP_PER_SUHANI_COIN} Convertible Rep \\= 1 Suhani Coin \\= ₹1\n"
+        f"  • 1 warning maaf = {REP_PER_WARN_REMOVE} rep (auto-deduct)\n"
+        f"  • {REP_PER_SUHANI_COIN} Convertible Rep = 1 Suhani Coin = ₹1\n"
         f"  • Min ₹{MIN_WITHDRAW_COINS} withdrawal • /withdraw se request karo\n\n"
         f"{'─'*28}\n"
         f"💸 *WITHDRAW* → `/withdraw` command use karo\n"
@@ -4959,10 +4979,10 @@ async def wallet_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"📋 *CONVERSION RATES*\n"
         f"  {REP_PER_SUHANI_COIN} Convertible Rep  →  1 Suhani Coin\n"
         f"  1 Coin  →  ₹1\n"
-        f"  Min: {MIN_WITHDRAW_COINS} Coins \\= ₹{MIN_WITHDRAW_COINS} withdrawal\n\n"
+        f"  Min: {MIN_WITHDRAW_COINS} Coins = ₹{MIN_WITHDRAW_COINS} withdrawal\n\n"
         f"{'─'*26}\n"
-        f"ℹ️ _Sirf accepted groups ka rep hi coin banta hai\\._\n"
-        f"{'✅ *Withdrawal Ready\\!*' if can_withdraw else f'🔒 Need `{max(0,MIN_WITHDRAW_COINS-coins)}` more Coins'}\n"
+        f"ℹ️ _Sirf accepted groups ka rep hi coin banta hai._\n"
+        f"{'✅ *Withdrawal Ready!*' if can_withdraw else f'🔒 Need `{max(0,MIN_WITHDRAW_COINS-coins)}` more Coins'}\n"
         f"💸 Withdraw → `/withdraw` command use karo"
     )
     kb_rows = [[InlineKeyboardButton("🏆 Rep Board", callback_data="rep:board:0")]]
@@ -5024,8 +5044,8 @@ async def repboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"{'┄'*34}\n"
         + "\n".join(global_lines) +
         f"\n\n{'─'*34}\n"
-        f"💡 _Thank You = \\+{REP_PER_THANK} rep  •  1 warn maaf \\= {REP_PER_WARN_REMOVE} rep_\n"
-        f"💡 _{REP_PER_SUHANI_COIN} convertible rep \\= 1 Suhani Coin \\= ₹1_\n"
+        f"💡 _Thank You = +{REP_PER_THANK} rep  •  1 warn maaf = {REP_PER_WARN_REMOVE} rep_\n"
+        f"💡 _{REP_PER_SUHANI_COIN} convertible rep = 1 Suhani Coin = ₹1_\n"
         f"_Reply *Thank You* to give rep  •  Max 3/day per person_"
     )
 
@@ -5104,13 +5124,13 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"  🌐 Total Rep:  `{total_rep}` pts\n"
                 f"  💠 Convertible: `{wallet['convertible_rep']}` pts\n\n"
                 f"⚡ *Next Suhani Coin*\n"
-                f"  \\[{prog_bar}\\] `{progress}/{REP_PER_SUHANI_COIN}`\n"
-                f"  _{pts_needed} more convertible rep → \\+1 Coin_\n\n"
+                f"  [{prog_bar}] `{progress}/{REP_PER_SUHANI_COIN}`\n"
+                f"  _{pts_needed} more convertible rep → +1 Coin_\n\n"
                 f"{'─'*28}\n"
                 f"💰 *WALLET*\n"
                 f"  🪙 Suhani Coins: `{coins}`\n"
                 f"  💵 INR Value:    `₹{coins}`\n"
-                f"  {'✅ Withdrawal ready\\!' if can_wd else f'🔒 Need {max(0,MIN_WITHDRAW_COINS-coins)} more Coins'}"
+                f"  {'✅ Withdrawal ready!' if can_wd else f'🔒 Need {max(0,MIN_WITHDRAW_COINS-coins)} more Coins'}"
             )
             kb_rows = [
                 [
@@ -5131,7 +5151,7 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             global_top = db.get_global_reputation_top(limit=7)
             group_lines  = _rep_lines(group_top,  "points", "user_id")
             global_lines = _rep_lines(global_top, "total",  "_id")
-            accepted_note = "✅ Accepted group \\(Coin\\-convertible\\)" if is_accepted else "🔒 Not accepted \\(warn\\-only rep\\)"
+            accepted_note = "✅ Accepted group (Coin-convertible)" if is_accepted else "🔒 Not accepted (warn-only rep)"
             text = (
                 f"╔{'═'*32}╗\n"
                 f"║   🏆  REPUTATION BOARD       ║\n"
@@ -5200,8 +5220,8 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"🌐 Total Rep: `{total_rep} pts`\n"
                 f"💠 Convertible Rep: `{wallet['convertible_rep']} pts`\n"
                 f"💵 Value: `₹{coins}`\n\n"
-                f"\\[{prog_bar}\\] `{progress}/{REP_PER_SUHANI_COIN}`\n\n"
-                f"{'✅ Withdrawal ready\\!' if can_wd else f'🔒 {max(0,MIN_WITHDRAW_COINS-coins)} Coins needed'}"
+                f"[{prog_bar}] `{progress}/{REP_PER_SUHANI_COIN}`\n\n"
+                f"{'✅ Withdrawal ready!' if can_wd else f'🔒 {max(0,MIN_WITHDRAW_COINS-coins)} Coins needed'}"
             )
             kb_rows = [[InlineKeyboardButton("◀️ Back", callback_data="rep:myprofile")]]
             if can_wd:
@@ -5218,11 +5238,11 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             coins  = wallet["coins"]
             text = (
                 f"💸 *WITHDRAWAL REQUEST*\n{'─'*26}\n\n"
-                f"🪙 Available Coins: `{coins}` \\(₹{coins}\\)\n\n"
+                f"🪙 Available Coins: `{coins}` (₹{coins})\n\n"
                 f"Withdraw karne ke liye DM mein ye bhejo:\n"
                 f"`/withdraw <amount> <UPI ID>`\n\n"
                 f"_Example:_ `/withdraw {min(coins, MIN_WITHDRAW_COINS)} name@upi`\n\n"
-                f"Min withdrawal: `{MIN_WITHDRAW_COINS}` coins \\(₹{MIN_WITHDRAW_COINS}\\)"
+                f"Min withdrawal: `{MIN_WITHDRAW_COINS}` coins (₹{MIN_WITHDRAW_COINS})"
             )
             await query.edit_message_text(text, parse_mode='Markdown',
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="rep:myprofile")]]))
@@ -5430,7 +5450,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             notice = await msg.reply_text(
                 f"💖 {user_name(usr)} ne thank you bola — but\n\n"
                 f"⚠️ *Isi bande ko aaj 3/3 baar thanks bol chuke ho!*\n"
-                f"Kal phir dena 😊 — _dusre members ko thanks bolna abhi bhi unlimited hai_\\.",
+                f"Kal phir dena 😊 — _dusre members ko thanks bolna abhi bhi unlimited hai_.",
                 parse_mode='Markdown'
             )
             asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 60))
@@ -5793,7 +5813,7 @@ async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     f"Hey {user_name(member)}, glad to have you here! 🎉\n\n"
                     f"{'─'*30}\n"
                     f"📜 Please read the group rules\n"
-                    f"⚠️ Violations are auto\\-detected\n"
+                    f"⚠️ Violations are auto-detected\n"
                     f"⭐ Earn rep by being helpful!\n\n"
                     f"_Enjoy the community!_ 🔥"
                 )
