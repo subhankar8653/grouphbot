@@ -479,6 +479,23 @@ class DB:
         if not self.stats_c.find_one({"_id": "global"}):
             self.stats_c.insert_one({"_id": "global", "warnings": 0, "mutes": 0, "scanned": 0, "gmutes": 0})
 
+        # ── Indexes ──────────────────────────────────────────────
+        # In se pehle koi index nahi tha, matlab reputation/activity/withdrawals
+        # collections pe har query FULL COLLECTION SCAN karti thi — jitna data
+        # badhta jaata, bot utna slow hota jaata (aur pymongo sync hai, isliye
+        # ek slow query poore bot ka event loop tak block kar deti thi).
+        try:
+            self.reputation.create_index("user_id")
+            self.reputation.create_index("chat_id")
+            self.activity.create_index([("chat_id", 1), ("date", 1)])
+            self.activity.create_index("date")
+            self.activity.create_index([("user_id", 1), ("date", 1)])
+            self.withdrawals.create_index("status")
+            self.withdrawals.create_index([("user_id", 1), ("status", 1)])
+            print("✅ MongoDB indexes ensured!")
+        except Exception as e:
+            print(f"⚠️ Index creation warning: {e}")
+
     def inc_stat(self, field):
         self.stats_c.update_one({"_id": "global"}, {"$inc": {field: 1}})
 
@@ -1383,6 +1400,24 @@ def md_esc(text: str) -> str:
     for ch in ('_', '*', '`', '['):
         text = text.replace(ch, f'\\{ch}')
     return text
+
+
+def mv2_esc(text) -> str:
+    """
+    MarkdownV2 ke SAARE reserved characters escape karo.
+    Legacy md_esc() sirf _ * ` [ escape karta hai — MarkdownV2 mein
+    isse zyada chars reserved hain (. ! - ( ) = + # | { } > ~ etc).
+    User ke naam / free-text jab bhi parse_mode='MarkdownV2' wale
+    message mein daalna ho, ISI function se escape karo — warna
+    agar naam mein koi bhi special char aaya (bahut common hai:
+    period, dash, exclamation...) to Telegram message bhejna FAIL
+    ho jaata hai aur (agar try/except mein wrapped hai to) silently
+    kuch nahi hota — feature "kaam nahi karta" jaisa dikhta hai.
+    """
+    if text is None:
+        return ""
+    text = str(text)
+    return re.sub(r'([_*\[\]()~`>#+\-=|{}.!\\])', r'\\\1', text)
 
 
 def user_name(u, escape: bool = False) -> str:
@@ -4933,7 +4968,7 @@ async def withdraw_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"✅ *Withdrawal Request Submitted\\!*\n\n"
         f"🪙 Coins: `{req_coins}` \\(₹{req_coins}\\)\n"
-        f"💳 Detail: `{md_esc(detail)}`\n"
+        f"💳 Detail: `{mv2_esc(detail)}`\n"
         f"🆔 Request ID: `{req_id}`\n\n"
         f"_Owner review karega aur payment jaldi bhej dega\\._",
         parse_mode='MarkdownV2'
@@ -4948,9 +4983,9 @@ async def withdraw_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await ctx.bot.send_message(
             OWNER_ID,
             f"💸 *NEW WITHDRAWAL REQUEST*\n{'─'*26}\n\n"
-            f"👤 User: {user_name(usr)} \\(`{usr.id}`\\)\n"
+            f"👤 User: {mv2_esc(user_name(usr, escape=False))} \\(`{usr.id}`\\)\n"
             f"🪙 Coins: `{req_coins}` \\(₹{req_coins}\\)\n"
-            f"💳 Detail: `{md_esc(detail)}`\n"
+            f"💳 Detail: `{mv2_esc(detail)}`\n"
             f"🆔 ID: `{req_id}`",
             parse_mode='MarkdownV2',
             reply_markup=kb
@@ -5500,7 +5535,7 @@ async def track_activity_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         try:
             notice = await ctx.bot.send_message(
                 ch.id,
-                f"🎉 *{user_name(usr)}* ne group mein `{total_msgs}` messages complete kiye\\!\n"
+                f"🎉 *{mv2_esc(user_name(usr, escape=False))}* ne group mein `{total_msgs}` messages complete kiye\\!\n"
                 f"⭐ *\\+{REP_PER_THANK} Reputation Points* auto\\-earn hue\\! Total: `{new_rep}` rep",
                 parse_mode='MarkdownV2'
             )
@@ -5657,7 +5692,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
 
         base_msg = (
-            f"💖 {user_name(usr)} ne {user_name(target)} ko thank you bola\\!\n\n"
+            f"💖 {mv2_esc(user_name(usr, escape=False))} ne {mv2_esc(user_name(target, escape=False))} ko thank you bola\\!\n\n"
             f"⭐ *\\+{REP_PER_THANK} Reputation Points* mil gaye\\!\n"
             f"📊 Is group ka Rep: `{new_rep}` pts\n"
         )
