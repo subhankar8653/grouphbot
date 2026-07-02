@@ -689,13 +689,36 @@ class DB:
         return result.get("count", 1) if result else 1
 
     # ── Reputation (group-wise) ───────────────────────────────────
-    def add_reputation(self, chat_id, user_id, amount=REP_PER_THANK, display_name=None):
-        """Group-wise reputation point add karo + suhani wallet resync karo."""
+    def add_reputation(self, chat_id, user_id, amount=REP_PER_THANK, display_name=None, force_convertible=False):
+        """
+        Group-wise reputation point add karo + suhani wallet resync karo.
+        force_convertible=True → ye manually owner ne diya hai (e.g. /reputation
+        command se), isliye chahe group accepted ho ya na ho, ye rep hamesha
+        Suhani Coin mein convertible rahega.
+        """
         k = f"{chat_id}_{user_id}"
         update = {"$inc": {"points": amount}, "$set": {"chat_id": chat_id, "user_id": user_id}}
         if display_name:
             update["$set"]["name"] = display_name
         self.reputation.update_one({"_id": k}, update, upsert=True)
+        if force_convertible and not self.is_rep_group_accepted(chat_id):
+            self.suhani_pts.update_one(
+                {"_id": user_id},
+                {"$inc": {"manual_rep": amount}, "$set": {"user_id": user_id}},
+                upsert=True
+            )
+        self._sync_suhani_points(user_id)
+
+    def add_manual_convertible_rep(self, user_id, amount):
+        """
+        Owner utility: existing rep ko retroactively convertible banao,
+        BINA total_rep badhaye (jo pehle se hi reputation collection mein hai).
+        """
+        self.suhani_pts.update_one(
+            {"_id": user_id},
+            {"$inc": {"manual_rep": amount}, "$set": {"user_id": user_id}},
+            upsert=True
+        )
         self._sync_suhani_points(user_id)
 
     def spend_reputation(self, chat_id, user_id, amount=REP_PER_WARN_REMOVE) -> bool:
@@ -763,6 +786,11 @@ class DB:
             convertible_rep = result_conv[0]["total"] if result_conv else 0
         else:
             convertible_rep = 0
+
+        # Manual/owner-granted convertible bucket (independent of group accept-status)
+        existing = self.suhani_pts.find_one({"_id": user_id})
+        manual_rep = existing.get("manual_rep", 0) if existing else 0
+        convertible_rep += manual_rep
 
         self.suhani_pts.update_one(
             {"_id": user_id},
@@ -1547,6 +1575,27 @@ async def global_mute_user(ctx, user_id, display_name=None):
 # ═══════════════════════════════════════════════════════════
 #  INLINE KEYBOARD BUILDERS
 # ═══════════════════════════════════════════════════════════
+# ── Menu ownership lock ─────────────────────────────────────
+# Group me jab koi /start (ya /help, welcome msg, bot-added msg) chalata hai,
+# to sirf USI user ko uske menu ke buttons dabaane dena hai — group ke
+# baaki members ko nahi. (chat_id, message_id) -> user_id map karta hai.
+MENU_OWNER = {}
+
+def _remember_menu_owner(chat_id, message_id, user_id):
+    if message_id is None or user_id is None:
+        return
+    if len(MENU_OWNER) > 4000:
+        MENU_OWNER.clear()
+    MENU_OWNER[(chat_id, message_id)] = user_id
+
+def _is_menu_owner(chat_id, message_id, user_id) -> bool:
+    owner = MENU_OWNER.get((chat_id, message_id))
+    if owner is None:
+        # Purana/untracked message (restart se pehle ka) — block mat karo
+        return True
+    return owner == user_id
+
+
 def kb_main_menu():
     return InlineKeyboardMarkup([
         [
@@ -1912,6 +1961,19 @@ async def captcha_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data  = query.data
+    chat  = update.effective_chat
+
+    # 🔒 Group me ye personal navigation buttons (menu_*, show_*, close_menu)
+    # sirf usi user ke liye kaam karein jisne /start (ya help/welcome) chalaya tha.
+    # unmute_ / unban_ / dismiss_warn admin-action buttons hain, unhe exclude karo.
+    if chat and chat.type != "private" and not data.startswith(("unmute_", "unban_", "dismiss_warn")):
+        if not _is_menu_owner(chat.id, query.message.message_id, query.from_user.id):
+            await query.answer(
+                "🔒 Ye menu sirf jisne open kiya hai wahi use kar sakta hai!\n"
+                "Apna menu khud /start karke kholo.",
+                show_alert=True
+            )
+            return
 
     if data == "menu_main":
         text = (
@@ -2393,7 +2455,7 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         msg_id = await send_colored_message(ch.id, start_text, ckb_start_group())
         if not msg_id:
-            await update.message.reply_text(
+            sent = await update.message.reply_text(
                 start_text,
                 parse_mode='Markdown',
                 reply_markup=InlineKeyboardMarkup([
@@ -2403,6 +2465,9 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     ]
                 ])
             )
+            _remember_menu_owner(ch.id, sent.message_id, u.id)
+        else:
+            _remember_menu_owner(ch.id, msg_id, u.id)
         return
 
     # DM — Owner panel
@@ -2520,7 +2585,7 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"💡 _Thank You → +100 Rep | 10,000 Rep → 1 Coin → ₹1_\n"
             f"_Min ₹10 withdraw → `/withdraw` | Violations auto-detected!_"
         )
-        return await update.message.reply_text(
+        sent = await update.message.reply_text(
             text,
             parse_mode='Markdown',
             reply_markup=InlineKeyboardMarkup([
@@ -2533,6 +2598,8 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 ]
             ])
         )
+        _remember_menu_owner(ch.id, sent.message_id, u.id)
+        return sent
 
     # ── Admin / Owner full help ──────────────────────────────
     admin_text = (
@@ -2588,7 +2655,7 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"⚠️ *Warn Scale:* W1→35s | W2→60s | W3→120s | W4→1wk 🌐"
     )
 
-    await update.message.reply_text(
+    sent = await update.message.reply_text(
         admin_text,
         parse_mode='Markdown',
         reply_markup=InlineKeyboardMarkup([
@@ -2602,6 +2669,8 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ]
         ])
     )
+    if in_group:
+        _remember_menu_owner(ch.id, sent.message_id, u.id)
 
 
 # ─── /rule ──────────────────────────────────────────────────
@@ -2640,13 +2709,15 @@ async def rule_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"✅ _Respect the rules & enjoy!_"
         )
 
-    await update.message.reply_text(
+    sent = await update.message.reply_text(
         text,
         parse_mode='Markdown',
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("⚠️ Warn System", callback_data="menu_warns")]
         ])
     )
+    if update.effective_chat.type != "private" and update.effective_user:
+        _remember_menu_owner(update.effective_chat.id, sent.message_id, update.effective_user.id)
 
 
 # ─── /setrules ───────────────────────────────────────────────
@@ -3528,6 +3599,43 @@ async def _accepted_groups_with_links(ctx: ContextTypes.DEFAULT_TYPE):
 
 
 # ─── /reputation ─── Owner-only: kisi bhi user ko manually rep do/kaato ────
+# ─── /makeconvertible ─── Owner-only: existing rep ko retroactively convertible banao ──
+async def makeconvertible_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Owner-only utility. Jab pehle se diya gaya reputation (jaise /reputation se
+    global/non-accepted-group mein) convertible nahi hua tha, isse fix karo —
+    total_rep ko dobara NAHI badhata, sirf convertible_rep mein add karta hai.
+    Usage: /makeconvertible <user_id> <amount>
+    """
+    if update.effective_user.id != OWNER_ID:
+        return
+    args = ctx.args
+    if not args or len(args) < 2:
+        return await update.message.reply_text(
+            "⚙️ *Usage:*\n`/makeconvertible <user_id> <amount>`\n\n"
+            "_Pehle se diye gaye rep ko retroactively coin-convertible banata hai, "
+            "bina total rep dobara badhaye._",
+            parse_mode='Markdown'
+        )
+    try:
+        target_id = int(args[0])
+        amount = int(args[1])
+    except ValueError:
+        return await update.message.reply_text("❌ user_id aur amount dono numbers hone chahiye.")
+
+    db.add_manual_convertible_rep(target_id, amount)
+    wallet = db.get_suhani_points(target_id)
+    await update.message.reply_text(
+        f"✅ *Convertible Rep Fixed*\n"
+        f"{'─'*28}\n"
+        f"👤 User: `{target_id}`\n"
+        f"📈 `+{amount}` convertible rep add kiya (total rep unchanged)\n"
+        f"💠 Naya Convertible Rep: `{wallet['convertible_rep']}` pts\n"
+        f"🪙 Suhani Coins: `{wallet['coins']}` (₹{wallet['coins']})",
+        parse_mode='Markdown'
+    )
+
+
 GLOBAL_REP_ID = 0  # owner DM se diya gaya reputation isi "virtual group" mein store hota hai
 
 
@@ -3584,7 +3692,7 @@ async def reputation_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception:
         name = str(target_id)
 
-    db.add_reputation(chat_id, target_id, amount, name)
+    db.add_reputation(chat_id, target_id, amount, name, force_convertible=True)
     new_rep = db.get_reputation(chat_id, target_id)
     action = "diye gaye" if amount >= 0 else "kaate gaye"
     is_global = chat_id == GLOBAL_REP_ID
@@ -3592,15 +3700,10 @@ async def reputation_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     is_accepted = (not is_global) and db.is_rep_group_accepted(chat_id)
 
     wallet = db.get_suhani_points(target_id)
-    if is_global:
-        coin_line = "🪙 _Global rep sirf tier/display ke liye hai — Suhani Coin mein convert nahi hota._"
-    elif is_accepted:
-        coin_line = (
-            f"🪙 *Suhani Coin:* `{wallet['coins']}` (₹{wallet['coins']}) available "
-            f"— ✅ _is group ka rep coin-convertible hai_"
-        )
-    else:
-        coin_line = "🪙 _Is group ka rep abhi coin-convertible nahi hai_ — `/Accept_rep` se accept karo."
+    coin_line = (
+        f"🪙 *Suhani Coin:* `{wallet['coins']}` (₹{wallet['coins']}) available "
+        f"— ✅ _owner ke through diya gaya rep hamesha coin-convertible hota hai_"
+    )
 
     await update.message.reply_text(
         f"✅ *Reputation Updated*\n"
@@ -5009,6 +5112,7 @@ async def rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     msg = await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
     if ch.type != "private":
+        _remember_menu_owner(ch.id, msg.message_id, update.effective_user.id)
         asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 600))
 
 
@@ -5053,6 +5157,7 @@ async def wallet_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     kb = InlineKeyboardMarkup(kb_rows)
     msg = await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
     if ch.type != "private":
+        _remember_menu_owner(ch.id, msg.message_id, usr.id)
         asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 300))
 
 
@@ -5129,6 +5234,15 @@ async def repboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ─── Reputation callbacks (repboard refresh + wallet + myprofile) ──
 async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    chat  = update.effective_chat
+    if chat and chat.type != "private":
+        if not _is_menu_owner(chat.id, query.message.message_id, query.from_user.id):
+            await query.answer(
+                "🔒 Ye menu sirf jisne open kiya hai wahi use kar sakta hai!\n"
+                "Apna menu khud /start karke kholo.",
+                show_alert=True
+            )
+            return
     await query.answer()
     medals    = ["🥇", "🥈", "🥉"]
     rank_emojis = ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
@@ -5854,10 +5968,14 @@ async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             added_msg_id = await send_colored_message(
                 update.effective_chat.id, bot_added_text, ckb_bot_added()
             )
+            adder_id = update.effective_user.id if update.effective_user else None
             if not added_msg_id:
-                await update.message.reply_text(
+                sent = await update.message.reply_text(
                     bot_added_text, parse_mode='Markdown', reply_markup=kb_bot_added()
                 )
+                _remember_menu_owner(update.effective_chat.id, sent.message_id, adder_id)
+            else:
+                _remember_menu_owner(update.effective_chat.id, added_msg_id, adder_id)
         else:
             g = db.get_group(update.effective_chat.id)
             if g.get("captcha"):
@@ -5880,11 +5998,13 @@ async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     update.effective_chat.id, welcome_text, ckb_join_welcome()
                 )
                 if welcome_msg_id:
+                    _remember_menu_owner(update.effective_chat.id, welcome_msg_id, member.id)
                     asyncio.create_task(delete_after(ctx, update.effective_chat.id, welcome_msg_id, 60))
                 else:
                     msg = await update.message.reply_text(
                         welcome_text, parse_mode='Markdown', reply_markup=kb_join_welcome()
                     )
+                    _remember_menu_owner(update.effective_chat.id, msg.message_id, member.id)
                     asyncio.create_task(delete_after(ctx, update.effective_chat.id, msg.message_id, 60))
 
 
@@ -5958,6 +6078,7 @@ def main():
     app.add_handler(CommandHandler("earn_groups",      earn_groups_cmd))
     app.add_handler(CommandHandler("earngroups",       earn_groups_cmd))
     app.add_handler(CommandHandler("reputation",       reputation_cmd))
+    app.add_handler(CommandHandler("makeconvertible",   makeconvertible_cmd))
     app.add_handler(CommandHandler("del",              del_cmd))
     app.add_handler(CommandHandler("purge",            purge_cmd))
     app.add_handler(CommandHandler("immortal",         immortal_cmd))
