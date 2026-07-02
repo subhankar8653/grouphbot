@@ -75,37 +75,32 @@ ICON_DIAMOND  = "💎"
 # ═══════════════════════════════════════════════════════════
 WARN_MSG = {
     1: (
-        "╔══ ⚠️ WARNING 1 / 4 ══╗\n"
-        "║\n"
-        "║  Rule violation detected!\n"
-        "║  ⏱ Muted for **35 seconds**\n"
-        "║\n"
-        "╚══ Be careful! ══════════╝"
+        "🟡 *WARNING 1/4*\n"
+        "──────────────\n"
+        "Rule violation detected!\n"
+        "⏱ Muted for *35 seconds*\n\n"
+        "_Be careful next time._"
     ),
     2: (
-        "╔══ 😤 WARNING 2 / 4 ══╗\n"
-        "║\n"
-        "║  Stop breaking the rules!\n"
-        "║  ⏱ Muted for **60 seconds**\n"
-        "║\n"
-        "╚══ Last chances left: 2 ═╝"
+        "🟠 *WARNING 2/4*\n"
+        "──────────────\n"
+        "Stop breaking the rules!\n"
+        "⏱ Muted for *60 seconds*\n\n"
+        "_Only 2 chances left._"
     ),
     3: (
-        "╔══ 🔴 WARNING 3 / 4 ══╗\n"
-        "║\n"
-        "║  ⚡ LAST CHANCE!\n"
-        "║  Next = 1 WEEK mute in ALL groups!\n"
-        "║  ⏱ Muted for **120 seconds**\n"
-        "║\n"
-        "╚══ Final Warning! ════════╝"
+        "🔴 *WARNING 3/4 — LAST CHANCE*\n"
+        "──────────────\n"
+        "⚡ Next violation = *1 WEEK mute in ALL groups!*\n"
+        "⏱ Muted for *120 seconds*\n\n"
+        "_This is your final warning._"
     ),
     4: (
-        "╔══ 💀 GLOBAL MUTE ════╗\n"
-        "║\n"
-        "║  🗓 **1 WEEK** ban — ALL Groups!\n"
-        "║  🔐 Only admin can unmute.\n"
-        "║\n"
-        "╚══ You crossed the line. ═╝"
+        "💀 *GLOBAL MUTE ACTIVATED*\n"
+        "──────────────\n"
+        "🗓 *1 WEEK* mute — applied in *ALL groups*\n"
+        "🔐 Only an admin can unmute you.\n\n"
+        "_You crossed the line._"
     ),
 }
 
@@ -1532,9 +1527,9 @@ async def global_mute_user(ctx, user_id, display_name=None):
             await do_mute(ctx, gid, user_id, GMUTE_DURATION)
             notice = await ctx.bot.send_message(
                 gid,
-                f"╔{'═'*30}╗\n"
-                f"║   💀  GLOBAL MUTE EXECUTED   ║\n"
-                f"╚{'═'*30}╝\n\n"
+                f"*💀 GLOBAL MUTE EXECUTED*\n"
+
+                f"{'─'*24}\n\n"
                 f"👤 *{display_name or user_id}*\n\n"
                 f"🌐 Muted in *ALL* groups\n"
                 f"🗓️ Duration: *1 WEEK*\n"
@@ -1555,23 +1550,23 @@ async def global_mute_user(ctx, user_id, display_name=None):
 def kb_main_menu():
     return InlineKeyboardMarkup([
         [
+            InlineKeyboardButton("⭐ My Profile", callback_data="rep:myprofile"),
+            InlineKeyboardButton("🏆 Rep Board", callback_data="menu_repboard"),
+        ],
+        [
             InlineKeyboardButton("👤 My Commands", callback_data="menu_user"),
-            InlineKeyboardButton("👮 Admin Panel", callback_data="menu_admin"),
+            InlineKeyboardButton("📊 Rankings", callback_data="menu_rankings"),
+        ],
+        [
+            InlineKeyboardButton("📜 Rules", callback_data="show_rules"),
+            InlineKeyboardButton("⚠️ Warn System", callback_data="menu_warns"),
         ],
         [
             InlineKeyboardButton("🛡️ Protections", callback_data="menu_protection"),
             InlineKeyboardButton("⚙️ Settings", callback_data="menu_settings"),
         ],
         [
-            InlineKeyboardButton("⚠️ Warn System", callback_data="menu_warns"),
-            InlineKeyboardButton("📜 Rules", callback_data="show_rules"),
-        ],
-        [
-            InlineKeyboardButton("🏆 Rep Board", callback_data="menu_repboard"),
-            InlineKeyboardButton("⭐ My Profile", callback_data="rep:myprofile"),
-        ],
-        [
-            InlineKeyboardButton("📊 Rankings", callback_data="menu_rankings"),
+            InlineKeyboardButton("👮 Admin Panel", callback_data="menu_admin"),
         ],
         [InlineKeyboardButton("❌ Close", callback_data="close_menu")],
     ])
@@ -1644,23 +1639,23 @@ def ckb_main_menu():
     """Main menu colored rows."""
     return [
         [
-            {"text": "👤 My Commands",   "callback_data": "menu_user",       "style": "primary"},
-            {"text": "👮 Admin Panel",   "callback_data": "menu_admin",      "style": "primary"},
+            {"text": "⭐ My Profile",    "callback_data": "rep:myprofile",   "style": "success"},
+            {"text": "🏆 Rep Board",     "callback_data": "menu_repboard",   "style": "success"},
         ],
         [
-            {"text": "🛡️ Protections",  "callback_data": "menu_protection", "style": "success"},
+            {"text": "👤 My Commands",   "callback_data": "menu_user",       "style": "primary"},
+            {"text": "📊 Rankings",      "callback_data": "menu_rankings",   "style": "success"},
+        ],
+        [
+            {"text": "📜 Rules",         "callback_data": "show_rules",      "style": "primary"},
+            {"text": "⚠️ Warn System",  "callback_data": "menu_warns",      "style": "danger"},
+        ],
+        [
+            {"text": "🛡️ Protections",  "callback_data": "menu_protection", "style": "primary"},
             {"text": "⚙️ Settings",     "callback_data": "menu_settings",   "style": "primary"},
         ],
         [
-            {"text": "⚠️ Warn System",  "callback_data": "menu_warns",      "style": "danger"},
-            {"text": "📜 Rules",         "callback_data": "show_rules",      "style": "primary"},
-        ],
-        [
-            {"text": "🏆 Rep Board",     "callback_data": "menu_repboard",   "style": "success"},
-            {"text": "⭐ My Profile",    "callback_data": "rep:myprofile",   "style": "success"},
-        ],
-        [
-            {"text": "📊 Rankings",      "callback_data": "menu_rankings",   "style": "success"},
+            {"text": "👮 Admin Panel",   "callback_data": "menu_admin",      "style": "danger"},
         ],
         [{"text": "❌ Close",            "callback_data": "close_menu",       "style": "danger"}],
     ]
@@ -1920,11 +1915,9 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if data == "menu_main":
         text = (
-            f"╔{'═'*34}╗\n"
-            f"║   🛡️  SUHANI BOT v10.0        ║\n"
-            f"╠{'═'*34}╣\n"
-            f"║      Group Protection Bot      ║\n"
-            f"╚{'═'*34}╝\n\n"
+            f"*🛡️ SUHANI BOT v10.0*\n"
+            f"_Group Protection Bot_\n"
+            f"{'─'*24}\n\n"
             f"_Choose a category below 👇_"
         )
         # Try colored Bot API edit
@@ -1937,16 +1930,14 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif data == "menu_user":
         text = (
-            f"╔{'═'*32}╗\n"
-            f"║   👤  YOUR COMMANDS          ║\n"
-            f"╚{'═'*32}╝\n\n"
-            f"{'─'*32}\n\n"
+            f"*👤 YOUR COMMANDS*\n"
+            f"{'─'*24}\n\n"
             f"📜 `/rules` — View group rules\n"
             f"⚠️ `/warnings` — Check your warnings\n"
-            f"⭐ `/rep` — Suhani Profile Card \\& Wallet\n"
-            f"💰 `/wallet` — Suhani Points \\& INR value\n"
+            f"⭐ `/rep` — Suhani Profile Card & Wallet\n"
+            f"💰 `/wallet` — Suhani Points & INR value\n"
             f"🏆 `/repboard` — Group + Global Rep Board\n"
-            f"📊 `/rankings` — Group \\& Global message-activity rank\n"
+            f"📊 `/rankings` — Group & Global message-activity rank\n"
             f"💰 `/earn_groups` — Groups jaha msg karke paisa kamao\n"
             f"🆔 `/id` — Your Telegram ID\n\n"
             f"{'─'*32}\n"
@@ -1977,9 +1968,9 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ Admins only!", show_alert=True)
             return
         text = (
-            f"╔{'═'*32}╗\n"
-            f"║   👮  ADMIN COMMANDS         ║\n"
-            f"╚{'═'*32}╝\n\n"
+            f"*👮 ADMIN COMMANDS*\n"
+
+            f"{'─'*24}\n\n"
             f"🔇 `/mute [sec]` — Mute _(reply)_\n"
             f"🔊 `/unmute` — Unmute _(reply)_\n"
             f"🔨 `/ban` — Ban _(reply)_\n"
@@ -2012,7 +2003,8 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif data == "menu_protection":
         text = (
-            f"╚{'═'*32}╝\n\n"
+            f"🛡️ *ACTIVE PROTECTIONS*\n"
+            f"{'─'*24}\n\n"
             f"🤖 External bot usernames\n"
             f"👤 External @mentions\n"
             f"   ✅ _@admin @owner @request: exempt_\n"
@@ -2046,9 +2038,9 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif data == "menu_settings":
         text = (
-            f"╔{'═'*32}╗\n"
-            f"║   ⚙️  GROUP SETTINGS         ║\n"
-            f"╚{'═'*32}╝\n\n"
+            f"*⚙️ GROUP SETTINGS*\n"
+
+            f"{'─'*24}\n\n"
             f"🔗 `/setlinked` — Set linked channel\n"
             f"📜 `/setrules <text>` — Set group rules\n"
             f"🎭 `/captcha on|off` — Toggle captcha\n"
@@ -2075,9 +2067,9 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif data == "menu_warns":
         text = (
-            f"╔{'═'*32}╗\n"
-            f"║   ⚠️  WARNING SYSTEM         ║\n"
-            f"╚{'═'*32}╝\n\n"
+            f"*⚠️ WARNING SYSTEM*\n"
+
+            f"{'─'*24}\n\n"
             f"🟡 *W1* → Muted 35 seconds\n"
             f"   ⏱ _Expires in 6 hours_\n\n"
             f"🟠 *W2* → Muted 60 seconds\n"
@@ -2110,9 +2102,9 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         groups = db.get_all_groups()
         gmutes = db.get_all_gmutes()
         text = (
-            f"╔{'═'*32}╗\n"
-            f"║   📊  BOT STATISTICS         ║\n"
-            f"╚{'═'*32}╝\n\n"
+            f"*📊 BOT STATISTICS*\n"
+
+            f"{'─'*24}\n\n"
             f"👥 Groups Active:     `{len(groups)}`\n"
             f"⚠️ Warnings Given:    `{s.get('warnings', 0)}`\n"
             f"🔇 Mutes Executed:    `{s.get('mutes', 0)}`\n"
@@ -2160,9 +2152,9 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         global_lines = _lines(global_top, "total",  "_id")
 
         text = (
-            f"╔{'═'*32}╗\n"
-            f"║   🏆  REPUTATION BOARD       ║\n"
-            f"╚{'═'*32}╝\n\n"
+            f"*🏆 REPUTATION BOARD*\n"
+
+            f"{'─'*24}\n\n"
             f"🏠 *GROUP TOP*\n"
             f"{'┄'*32}\n"
             + "\n".join(group_lines) +
@@ -2233,9 +2225,9 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif data == "menu_ai":
         text = (
-            f"╔{'═'*32}╗\n"
-            f"║   🤖  AI MODERATION          ║\n"
-            f"╚{'═'*32}╝\n\n"
+            f"*🤖 AI MODERATION*\n"
+
+            f"{'─'*24}\n\n"
             f"AI Engine: {'🟢 *Suhani AI — Active*' if AI_API_KEY else '🔴 *Not Configured*'}\n\n"
             f"{'─'*32}\n"
             f"*What AI Does:*\n"
@@ -2416,12 +2408,9 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # DM — Owner panel
     if u.id == OWNER_ID:
         text = (
-            f"╔{'═'*38}╗\n"
-            f"║  👑  SUHANI BOT — OWNER PANEL   ║\n"
-            f"╠{'═'*38}╣\n"
-            f"║  v10.0  •  MongoDB  •  AI-Powered   ║\n"
-            f"╚{'═'*38}╝\n\n"
-            f"{'─'*38}\n"
+            f"*👑 SUHANI BOT — OWNER PANEL*\n"
+            f"_v10.0 • MongoDB • AI-Powered_\n"
+            f"{'─'*24}\n\n"
             f"🌐 *GLOBAL CONTROLS*\n\n"
             f"  📢 `/broadcast <msg>` — All groups\n"
             f"  👥 `/groups` — Active group count\n"
@@ -2465,11 +2454,9 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # DM — Regular user
     text = (
-        f"╔{'═'*34}╗\n"
-        f"║   🛡️  SUHANI PROTECTION BOT    ║\n"
-        f"╠{'═'*34}╣\n"
-        f"║      Group Protection Bot      ║\n"
-        f"╚{'═'*34}╝\n\n"
+                f"*🛡️ SUHANI PROTECTION BOT*\n"
+        f"_Group Protection Bot_\n"
+        f"{'─'*24}\n\n"
         f"👋 *Hey {md_esc(u.first_name or 'there')}!*\n\n"
         f"Main groups ko protect karta hoon aur anime community\n"
         f"ko safe aur spam-free rakhta hoon! 🔥\n\n"
@@ -2518,10 +2505,9 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # ── User-only help (non-admins) ──────────────────────────
     if not caller_is_admin:
         text = (
-            f"╔{'═'*32}╗\n"
-            f"║   👤  YOUR COMMANDS & INFO    ║\n"
-            f"╚{'═'*32}╝\n\n"
-            f"{'─'*32}\n"
+            f"*👤 YOUR COMMANDS & INFO*\n"
+
+            f"{'─'*24}\n\n"
             f"📜 `/rules` — View group rules\n"
             f"⚠️ `/warnings` — Check your warnings\n"
             f"⭐ `/rep` — Suhani Profile Card & Wallet\n"
@@ -2550,9 +2536,9 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # ── Admin / Owner full help ──────────────────────────────
     admin_text = (
-        f"╔{'═'*34}╗\n"
-        f"║   👮  ADMIN COMMANDS PANEL    ║\n"
-        f"╚{'═'*34}╝\n\n"
+        f"*👮 ADMIN COMMANDS PANEL*\n"
+
+        f"{'─'*24}\n\n"
         f"🔇 `/mute [sec]` — Mute user _(reply)_\n"
         f"🔊 `/unmute` — Unmute user _(reply)_\n"
         f"🔨 `/ban [reason]` — Ban user _(reply)_\n"
@@ -3601,10 +3587,28 @@ async def reputation_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     db.add_reputation(chat_id, target_id, amount, name)
     new_rep = db.get_reputation(chat_id, target_id)
     action = "diye gaye" if amount >= 0 else "kaate gaye"
-    scope = "🌐 *Global* (DM se diya gaya)" if chat_id == GLOBAL_REP_ID else "is group mein"
+    is_global = chat_id == GLOBAL_REP_ID
+    scope = "🌐 *Global* (DM se diya gaya)" if is_global else "is group mein"
+    is_accepted = (not is_global) and db.is_rep_group_accepted(chat_id)
+
+    wallet = db.get_suhani_points(target_id)
+    if is_global:
+        coin_line = "🪙 _Global rep sirf tier/display ke liye hai — Suhani Coin mein convert nahi hota._"
+    elif is_accepted:
+        coin_line = (
+            f"🪙 *Suhani Coin:* `{wallet['coins']}` (₹{wallet['coins']}) available "
+            f"— ✅ _is group ka rep coin-convertible hai_"
+        )
+    else:
+        coin_line = "🪙 _Is group ka rep abhi coin-convertible nahi hai_ — `/Accept_rep` se accept karo."
+
     await update.message.reply_text(
-        f"✅ `{abs(amount)}` reputation points user `{target_id}` ko {action} {scope}.\n"
-        f"📊 Naya balance: `{new_rep}` rep",
+        f"✅ *Reputation Updated*\n"
+        f"{'─'*28}\n"
+        f"👤 User: `{target_id}`\n"
+        f"📈 `{abs(amount)}` points {action} {scope}\n"
+        f"📊 Naya balance: `{new_rep}` rep\n"
+        f"{coin_line}",
         parse_mode='Markdown'
     )
 
@@ -4962,9 +4966,8 @@ async def rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     ("🔒 Yeh group accepted nahi hai — rep sirf warn maaf karne ke kaam aayega" if ch.type != "private" else "")
 
     text = (
-        f"╔══════════════════════════╗\n"
-        f"║  ⭐  SUHANI PROFILE CARD  ║\n"
-        f"╚══════════════════════════╝\n\n"
+        f"⭐ *SUHANI PROFILE CARD*\n"
+        f"{'─'*24}\n\n"
         f"👤 *{name_safe}*\n"
         f"🏷️ Tier: *{tier}*\n\n"
         f"{'─'*28}\n"
@@ -5024,9 +5027,8 @@ async def wallet_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     can_withdraw = coins >= MIN_WITHDRAW_COINS
 
     text = (
-        f"╔═══════════════════════╗\n"
-        f"║  💰  SUHANI WALLET     ║\n"
-        f"╚═══════════════════════╝\n\n"
+        f"💰 *SUHANI WALLET*\n"
+        f"{'─'*24}\n\n"
         f"👤 *{user_name(usr)}*\n\n"
         f"{'─'*26}\n"
         f"🪙 Suhani Coins:   `{coins}`\n"
@@ -5092,9 +5094,9 @@ async def repboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         else "🔒 *Not Accepted* — is group ka rep sirf warn maaf karne ke kaam aayega"
 
     text = (
-        f"╔{'═'*34}╗\n"
-        f"║   🏆  SUHANI REPUTATION BOARD   ║\n"
-        f"╚{'═'*34}╝\n\n"
+        f"*🏆 SUHANI REPUTATION BOARD*\n"
+
+        f"{'─'*24}\n\n"
         f"🏠 *GROUP TOP* — {md_esc(getattr(ch, 'title', 'This Group')[:22])}\n"
         f"{accepted_note}\n"
         f"{'┄'*34}\n"
@@ -5173,9 +5175,8 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             tier = rep_tier(total_rep)
             name_safe = user_name(usr)
             text = (
-                f"╔══════════════════════════╗\n"
-                f"║  ⭐  SUHANI PROFILE CARD  ║\n"
-                f"╚══════════════════════════╝\n\n"
+                f"⭐ *SUHANI PROFILE CARD*\n"
+                f"{'─'*24}\n\n"
                 f"👤 *{name_safe}*\n"
                 f"🏷️ Tier: *{tier}*\n\n"
                 f"{'─'*28}\n"
@@ -5213,9 +5214,9 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             global_lines = _rep_lines(global_top, "total",  "_id")
             accepted_note = "✅ Accepted group (Coin-convertible)" if is_accepted else "🔒 Not accepted (warn-only rep)"
             text = (
-                f"╔{'═'*32}╗\n"
-                f"║   🏆  REPUTATION BOARD       ║\n"
-                f"╚{'═'*32}╝\n\n"
+                f"*🏆 REPUTATION BOARD*\n"
+
+                f"{'─'*24}\n\n"
                 f"{accepted_note}\n\n"
                 f"🏠 *GROUP TOP*\n{'┄'*32}\n"
                 + "\n".join(group_lines) +
@@ -5243,9 +5244,9 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             top = db.get_global_reputation_top(limit=10)
             lines = _rep_lines(top, "total", "_id", limit=10)
             text = (
-                f"╔{'═'*32}╗\n"
-                f"║   🌐  GLOBAL REP BOARD       ║\n"
-                f"╚{'═'*32}╝\n\n"
+                f"*🌐 GLOBAL REP BOARD*\n"
+
+                f"{'─'*24}\n\n"
                 f"{'┄'*32}\n"
                 + "\n".join(lines) +
                 f"\n\n{'─'*32}\n"
@@ -5782,9 +5783,9 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         color = warn_colors.get(cnt, "⚠️")
 
         warn_text = (
-            f"╔{'═'*28}╗\n"
-            f"║  {color} WARNING {cnt}/4 — ACTION TAKEN  ║\n"
-            f"╚{'═'*28}╝\n\n"
+            f"*{color} WARNING {cnt}/4 — ACTION TAKEN*\n"
+
+            f"{'─'*24}\n\n"
             f"👤 *{user_name(usr)}*\n"
             f"📌 _{viol_txt}_\n\n"
             f"⏱ Muted: `{mute_str}` • Next: {next_str}\n"
@@ -5829,11 +5830,9 @@ async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             except:
                 pass
             bot_added_text = (
-                f"╔{'═'*36}╗\n"
-                f"║  🛡️  SUHANI BOT — ACTIVATED!    ║\n"
-                f"╠{'═'*36}╣\n"
-                f"║   v10.0  •  AI-Powered Guard     ║\n"
-                f"╚{'═'*36}╝\n\n"
+                                f"*🛡️ SUHANI BOT — ACTIVATED!*\n"
+                f"_v10.0 • AI-Powered Guard_\n"
+                f"{'─'*24}\n\n"
                 f"⚡ *Protection is now ACTIVE!*\n\n"
                 f"{'─'*36}\n"
                 f"📋 *Give me these admin rights:*\n"
@@ -5867,9 +5866,9 @@ async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 )
             else:
                 welcome_text = (
-                    f"╔{'═'*30}╗\n"
-                    f"║   👋  WELCOME!              ║\n"
-                    f"╚{'═'*30}╝\n\n"
+                    f"*👋 WELCOME!*\n"
+
+                    f"{'─'*24}\n\n"
                     f"Hey {user_name(member)}, glad to have you here! 🎉\n\n"
                     f"{'─'*30}\n"
                     f"📜 Please read the group rules\n"
