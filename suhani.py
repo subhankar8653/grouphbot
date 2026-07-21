@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ╔══════════════════════════════════════════════════╗
-║   🛡️  SUHANI GROUP PROTECTION BOT  v10.0        ║
+║   🛡️  SUHANI GROUP PROTECTION BOT  v2.0        ║
 ║   ⚡  MongoDB Persistent Database                ║
 ║   🔗  Advanced Link Detection                    ║
 ║   🕵️  Hidden Link Detection                     ║
