@@ -116,12 +116,72 @@ VIOLATION_MSG = {
     "stylish_font": "✍️ Stylish/fancy fonts are NOT allowed in this group!",
     "hidden_link":  "🔗 Hidden links in text are NOT allowed here!",
     "ai_promo":     "🤖 AI detected promotional/spam content!",
+    "location":     "📍 Location sharing is not allowed here!",
+    "contact":      "📇 Sharing contacts is not allowed here!",
+    "hashtag":      "#️⃣ Hashtags are not allowed here!",
+    "voice":        "🎙️ Voice messages are not allowed here!",
 }
 
 # Usernames that are always exempt from @mention filtering
 EXEMPT_USERNAMES = {"admin", "owner", "request", "sbnime"}
 
 MUTE_TIME  = {1: 35, 2: 60, 3: 120, 4: 604800}
+
+# Suhani's own commands — /settings → "Other-Bot Commands" filter tabhi delete karta hai
+# jab command yahan list mein NAHI ho (matlab kisi doosre bot ke liye tha).
+OWN_COMMANDS = {
+    "start","help","rule","rules","setrules","id","setlinked","testmute","mute","unmute",
+    "ban","unban","warn","warnings","resetwarnings","rep","wallet","repboard","withdraw",
+    "accept_rep","unaccept_rep","earn_groups","earngroups","reputation","makeconvertible",
+    "del","purge","immortal","unimmortal","immortals","addblacklist","removeblacklist",
+    "blacklist","addwhitelist","removewhitelist","whitelist","sticker_delete","autodelete",
+    "captcha","broadcast","groups","globalmutes","unglobalmute","gblacklist","gwhitelist",
+    "stats","rankings","power","unpower","fban","gunban","gclearwarn","adexempt",
+    "unadexempt","aimod","aiapprove","airevoke","aigroups","missinganime","addteacher",
+    "removeteacher","teachers","settings",
+}
+
+# ═══════════════════════════════════════════════════════════
+#  /settings PANEL — Filter toggle defaults (per group)
+#  Admin/Owner /settings se in sabko on/off kar sakte hain.
+# ═══════════════════════════════════════════════════════════
+DEFAULT_FILTERS = {
+    "antispam":     True,   # master: blacklist + adult-word + stylish-font + hidden-link
+    "antiflood":    True,   # message flood/rate limiting
+    "imagefilter":  False,  # unsafe image filter (best-effort, needs AI vision to be fully accurate)
+    "noevents":     False,  # join/left service messages auto-delete
+    "nolinks":      True,   # plain URL/link messages block
+    "noforwards":   True,   # forwarded messages block (linked channel exempt)
+    "nolocations":  False,  # location messages block
+    "nocontacts":   False,  # contact-card messages block
+    "nocommands":   False,  # other-bots' commands block (spam-command protection)
+    "nohashtags":   False,  # hashtag-heavy messages block
+    "novoice":      False,  # voice note messages block
+    "nobots":       True,   # auto-kick bots added by non-admins
+    "profanity":    True,   # built-in bad-words filter
+    "blacklist":    True,   # group + global blacklist word enforcement
+    "whitelist":    True,   # whitelist exceptions apply
+    "welcome":      True,   # welcome message on join
+}
+
+FILTER_LABELS = {
+    "antispam":    "🚨 Antispam Filter",
+    "antiflood":   "🌊 Anti-Flood",
+    "imagefilter": "🖼️ Unsafe Image Filter",
+    "noevents":    "🚪 Join/Left Events",
+    "nolinks":     "🔗 Links Filter",
+    "noforwards":  "↩️ Forwards Filter",
+    "nolocations": "📍 Locations Filter",
+    "nocontacts":  "📇 Contacts Filter",
+    "nocommands":  "🤖 Other-Bot Commands",
+    "nohashtags":  "#️⃣ Hashtags Filter",
+    "novoice":     "🎙️ Voice Filter",
+    "nobots":      "🛑 Adding Spambots",
+    "profanity":   "🤬 Bad Words Filter",
+    "blacklist":   "⛔ Bad Domains/Words",
+    "whitelist":   "✅ Safe Domains/Words",
+    "welcome":     "👋 Welcome Message",
+}
 GMUTE_DURATION = 604800   # 1 week — global mute ki duration (seconds)
 # Warning expiry times (seconds). 4th warning (jo gmute trigger karta hai) ki
 # expiry GMUTE_DURATION ke barabar honi chahiye — None NAHI, warna woh warning
@@ -512,6 +572,10 @@ class DB:
             "captcha": False,
             "aimod": False,       # Default OFF — owner /aiapprove se enable karega
             "ai_approved": False, # Owner approval required
+            "warn_durations": None,   # None = default MUTE_TIME use hoga
+            "filters": {},            # per-group filter toggles (defaults merged at read time)
+            "welcome_enabled": True,
+            "welcome_text": None,
         }}, upsert=True)
 
     def remove_group(self, chat_id):
@@ -522,6 +586,43 @@ class DB:
 
     def update_group(self, chat_id, data):
         self.groups.update_one({"_id": chat_id}, {"$set": data}, upsert=True)
+
+    # ── Per-group warn → mute/ban durations (admin editable) ──
+    def get_warn_durations(self, chat_id):
+        g = self.get_group(chat_id)
+        custom = g.get("warn_durations")
+        if custom and isinstance(custom, dict):
+            return {
+                1: int(custom.get("1", MUTE_TIME[1])),
+                2: int(custom.get("2", MUTE_TIME[2])),
+                3: int(custom.get("3", MUTE_TIME[3])),
+                4: int(custom.get("4", MUTE_TIME[4])),
+            }
+        return dict(MUTE_TIME)
+
+    def set_warn_duration(self, chat_id, stage, seconds):
+        self.add_group(chat_id)
+        g = self.get_group(chat_id)
+        custom = g.get("warn_durations") or {}
+        if not isinstance(custom, dict):
+            custom = {}
+        custom[str(stage)] = int(seconds)
+        self.update_group(chat_id, {"warn_durations": custom})
+
+    # ── Per-group filter toggles (/settings panel) ────────────
+    def get_filters(self, chat_id):
+        g = self.get_group(chat_id)
+        f = dict(g.get("filters") or {})
+        merged = dict(DEFAULT_FILTERS)
+        merged.update(f)
+        return merged
+
+    def set_filter(self, chat_id, key, value):
+        self.add_group(chat_id)
+        g = self.get_group(chat_id)
+        f = dict(g.get("filters") or {})
+        f[key] = bool(value)
+        self.update_group(chat_id, {"filters": f})
 
     def get_total_msg_count(self, chat_id: int, user_id: int) -> int:
         """Group mein is user ke total messages kitne hain (sab dates milakar)."""
@@ -1061,6 +1162,28 @@ class DB:
         doc = self.gblacklist.find_one({"_id": "global"})
         return doc.get("words", []) if doc else []
 
+    # ── Per-group: disable specific GLOBAL blacklist/whitelist words ──
+    # (owner ka global word admin ke group par apply NAHI hoga agar disable kiya)
+    def disable_gword(self, chat_id, word):
+        self.blacklist.update_one({"_id": chat_id}, {"$addToSet": {"disabled_gwords": word.lower()}}, upsert=True)
+
+    def enable_gword(self, chat_id, word):
+        self.blacklist.update_one({"_id": chat_id}, {"$pull": {"disabled_gwords": word.lower()}})
+
+    def get_disabled_gwords(self, chat_id):
+        doc = self.blacklist.find_one({"_id": chat_id})
+        return doc.get("disabled_gwords", []) if doc else []
+
+    def disable_gwhite(self, chat_id, word):
+        self.blacklist.update_one({"_id": chat_id}, {"$addToSet": {"disabled_gwhite": word.lower()}}, upsert=True)
+
+    def enable_gwhite(self, chat_id, word):
+        self.blacklist.update_one({"_id": chat_id}, {"$pull": {"disabled_gwhite": word.lower()}})
+
+    def get_disabled_gwhite(self, chat_id):
+        doc = self.blacklist.find_one({"_id": chat_id})
+        return doc.get("disabled_gwhite", []) if doc else []
+
     # ── Global Whitelist (owner only, exempt in ALL groups) ──
     def add_gwhitelist(self, word):
         self.gblacklist.update_one(
@@ -1581,6 +1704,22 @@ async def auto_delete_commands(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch  = update.effective_chat
     if not msg or not ch or ch.type == "private":
         return
+
+    # ── nocommands filter: doosre bots ke commands turant delete (non-admins se) ──
+    try:
+        text = msg.text or ""
+        if text.startswith("/") and db.get_filters(ch.id).get("nocommands", False):
+            cmd_word = text.split()[0][1:].split("@")[0].lower()
+            is_foreign = cmd_word not in OWN_COMMANDS
+            if is_foreign and msg.from_user and not await is_adm(ctx, ch.id, msg.from_user.id):
+                try:
+                    await msg.delete()
+                except Exception:
+                    pass
+                return
+    except Exception:
+        pass
+
     asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 600))
 
 async def global_mute_user(ctx, user_id, display_name=None):
@@ -1799,11 +1938,14 @@ def ckb_rep_board(chat_id, user_id):
         ]
     ]
 
-def ckb_start_group():
-    return [[
+def ckb_start_group(is_admin=False):
+    rows = [[
         {"text": "📋 Commands", "callback_data": "menu_main",   "style": "primary"},
         {"text": "📜 Rules",    "callback_data": "show_rules",  "style": "success"},
     ]]
+    if is_admin:
+        rows.append([{"text": "⚙️ Settings", "callback_data": "cfg_main", "style": "primary"}])
+    return rows
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1815,14 +1957,33 @@ async def check_violations(msg, group_bots, ctx, chat_id):
     if not msg.from_user:
         return None
 
-    if check_flood(chat_id, msg.from_user.id):
+    filt = db.get_filters(chat_id)
+
+    if filt.get("antiflood", True) and check_flood(chat_id, msg.from_user.id):
         return "flood"
 
+    # ── New media-type filters (set via /settings → Filters) ──
+    if filt.get("nolocations", False) and (msg.location is not None or msg.venue is not None):
+        return "location"
+
+    if filt.get("nocontacts", False) and msg.contact is not None:
+        return "contact"
+
+    if filt.get("novoice", False) and (msg.voice is not None or msg.video_note is not None):
+        return "voice"
+
+    if filt.get("nohashtags", False) and text and "#" in text:
+        return "hashtag"
+
+    # Everything below this line is part of the "antispam" master filter
+    if not filt.get("antispam", True):
+        return None
+
     # Hidden link check (text_link entity)
-    if has_hidden_link(msg):
+    if filt.get("nolinks", True) and has_hidden_link(msg):
         return "hidden_link"
 
-    if msg.forward_date or msg.forward_from or msg.forward_from_chat:
+    if filt.get("noforwards", True) and (msg.forward_date or msg.forward_from or msg.forward_from_chat):
         if msg.forward_from_chat:
             lc = await fetch_linked_channel(ctx, chat_id)
             if lc and msg.forward_from_chat.id == lc:
@@ -1835,35 +1996,42 @@ async def check_violations(msg, group_bots, ctx, chat_id):
     if count_adult_emojis(text) >= 2:
         return "adult_emoji"
 
-    bl_words = db.get_blacklist(chat_id)
-    wl_words  = db.get_whitelist(chat_id)
-    if bl_words and text:
-        bl_re = build_blacklist_re(bl_words)
-        if bl_re and bl_re.search(text):
-            wl_re = build_blacklist_re(wl_words) if wl_words else None
-            if not (wl_re and wl_re.search(text)):
-                return "blacklist"
+    wl_words = db.get_whitelist(chat_id)
 
-    # Global blacklist — applies to ALL groups
-    gbl_words = db.get_gblacklist()
-    if gbl_words and text:
-        gbl_re = build_blacklist_re(gbl_words)
-        if gbl_re and gbl_re.search(text):
-            # Check global whitelist before blocking
-            gwl_words = db.get_gwhitelist()
-            gwl_re = build_blacklist_re(gwl_words) if gwl_words else None
-            if not (gwl_re and gwl_re.search(text)):
-                return "blacklist"
+    if filt.get("blacklist", True):
+        bl_words = db.get_blacklist(chat_id)
+        if bl_words and text:
+            bl_re = build_blacklist_re(bl_words)
+            if bl_re and bl_re.search(text):
+                wl_re = build_blacklist_re(wl_words) if (wl_words and filt.get("whitelist", True)) else None
+                if not (wl_re and wl_re.search(text)):
+                    return "blacklist"
 
-    default_re = build_blacklist_re(DEFAULT_ADULT_WORDS)
-    if default_re and default_re.search(text):
-        return "adult_word"
+        # Global blacklist — applies to ALL groups, unless this group disabled that word
+        gbl_words = db.get_gblacklist()
+        disabled_g = set(db.get_disabled_gwords(chat_id))
+        gbl_words = [w for w in gbl_words if w.lower() not in disabled_g]
+        if gbl_words and text:
+            gbl_re = build_blacklist_re(gbl_words)
+            if gbl_re and gbl_re.search(text):
+                # Check global whitelist before blocking (respect group-level opt-outs too)
+                gwl_words = db.get_gwhitelist()
+                disabled_gw = set(db.get_disabled_gwhite(chat_id))
+                gwl_words = [w for w in gwl_words if w.lower() not in disabled_gw]
+                gwl_re = build_blacklist_re(gwl_words) if (gwl_words and filt.get("whitelist", True)) else None
+                if not (gwl_re and gwl_re.search(text)):
+                    return "blacklist"
+
+    if filt.get("profanity", True):
+        default_re = build_blacklist_re(DEFAULT_ADULT_WORDS)
+        if default_re and default_re.search(text):
+            return "adult_word"
 
     # Stylish/fancy font check
     if text and has_stylish_font(text):
         return "stylish_font"
 
-    if check_link(text):
+    if filt.get("nolinks", True) and check_link(text):
         return "url"
 
     if await check_username(text, wl_words, ctx, chat_id):
@@ -2134,30 +2302,17 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     elif data == "menu_settings":
-        text = (
-            f"*⚙️ GROUP SETTINGS*\n"
-
-            f"{'─'*24}\n\n"
-            f"🔗 `/setlinked` — Set linked channel\n"
-            f"📜 `/setrules <text>` — Set group rules\n"
-            f"🎭 `/captcha on|off` — Toggle captcha\n"
-            f"⛔ `/addblacklist <word>` — Ban a word\n"
-            f"✅ `/addwhitelist <word>` — Whitelist word\n"
-            f"📋 `/blacklist` • `/whitelist` — View lists\n"
-            f"🗑️ `/sticker_delete <min>` — Sticker auto-del\n"
-            f"⏱️ `/autodelete <min>` — Auto-delete msgs\n"
-            f"   _`/autodelete reset` → restore global default_\n"
-            f"🤖 `/aimod on|off` — AI moderation toggle\n\n"
-            f"{'─'*32}\n"
-            f"💡 _Settings apply only to this group_"
-        )
+        ch_id = update.effective_chat.id if update.effective_chat else 0
+        if query.from_user.id != OWNER_ID and not await is_adm(ctx, ch_id, query.from_user.id):
+            await query.answer("❌ Admins only!", show_alert=True)
+            return
         await query.answer()
+        _remember_menu_owner(ch_id, query.message.message_id, query.from_user.id)
         await query.edit_message_text(
-            text,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("◀️ Back", callback_data="menu_main")],
-                [InlineKeyboardButton("❌ Close", callback_data="close_menu")],
-            ]),
+            f"*⚙️ GROUP SETTINGS PANEL*\n{'─'*24}\n\n"
+            f"Neeche buttons se group ki settings manage karo 👇\n"
+            f"_Sirf Admins/Owner in buttons ko use kar sakte hain._",
+            reply_markup=kb_settings_main(ch_id),
             parse_mode='Markdown'
         )
         return
@@ -2484,21 +2639,27 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # Group me /start → sirf ek line with button
     if ch.type != "private":
+        is_admin_here = (u.id == OWNER_ID) or await is_adm(ctx, ch.id, u.id)
         start_text = (
             f"🛡️ *Suhani Bot* is active & protecting this group!\n"
             f"_Use /help for all commands._"
         )
-        msg_id = await send_colored_message(ch.id, start_text, ckb_start_group())
+        if is_admin_here:
+            start_text += f"\n⚙️ _Admins: use /settings to open the control panel!_"
+        buttons = [
+            [
+                InlineKeyboardButton("📋 Commands", callback_data="menu_main"),
+                InlineKeyboardButton("📜 Rules", callback_data="show_rules"),
+            ]
+        ]
+        if is_admin_here:
+            buttons.append([InlineKeyboardButton("⚙️ Settings", callback_data="cfg_main")])
+        msg_id = await send_colored_message(ch.id, start_text, ckb_start_group(is_admin_here))
         if not msg_id:
             sent = await update.message.reply_text(
                 start_text,
                 parse_mode='Markdown',
-                reply_markup=InlineKeyboardMarkup([
-                    [
-                        InlineKeyboardButton("📋 Commands", callback_data="menu_main"),
-                        InlineKeyboardButton("📜 Rules", callback_data="show_rules"),
-                    ]
-                ])
+                reply_markup=InlineKeyboardMarkup(buttons)
             )
             _remember_menu_owner(ch.id, sent.message_id, u.id)
         else:
@@ -2655,6 +2816,7 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"📋 `/immortals` — List immune users\n\n"
         f"{'─'*34}\n"
         f"⚙️ *SETTINGS*\n\n"
+        f"🎛️ `/settings` — Open button-based Settings Panel!\n"
         f"📜 `/setrules <text>` — Set rules\n"
         f"🔗 `/setlinked` — Set linked channel\n"
         f"🎭 `/captcha on|off` — Toggle captcha\n"
@@ -3382,7 +3544,7 @@ async def warn_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if cnt >= 4:
         await global_mute_user(ctx, tgt.id, user_name(tgt))
         return
-    await do_mute(ctx, ch.id, tgt.id, MUTE_TIME[cnt])
+    await do_mute(ctx, ch.id, tgt.id, db.get_warn_durations(ch.id)[cnt])
 
     # Build warning bar
     bars = "🟥" * cnt + "⬜" * (4 - cnt)
@@ -5631,6 +5793,13 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     db.add_group(ch.id)
 
+    # ── /settings panel: pending text input capture (rules, word add, etc.) ──
+    pend_key = (ch.id, usr.id) if usr else None
+    if pend_key and pend_key in SETTINGS_PENDING:
+        handled = await handle_settings_input(update, ctx, pend_key)
+        if handled:
+            return
+
     txt = msg.text or msg.caption or ""
     if txt.startswith('/'): return
 
@@ -5921,10 +6090,11 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await global_mute_user(ctx, usr.id, user_name(usr))
             return
 
-        await do_mute(ctx, ch.id, usr.id, MUTE_TIME[cnt])
+        _wd = db.get_warn_durations(ch.id)
+        await do_mute(ctx, ch.id, usr.id, _wd[cnt])
         viol_txt = VIOLATION_MSG.get(violation, "Rule violation!")
         bars = "🟥" * cnt + "⬜" * (4 - cnt)
-        mute_sec = MUTE_TIME[cnt]
+        mute_sec = _wd[cnt]
         mute_str = f"{mute_sec}s" if mute_sec < 3600 else "1 week"
         next_str = "💀 1 week ban 🌐" if cnt == 3 else f"W{cnt+1}"
 
@@ -5969,6 +6139,13 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 #  NEW MEMBER / JOIN / LEAVE EVENTS
 # ═══════════════════════════════════════════════════════════
 async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        if db.get_filters(update.effective_chat.id).get("noevents", False):
+            any_real_member = any(m.id != ctx.bot.id for m in update.message.new_chat_members)
+            if any_real_member:
+                asyncio.create_task(delete_after(ctx, update.effective_chat.id, update.message.message_id, 0))
+    except Exception:
+        pass
     for member in update.message.new_chat_members:
         if member.id == ctx.bot.id:
             db.add_group(update.effective_chat.id)
@@ -6011,14 +6188,35 @@ async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 _remember_menu_owner(update.effective_chat.id, sent.message_id, adder_id)
             else:
                 _remember_menu_owner(update.effective_chat.id, added_msg_id, adder_id)
+        elif member.is_bot:
+            # ── nobots filter: added by a non-admin → auto-kick spambot ──
+            filt = db.get_filters(update.effective_chat.id)
+            if filt.get("nobots", True):
+                adder = update.effective_user
+                adder_is_admin = adder and await is_adm(ctx, update.effective_chat.id, adder.id)
+                if not adder_is_admin:
+                    try:
+                        await do_ban(ctx, update.effective_chat.id, member.id)
+                        await ctx.bot.unban_chat_member(update.effective_chat.id, member.id)  # ban→unban = clean kick
+                        notice = await update.message.reply_text(
+                            f"🛑 *Spambot removed!*\n👤 {user_name(member)} was kicked _(nobots filter)_.",
+                            parse_mode='Markdown'
+                        )
+                        asyncio.create_task(delete_after(ctx, update.effective_chat.id, notice.message_id, 20))
+                    except Exception:
+                        pass
         else:
             g = db.get_group(update.effective_chat.id)
-            if g.get("captcha"):
+            filt = db.get_filters(update.effective_chat.id)
+            if not filt.get("welcome", True):
+                pass
+            elif g.get("captcha"):
                 asyncio.create_task(
                     send_captcha(ctx, update.effective_chat.id, member.id, user_name(member))
                 )
             else:
-                welcome_text = (
+                custom_welcome = g.get("welcome_text")
+                welcome_text = custom_welcome.replace("{name}", user_name(member, escape=False)) if custom_welcome else (
                     f"*👋 WELCOME!*\n"
 
                     f"{'─'*24}\n\n"
@@ -6046,6 +6244,474 @@ async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def on_leave(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.message.left_chat_member.id == ctx.bot.id:
         pass
+    try:
+        if db.get_filters(update.effective_chat.id).get("noevents", False):
+            asyncio.create_task(delete_after(ctx, update.effective_chat.id, update.message.message_id, 0))
+    except Exception:
+        pass
+
+
+# ═══════════════════════════════════════════════════════════
+#  ⚙️  /settings PANEL — Admin/Owner button-based control panel
+# ═══════════════════════════════════════════════════════════
+# (chat_id, user_id) -> {"action": str, "extra": any, "panel_msg_id": int}
+SETTINGS_PENDING = {}
+
+def _sec_human(sec):
+    sec = int(sec)
+    if sec >= 604800:
+        return f"{sec // 604800}w"
+    if sec >= 86400:
+        return f"{sec // 86400}d"
+    if sec >= 3600:
+        return f"{sec // 3600}h"
+    if sec >= 60:
+        return f"{sec // 60}m"
+    return f"{sec}s"
+
+async def _cfg_is_authorized(ctx, chat_id, user_id) -> bool:
+    if user_id == OWNER_ID:
+        return True
+    return await is_adm(ctx, chat_id, user_id)
+
+def kb_settings_main(chat_id):
+    g = db.get_group(chat_id)
+    stk = g.get("sticker_delete_min")
+    ad = g.get("autodelete_min")
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📜 Rules", callback_data="cfg_rules"),
+            InlineKeyboardButton(f"🗑️ Sticker Del {'🟢' if stk else '🔴'}", callback_data="cfg_stkdel"),
+        ],
+        [
+            InlineKeyboardButton(f"⏱️ Auto-Delete {'🟢' if ad else '🔴'}", callback_data="cfg_autodel"),
+            InlineKeyboardButton("⚠️ Warn Durations", callback_data="cfg_warndur"),
+        ],
+        [
+            InlineKeyboardButton("⛔ Blacklist", callback_data="cfg_bl"),
+            InlineKeyboardButton("✅ Whitelist", callback_data="cfg_wl"),
+        ],
+        [
+            InlineKeyboardButton("🛡️ Filters", callback_data="cfg_filters"),
+        ],
+        [
+            InlineKeyboardButton("📊 Rankings", callback_data="menu_rankings"),
+            InlineKeyboardButton("🏆 Reputation", callback_data="menu_repboard"),
+        ],
+        [InlineKeyboardButton("❌ Close", callback_data="close_menu")],
+    ])
+
+async def settings_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ch = update.effective_chat
+    u = update.effective_user
+    if ch.type == "private":
+        return await update.message.reply_text("❌ Ye command sirf group me kaam karta hai!")
+    if not await _cfg_is_authorized(ctx, ch.id, u.id):
+        return await update.message.reply_text("❌ Ye panel sirf group Admins/Owner use kar sakte hain!")
+    text = (
+        f"*⚙️ GROUP SETTINGS PANEL*\n"
+        f"{'─'*24}\n\n"
+        f"Neeche buttons se group ki settings manage karo 👇\n"
+        f"_Sirf Admins/Owner in buttons ko use kar sakte hain._"
+    )
+    sent = await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb_settings_main(ch.id))
+    _remember_menu_owner(ch.id, sent.message_id, u.id)
+
+def kb_back_cfg():
+    return InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="cfg_main")]])
+
+def kb_filters_grid(chat_id):
+    filt = db.get_filters(chat_id)
+    keys = list(DEFAULT_FILTERS.keys())
+    rows = []
+    for i in range(0, len(keys), 2):
+        row = []
+        for k in keys[i:i+2]:
+            icon = "✅" if filt.get(k) else "▫️"
+            row.append(InlineKeyboardButton(f"{icon} {FILTER_LABELS[k]}", callback_data=f"cfg_f_{k}"))
+        rows.append(row)
+    rows.append([InlineKeyboardButton("◀️ Back", callback_data="cfg_main")])
+    return InlineKeyboardMarkup(rows)
+
+async def cfg_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data: str = None):
+    query = update.callback_query
+    if data is None:
+        data = query.data
+    ch = update.effective_chat
+    u = query.from_user
+
+    if not await _cfg_is_authorized(ctx, ch.id, u.id):
+        await query.answer("❌ Admins/Owner only!", show_alert=True)
+        return
+
+    if not _is_menu_owner(ch.id, query.message.message_id, u.id):
+        await query.answer("❌ Ye panel kisi aur ne khola tha — apna /settings chalao!", show_alert=True)
+        return
+
+    try:
+        await query.answer()
+    except Exception:
+        pass
+    if data == "cfg_main":
+        SETTINGS_PENDING.pop((ch.id, u.id), None)
+        await query.edit_message_text(
+            f"*⚙️ GROUP SETTINGS PANEL*\n{'─'*24}\n\n"
+            f"Neeche buttons se group ki settings manage karo 👇\n"
+            f"_Sirf Admins/Owner in buttons ko use kar sakte hain._",
+            parse_mode='Markdown', reply_markup=kb_settings_main(ch.id)
+        )
+        return
+
+    # ── Rules ──
+    if data == "cfg_rules":
+        rules = db.get_rules(ch.id) or "_(default rules use ho rahe hain)_"
+        await query.edit_message_text(
+            f"*📜 GROUP RULES*\n{'─'*24}\n\n{rules}\n\n"
+            f"_Naya rule set karne ke liye niche button dabao aur apna message bhejo._",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✏️ Set New Rules", callback_data="cfg_rules_set")],
+                [InlineKeyboardButton("◀️ Back", callback_data="cfg_main")],
+            ])
+        )
+        return
+
+    if data == "cfg_rules_set":
+        SETTINGS_PENDING[(ch.id, u.id)] = {"action": "rules", "panel_msg_id": query.message.message_id}
+        await query.edit_message_text(
+            "✏️ *Naye rules type karke bhejo* (agla message):",
+            parse_mode='Markdown', reply_markup=kb_back_cfg()
+        )
+        return
+
+    # ── Sticker auto-delete ──
+    if data == "cfg_stkdel":
+        g = db.get_group(ch.id)
+        stk = g.get("sticker_delete_min")
+        await query.edit_message_text(
+            f"*🗑️ STICKER AUTO-DELETE*\n{'─'*24}\n\n"
+            f"Status: {'🟢 ON — ' + str(stk) + ' min' if stk else '🔴 OFF'}\n\n"
+            f"_Sticker/GIF is duration ke baad auto-delete honge._",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔴 Turn OFF" if stk else "🟢 Turn ON", callback_data="cfg_stkdel_toggle")],
+                [InlineKeyboardButton("✏️ Set Minutes", callback_data="cfg_stkdel_set")],
+                [InlineKeyboardButton("◀️ Back", callback_data="cfg_main")],
+            ])
+        )
+        return
+
+    if data == "cfg_stkdel_toggle":
+        g = db.get_group(ch.id)
+        if g.get("sticker_delete_min"):
+            db.update_group(ch.id, {"sticker_delete_min": None})
+        else:
+            db.update_group(ch.id, {"sticker_delete_min": 5})
+        await cfg_callback_reroute(update, ctx, "cfg_stkdel")
+        return
+
+    if data == "cfg_stkdel_set":
+        SETTINGS_PENDING[(ch.id, u.id)] = {"action": "stkdel_min", "panel_msg_id": query.message.message_id}
+        await query.edit_message_text(
+            "✏️ *Kitne minutes baad sticker/GIF delete ho?* (number bhejo, e.g. `5`):",
+            parse_mode='Markdown', reply_markup=kb_back_cfg()
+        )
+        return
+
+    # ── Auto-delete ──
+    if data == "cfg_autodel":
+        g = db.get_group(ch.id)
+        ad = g.get("autodelete_min")
+        await query.edit_message_text(
+            f"*⏱️ AUTO-DELETE MESSAGES*\n{'─'*24}\n\n"
+            f"Status: {'🟢 ON — ' + str(ad) + ' min' if ad else '🔴 OFF'}\n\n"
+            f"_Normal messages is duration ke baad auto-delete honge._",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔴 Turn OFF" if ad else "🟢 Turn ON", callback_data="cfg_autodel_toggle")],
+                [InlineKeyboardButton("✏️ Set Minutes", callback_data="cfg_autodel_set")],
+                [InlineKeyboardButton("◀️ Back", callback_data="cfg_main")],
+            ])
+        )
+        return
+
+    if data == "cfg_autodel_toggle":
+        g = db.get_group(ch.id)
+        if g.get("autodelete_min"):
+            db.update_group(ch.id, {"autodelete_min": None})
+        else:
+            db.update_group(ch.id, {"autodelete_min": 10})
+        await cfg_callback_reroute(update, ctx, "cfg_autodel")
+        return
+
+    if data == "cfg_autodel_set":
+        SETTINGS_PENDING[(ch.id, u.id)] = {"action": "autodel_min", "panel_msg_id": query.message.message_id}
+        await query.edit_message_text(
+            "✏️ *Kitne minutes baad normal messages delete ho?* (number bhejo, e.g. `10`):",
+            parse_mode='Markdown', reply_markup=kb_back_cfg()
+        )
+        return
+
+    # ── Warn durations ──
+    if data == "cfg_warndur":
+        wd = db.get_warn_durations(ch.id)
+        await query.edit_message_text(
+            f"*⚠️ WARN → MUTE DURATIONS*\n{'─'*24}\n\n"
+            f"🟡 W1: `{_sec_human(wd[1])}`\n"
+            f"🟠 W2: `{_sec_human(wd[2])}`\n"
+            f"🔴 W3: `{_sec_human(wd[3])}`\n"
+            f"💀 W4: `{_sec_human(wd[4])}` _(global mute)_\n\n"
+            f"_Edit karne ke liye stage select karo:_",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("W1 ✏️", callback_data="cfg_wd_1"),
+                    InlineKeyboardButton("W2 ✏️", callback_data="cfg_wd_2"),
+                ],
+                [
+                    InlineKeyboardButton("W3 ✏️", callback_data="cfg_wd_3"),
+                    InlineKeyboardButton("W4 ✏️", callback_data="cfg_wd_4"),
+                ],
+                [InlineKeyboardButton("◀️ Back", callback_data="cfg_main")],
+            ])
+        )
+        return
+
+    if data.startswith("cfg_wd_"):
+        stage = int(data.split("_")[-1])
+        SETTINGS_PENDING[(ch.id, u.id)] = {"action": "warndur", "extra": stage, "panel_msg_id": query.message.message_id}
+        await query.edit_message_text(
+            f"✏️ *W{stage} ke liye seconds bhejo* (e.g. `60`):",
+            parse_mode='Markdown', reply_markup=kb_back_cfg()
+        )
+        return
+
+    # ── Blacklist ──
+    if data == "cfg_bl":
+        words = db.get_blacklist(ch.id)
+        preview = ", ".join(words[:15]) if words else "_(khaali)_"
+        await query.edit_message_text(
+            f"*⛔ GROUP BLACKLIST*\n{'─'*24}\n\n"
+            f"Words: {preview}\n\n"
+            f"_Owner ke global blacklist words bhi is group ke liye disable kar sakte ho._",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("➕ Add Word", callback_data="cfg_bl_add"),
+                    InlineKeyboardButton("➖ Remove Word", callback_data="cfg_bl_rem"),
+                ],
+                [InlineKeyboardButton("🌐 Global Words (owner set)", callback_data="cfg_bl_g")],
+                [InlineKeyboardButton("◀️ Back", callback_data="cfg_main")],
+            ])
+        )
+        return
+
+    if data == "cfg_bl_add":
+        SETTINGS_PENDING[(ch.id, u.id)] = {"action": "bl_add", "panel_msg_id": query.message.message_id}
+        await query.edit_message_text("✏️ *Blacklist me add karne wala word bhejo:*", parse_mode='Markdown', reply_markup=kb_back_cfg())
+        return
+
+    if data == "cfg_bl_rem":
+        SETTINGS_PENDING[(ch.id, u.id)] = {"action": "bl_rem", "panel_msg_id": query.message.message_id}
+        await query.edit_message_text("✏️ *Blacklist se hatane wala word bhejo:*", parse_mode='Markdown', reply_markup=kb_back_cfg())
+        return
+
+    if data == "cfg_bl_g":
+        gwords = db.get_gblacklist()
+        disabled = set(db.get_disabled_gwords(ch.id))
+        if not gwords:
+            await query.edit_message_text(
+                "🌐 *Owner ne abhi koi global blacklist word set nahi kiya.*",
+                parse_mode='Markdown', reply_markup=kb_back_cfg()
+            )
+            return
+        rows = []
+        for w in gwords[:20]:
+            icon = "🔴 OFF" if w in disabled else "🟢 ON"
+            rows.append([InlineKeyboardButton(f"{icon} — {w}", callback_data=f"cfg_bl_gt_{w[:45]}")])
+        rows.append([InlineKeyboardButton("◀️ Back", callback_data="cfg_bl")])
+        await query.edit_message_text(
+            f"*🌐 GLOBAL BLACKLIST WORDS*\n{'─'*24}\n\n"
+            f"_Tap karke apne group ke liye ON/OFF karo (global list nahi badlegi, sirf tumhare group me effect):_",
+            parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(rows)
+        )
+        return
+
+    if data.startswith("cfg_bl_gt_"):
+        word = data[len("cfg_bl_gt_"):]
+        disabled = set(db.get_disabled_gwords(ch.id))
+        if word in disabled:
+            db.enable_gword(ch.id, word)
+        else:
+            db.disable_gword(ch.id, word)
+        await cfg_callback_reroute(update, ctx, "cfg_bl_g")
+        return
+
+    # ── Whitelist ──
+    if data == "cfg_wl":
+        words = db.get_whitelist(ch.id)
+        preview = ", ".join(words[:15]) if words else "_(khaali)_"
+        await query.edit_message_text(
+            f"*✅ GROUP WHITELIST*\n{'─'*24}\n\n"
+            f"Words: {preview}\n\n"
+            f"_Owner ke global whitelist words bhi is group ke liye disable kar sakte ho._",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("➕ Add Word", callback_data="cfg_wl_add"),
+                    InlineKeyboardButton("➖ Remove Word", callback_data="cfg_wl_rem"),
+                ],
+                [InlineKeyboardButton("🌐 Global Words (owner set)", callback_data="cfg_wl_g")],
+                [InlineKeyboardButton("◀️ Back", callback_data="cfg_main")],
+            ])
+        )
+        return
+
+    if data == "cfg_wl_add":
+        SETTINGS_PENDING[(ch.id, u.id)] = {"action": "wl_add", "panel_msg_id": query.message.message_id}
+        await query.edit_message_text("✏️ *Whitelist me add karne wala word bhejo:*", parse_mode='Markdown', reply_markup=kb_back_cfg())
+        return
+
+    if data == "cfg_wl_rem":
+        SETTINGS_PENDING[(ch.id, u.id)] = {"action": "wl_rem", "panel_msg_id": query.message.message_id}
+        await query.edit_message_text("✏️ *Whitelist se hatane wala word bhejo:*", parse_mode='Markdown', reply_markup=kb_back_cfg())
+        return
+
+    if data == "cfg_wl_g":
+        gwords = db.get_gwhitelist()
+        disabled = set(db.get_disabled_gwhite(ch.id))
+        if not gwords:
+            await query.edit_message_text(
+                "🌐 *Owner ne abhi koi global whitelist word set nahi kiya.*",
+                parse_mode='Markdown', reply_markup=kb_back_cfg()
+            )
+            return
+        rows = []
+        for w in gwords[:20]:
+            icon = "🔴 OFF" if w in disabled else "🟢 ON"
+            rows.append([InlineKeyboardButton(f"{icon} — {w}", callback_data=f"cfg_wl_gt_{w[:45]}")])
+        rows.append([InlineKeyboardButton("◀️ Back", callback_data="cfg_wl")])
+        await query.edit_message_text(
+            f"*🌐 GLOBAL WHITELIST WORDS*\n{'─'*24}\n\n"
+            f"_Tap karke apne group ke liye ON/OFF karo:_",
+            parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(rows)
+        )
+        return
+
+    if data.startswith("cfg_wl_gt_"):
+        word = data[len("cfg_wl_gt_"):]
+        disabled = set(db.get_disabled_gwhite(ch.id))
+        if word in disabled:
+            db.enable_gwhite(ch.id, word)
+        else:
+            db.disable_gwhite(ch.id, word)
+        await cfg_callback_reroute(update, ctx, "cfg_wl_g")
+        return
+
+    # ── Filters grid ──
+    if data == "cfg_filters":
+        await query.edit_message_text(
+            f"*🛡️ FILTERS*\n{'─'*24}\n\n"
+            f"✅ = ON, ▫️ = OFF — tap karke turant toggle karo:",
+            parse_mode='Markdown', reply_markup=kb_filters_grid(ch.id)
+        )
+        return
+
+    if data.startswith("cfg_f_"):
+        key = data[len("cfg_f_"):]
+        if key in DEFAULT_FILTERS:
+            cur = db.get_filters(ch.id).get(key)
+            db.set_filter(ch.id, key, not cur)
+        await query.edit_message_text(
+            f"*🛡️ FILTERS*\n{'─'*24}\n\n"
+            f"✅ = ON, ▫️ = OFF — tap karke turant toggle karo:",
+            parse_mode='Markdown', reply_markup=kb_filters_grid(ch.id)
+        )
+        return
+
+
+async def cfg_callback_reroute(update, ctx, new_data):
+    """Ek hi callback function ke andar dusre 'view' pe re-render karne ke liye."""
+    await cfg_callback(update, ctx, data=new_data)
+
+
+async def handle_settings_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE, key) -> bool:
+    """/settings panel se pending text-input (rules/word/number) ko process karta hai."""
+    pending = SETTINGS_PENDING.get(key)
+    if not pending:
+        return False
+    ch_id, user_id = key
+    msg = update.message
+    text = (msg.text or "").strip()
+    action = pending["action"]
+
+    if not await _cfg_is_authorized(ctx, ch_id, user_id):
+        SETTINGS_PENDING.pop(key, None)
+        return False
+
+    def _int_or_none(s):
+        try:
+            return int(s)
+        except Exception:
+            return None
+
+    reply = None
+    if action == "rules":
+        db.set_rules(ch_id, text)
+        reply = "✅ *Rules update ho gaye!*"
+    elif action == "stkdel_min":
+        n = _int_or_none(text)
+        if n is None or n <= 0:
+            reply = "❌ Valid number bhejo (e.g. `5`)."
+        else:
+            db.update_group(ch_id, {"sticker_delete_min": n})
+            reply = f"✅ *Sticker auto-delete set to {n} min!*"
+    elif action == "autodel_min":
+        n = _int_or_none(text)
+        if n is None or n <= 0:
+            reply = "❌ Valid number bhejo (e.g. `10`)."
+        else:
+            db.update_group(ch_id, {"autodelete_min": n})
+            reply = f"✅ *Auto-delete set to {n} min!*"
+    elif action == "warndur":
+        n = _int_or_none(text)
+        stage = pending.get("extra")
+        if n is None or n <= 0:
+            reply = "❌ Valid seconds bhejo (e.g. `60`)."
+        else:
+            db.set_warn_duration(ch_id, stage, n)
+            reply = f"✅ *W{stage} duration set to {_sec_human(n)}!*"
+    elif action == "bl_add":
+        if text:
+            db.add_blacklist(ch_id, text.split()[0])
+            reply = f"✅ *'{text.split()[0]}' blacklist me add ho gaya!*"
+    elif action == "bl_rem":
+        if text:
+            db.remove_blacklist(ch_id, text.split()[0])
+            reply = f"✅ *'{text.split()[0]}' blacklist se hata diya!*"
+    elif action == "wl_add":
+        if text:
+            db.add_whitelist(ch_id, text.split()[0])
+            reply = f"✅ *'{text.split()[0]}' whitelist me add ho gaya!*"
+    elif action == "wl_rem":
+        if text:
+            db.remove_whitelist(ch_id, text.split()[0])
+            reply = f"✅ *'{text.split()[0]}' whitelist se hata diya!*"
+
+    SETTINGS_PENDING.pop(key, None)
+    if reply is None:
+        reply = "❌ Kuch galat ho gaya, dobara /settings try karo."
+
+    sent = await msg.reply_text(
+        reply, parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back to Settings", callback_data="cfg_main")]])
+    )
+    _remember_menu_owner(ch_id, sent.message_id, user_id)
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+    return True
 
 
 # ═══════════════════════════════════════════════════════════
@@ -6151,8 +6817,10 @@ def main():
     app.add_handler(CommandHandler("addteacher",       addteacher_cmd))
     app.add_handler(CommandHandler("removeteacher",    removeteacher_cmd))
     app.add_handler(CommandHandler("teachers",         teachers_cmd))
+    app.add_handler(CommandHandler("settings",         settings_cmd))
 
     # ── Callback Queries ─────────────────────────────────────
+    app.add_handler(CallbackQueryHandler(cfg_callback,        pattern=r"^cfg_"))
     app.add_handler(CallbackQueryHandler(captcha_callback,    pattern=r"^captcha_"))
     app.add_handler(CallbackQueryHandler(menu_callback,       pattern=r"^(menu_|show_|unmute_|unban_|dismiss_|close_)"))
     app.add_handler(CallbackQueryHandler(rankings_callback, pattern=r"^lbd:"))
