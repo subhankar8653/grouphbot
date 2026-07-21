@@ -1723,24 +1723,12 @@ async def auto_delete_commands(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 600))
 
 async def global_mute_user(ctx, user_id, display_name=None):
+    """4th warning → mute the user in every group silently. No broadcast message
+    is sent to any group — the user is just restricted/blocked quietly."""
     db.add_gmute(user_id)
     for gid in db.get_all_groups():
         try:
             await do_mute(ctx, gid, user_id, GMUTE_DURATION)
-            notice = await ctx.bot.send_message(
-                gid,
-                f"*💀 GLOBAL MUTE EXECUTED*\n"
-
-                f"{'─'*24}\n\n"
-                f"👤 *{display_name or user_id}*\n\n"
-                f"🌐 Muted in *ALL* groups\n"
-                f"🗓️ Duration: *1 WEEK*\n"
-                f"🔐 Only admin can unmute manually\n\n"
-                f"_{'─'*30}_\n"
-                f"_{WARN_MSG[4]}_",
-                parse_mode='Markdown'
-            )
-            asyncio.create_task(delete_after(ctx, gid, notice.message_id, 600))
             await asyncio.sleep(0.1)
         except:
             pass
@@ -1768,6 +1756,44 @@ def _is_menu_owner(chat_id, message_id, user_id) -> bool:
         # Purana/untracked message (restart se pehle ka) — block mat karo
         return True
     return owner == user_id
+
+
+# ── /settings panel: idle auto-delete ───────────────────────
+# Panel (ya uska koi bhi sub-view) agar 1 minute tak use nahi hota
+# (koi button/tap/reply nahi aata) to khud-ba-khud delete ho jaata hai,
+# taki group mein bekaar ke settings messages padhe na rahein.
+PANEL_TIMERS = {}
+PANEL_IDLE_SECONDS = 60
+
+def schedule_panel_autodelete(ctx, chat_id, message_id, delay=PANEL_IDLE_SECONDS):
+    key = (chat_id, message_id)
+    old = PANEL_TIMERS.get(key)
+    if old and not old.done():
+        old.cancel()
+
+    async def _job():
+        try:
+            await asyncio.sleep(delay)
+            await ctx.bot.delete_message(chat_id, message_id)
+        except Exception:
+            pass
+        finally:
+            PANEL_TIMERS.pop(key, None)
+            MENU_OWNER.pop(key, None)
+            # Panel gaya to uske andar ka pending text-input bhi cancel karo —
+            # lekin sirf agar wo isi panel message ka pending input tha
+            # (naya /settings session shuru ho chuka ho to usko mat chuo).
+            for k, v in list(SETTINGS_PENDING.items()):
+                if k[0] == chat_id and v.get("panel_msg_id") == message_id:
+                    SETTINGS_PENDING.pop(k, None)
+
+    PANEL_TIMERS[key] = asyncio.create_task(_job())
+
+def cancel_panel_autodelete(chat_id, message_id):
+    key = (chat_id, message_id)
+    t = PANEL_TIMERS.pop(key, None)
+    if t and not t.done():
+        t.cancel()
 
 
 def kb_main_menu():
@@ -1952,36 +1978,38 @@ def ckb_start_group(is_admin=False):
 #  VIOLATION CHECK
 # ═══════════════════════════════════════════════════════════
 async def check_violations(msg, group_bots, ctx, chat_id):
+    """Returns (reason, matched_word). matched_word is only set for 'blacklist' hits,
+    so the group can be told exactly which word triggered the action."""
     text = msg.text or msg.caption or ""
 
     if not msg.from_user:
-        return None
+        return None, None
 
     filt = db.get_filters(chat_id)
 
     if filt.get("antiflood", True) and check_flood(chat_id, msg.from_user.id):
-        return "flood"
+        return "flood", None
 
     # ── New media-type filters (set via /settings → Filters) ──
     if filt.get("nolocations", False) and (msg.location is not None or msg.venue is not None):
-        return "location"
+        return "location", None
 
     if filt.get("nocontacts", False) and msg.contact is not None:
-        return "contact"
+        return "contact", None
 
     if filt.get("novoice", False) and (msg.voice is not None or msg.video_note is not None):
-        return "voice"
+        return "voice", None
 
     if filt.get("nohashtags", False) and text and "#" in text:
-        return "hashtag"
+        return "hashtag", None
 
     # Everything below this line is part of the "antispam" master filter
     if not filt.get("antispam", True):
-        return None
+        return None, None
 
     # Hidden link check (text_link entity)
     if filt.get("nolinks", True) and has_hidden_link(msg):
-        return "hidden_link"
+        return "hidden_link", None
 
     if filt.get("noforwards", True) and (msg.forward_date or msg.forward_from or msg.forward_from_chat):
         if msg.forward_from_chat:
@@ -1989,12 +2017,12 @@ async def check_violations(msg, group_bots, ctx, chat_id):
             if lc and msg.forward_from_chat.id == lc:
                 pass
             else:
-                return "forward"
+                return "forward", None
         else:
-            return "forward"
+            return "forward", None
 
     if count_adult_emojis(text) >= 2:
-        return "adult_emoji"
+        return "adult_emoji", None
 
     wl_words = db.get_whitelist(chat_id)
 
@@ -2002,10 +2030,11 @@ async def check_violations(msg, group_bots, ctx, chat_id):
         bl_words = db.get_blacklist(chat_id)
         if bl_words and text:
             bl_re = build_blacklist_re(bl_words)
-            if bl_re and bl_re.search(text):
+            m = bl_re.search(text) if bl_re else None
+            if m:
                 wl_re = build_blacklist_re(wl_words) if (wl_words and filt.get("whitelist", True)) else None
                 if not (wl_re and wl_re.search(text)):
-                    return "blacklist"
+                    return "blacklist", m.group(1)
 
         # Global blacklist — applies to ALL groups, unless this group disabled that word
         gbl_words = db.get_gblacklist()
@@ -2013,36 +2042,37 @@ async def check_violations(msg, group_bots, ctx, chat_id):
         gbl_words = [w for w in gbl_words if w.lower() not in disabled_g]
         if gbl_words and text:
             gbl_re = build_blacklist_re(gbl_words)
-            if gbl_re and gbl_re.search(text):
+            m = gbl_re.search(text) if gbl_re else None
+            if m:
                 # Check global whitelist before blocking (respect group-level opt-outs too)
                 gwl_words = db.get_gwhitelist()
                 disabled_gw = set(db.get_disabled_gwhite(chat_id))
                 gwl_words = [w for w in gwl_words if w.lower() not in disabled_gw]
                 gwl_re = build_blacklist_re(gwl_words) if (gwl_words and filt.get("whitelist", True)) else None
                 if not (gwl_re and gwl_re.search(text)):
-                    return "blacklist"
+                    return "blacklist", m.group(1)
 
     if filt.get("profanity", True):
         default_re = build_blacklist_re(DEFAULT_ADULT_WORDS)
         if default_re and default_re.search(text):
-            return "adult_word"
+            return "adult_word", None
 
     # Stylish/fancy font check
     if text and has_stylish_font(text):
-        return "stylish_font"
+        return "stylish_font", None
 
     if filt.get("nolinks", True) and check_link(text):
-        return "url"
+        return "url", None
 
     if await check_username(text, wl_words, ctx, chat_id):
-        return "username"
+        return "username", None
 
     found_bots = BOT_RE.findall(text)
     for b in found_bots:
         if b.lower() not in group_bots:
-            return "bot"
+            return "bot", None
 
-    return None
+    return None, None
 
 
 # ═══════════════════════════════════════════════════════════
@@ -2619,6 +2649,7 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     elif data == "close_menu":
+        cancel_panel_autodelete(chat.id, query.message.message_id)
         try:
             await query.message.delete()
         except:
@@ -5963,7 +5994,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     db.inc_stat("scanned")
 
     group_bots = await get_group_bots(ctx, ch.id)
-    violation = await check_violations(msg, group_bots, ctx, ch.id)
+    violation, matched_word = await check_violations(msg, group_bots, ctx, ch.id)
 
     # ── AI Engine — sirf tab jab local checks pass ho gaye ──
     txt_for_ai = msg.text or msg.caption or ""
@@ -6093,6 +6124,8 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         _wd = db.get_warn_durations(ch.id)
         await do_mute(ctx, ch.id, usr.id, _wd[cnt])
         viol_txt = VIOLATION_MSG.get(violation, "Rule violation!")
+        if violation == "blacklist" and matched_word:
+            viol_txt = f"⛔ Blacklisted word use kiya: `{matched_word}` — agli baar mat karna!"
         bars = "🟥" * cnt + "⬜" * (4 - cnt)
         mute_sec = _wd[cnt]
         mute_str = f"{mute_sec}s" if mute_sec < 3600 else "1 week"
@@ -6111,15 +6144,18 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{'─'*28}\n"
             f"Progress: {bars} `{cnt}/4`"
         )
+        # Blacklist-word notices should clear out fast (within 1 min) so the
+        # group doesn't stay cluttered with "which word" call-outs.
+        warn_delete_delay = 60 if violation == "blacklist" else 90
         warn_msg_id = await send_colored_message(ch.id, warn_text, ckb_warn_actions(ch.id, usr.id))
         if warn_msg_id:
-            asyncio.create_task(delete_after(ctx, ch.id, warn_msg_id, 90))
+            asyncio.create_task(delete_after(ctx, ch.id, warn_msg_id, warn_delete_delay))
         else:
             notice = await ctx.bot.send_message(
                 ch.id, warn_text, parse_mode='Markdown',
                 reply_markup=kb_warn_actions(ch.id, usr.id)
             )
-            asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 90))
+            asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, warn_delete_delay))
         return
 
     # ── AI REPLY — question/help/anime/confusion ──
@@ -6316,6 +6352,7 @@ async def settings_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     sent = await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb_settings_main(ch.id))
     _remember_menu_owner(ch.id, sent.message_id, u.id)
+    schedule_panel_autodelete(ctx, ch.id, sent.message_id)
 
 def kb_back_cfg():
     return InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="cfg_main")]])
@@ -6352,6 +6389,16 @@ async def cfg_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data: str
         await query.answer()
     except Exception:
         pass
+
+    try:
+        await _cfg_callback_body(update, ctx, data, query, ch, u)
+    finally:
+        # Panel abhi bhi khula hai (close/delete nahi hua) — idle-timer (re)start karo,
+        # taaki 1 min tak koi use na kare to khud delete ho jaaye.
+        schedule_panel_autodelete(ctx, ch.id, query.message.message_id)
+
+
+async def _cfg_callback_body(update, ctx, data, query, ch, u):
     if data == "cfg_main":
         SETTINGS_PENDING.pop((ch.id, u.id), None)
         await query.edit_message_text(
@@ -6702,11 +6749,29 @@ async def handle_settings_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE, 
     if reply is None:
         reply = "❌ Kuch galat ho gaya, dobara /settings try karo."
 
-    sent = await msg.reply_text(
-        reply, parse_mode='Markdown',
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back to Settings", callback_data="cfg_main")]])
-    )
-    _remember_menu_owner(ch_id, sent.message_id, user_id)
+    panel_msg_id = pending.get("panel_msg_id")
+    back_kb = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back to Settings", callback_data="cfg_main")]])
+
+    # Purana "type karke bhejo" prompt ab kaam ka nahi raha — usi message ko edit
+    # karke confirmation dikhao, taaki ek fizool message group mein na reh jaaye.
+    edited = False
+    if panel_msg_id:
+        try:
+            await ctx.bot.edit_message_text(
+                chat_id=ch_id, message_id=panel_msg_id,
+                text=reply, parse_mode='Markdown', reply_markup=back_kb
+            )
+            _remember_menu_owner(ch_id, panel_msg_id, user_id)
+            schedule_panel_autodelete(ctx, ch_id, panel_msg_id)
+            edited = True
+        except Exception:
+            edited = False
+
+    if not edited:
+        sent = await msg.reply_text(reply, parse_mode='Markdown', reply_markup=back_kb)
+        _remember_menu_owner(ch_id, sent.message_id, user_id)
+        schedule_panel_autodelete(ctx, ch_id, sent.message_id)
+
     try:
         await msg.delete()
     except Exception:
