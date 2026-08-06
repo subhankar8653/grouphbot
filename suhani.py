@@ -1832,8 +1832,10 @@ def cancel_panel_autodelete(chat_id, message_id):
         t.cancel()
 
 
-def kb_main_menu():
-    return InlineKeyboardMarkup([
+def kb_main_menu(is_admin=False):
+    """Main menu — Settings & Admin Panel sirf admins/owner ko dikhte hain,
+    normal user ko sirf wahi buttons dikhte hain jo vo use kar sakta hai."""
+    rows = [
         [
             InlineKeyboardButton("⭐ My Profile", callback_data="rep:myprofile"),
             InlineKeyboardButton("🏆 Rep Board", callback_data="menu_repboard"),
@@ -1848,13 +1850,13 @@ def kb_main_menu():
         ],
         [
             InlineKeyboardButton("🛡️ Protections", callback_data="menu_protection"),
-            InlineKeyboardButton("⚙️ Settings", callback_data="menu_settings"),
         ],
-        [
-            InlineKeyboardButton("👮 Admin Panel", callback_data="menu_admin"),
-        ],
-        [InlineKeyboardButton("❌ Close", callback_data="close_menu")],
-    ])
+    ]
+    if is_admin:
+        rows[-1].append(InlineKeyboardButton("⚙️ Settings", callback_data="menu_settings"))
+        rows.append([InlineKeyboardButton("👮 Admin Panel", callback_data="menu_admin")])
+    rows.append([InlineKeyboardButton("❌ Close", callback_data="close_menu")])
+    return InlineKeyboardMarkup(rows)
 
 def kb_back():
     return InlineKeyboardMarkup([
@@ -1920,9 +1922,10 @@ def kb_bot_added():
 # ── Colored keyboard row data (for direct Bot API calls) ──────
 # Style: "primary"=blue, "success"=green, "danger"=red
 
-def ckb_main_menu():
-    """Main menu colored rows."""
-    return [
+def ckb_main_menu(is_admin=False):
+    """Main menu colored rows — Settings & Admin Panel sirf admins/owner ko
+    dikhte hain, normal user ko sirf wahi buttons dikhte hain jo vo use kar sakta hai."""
+    rows = [
         [
             {"text": "⭐ My Profile",    "callback_data": "rep:myprofile",   "style": "success"},
             {"text": "🏆 Rep Board",     "callback_data": "menu_repboard",   "style": "success"},
@@ -1937,13 +1940,13 @@ def ckb_main_menu():
         ],
         [
             {"text": "🛡️ Protections",  "callback_data": "menu_protection", "style": "primary"},
-            {"text": "⚙️ Settings",     "callback_data": "menu_settings",   "style": "primary"},
         ],
-        [
-            {"text": "👮 Admin Panel",   "callback_data": "menu_admin",      "style": "danger"},
-        ],
-        [{"text": "❌ Close",            "callback_data": "close_menu",       "style": "danger"}],
     ]
+    if is_admin:
+        rows[-1].append({"text": "⚙️ Settings", "callback_data": "menu_settings", "style": "primary"})
+        rows.append([{"text": "👮 Admin Panel", "callback_data": "menu_admin", "style": "danger"}])
+    rows.append([{"text": "❌ Close", "callback_data": "close_menu", "style": "danger"}])
+    return rows
 
 def ckb_back():
     return [[{"text": "◀️ Back to Menu", "callback_data": "menu_main", "style": "primary"}]]
@@ -2230,7 +2233,38 @@ async def captcha_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ═══════════════════════════════════════════════════════════
 #  MENU CALLBACK HANDLER
 # ═══════════════════════════════════════════════════════════
+# ── /start-menu family: idle auto-delete (same as /settings) ──────
+# menu_main / show_rules / menu_warns / filter-ke-jaisi koi bhi page —
+# jahan bhi user navigate kare — agar owner (jisne panel khola tha)
+# 1 minute tak koi bhi button na dabaye, panel khud delete ho jaayega.
+# Actual dispatch logic "_menu_callback_dispatch" mein hai (unchanged);
+# yeh wrapper sirf har handled click ke baad timer ko (re)start karta hai.
 async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data  = query.data if query else None
+    chat  = update.effective_chat
+
+    is_owner_click = True
+    if chat and chat.type != "private" and data and not data.startswith(("unmute_", "unban_", "dismiss_warn")):
+        is_owner_click = _is_menu_owner(chat.id, query.message.message_id, query.from_user.id)
+
+    await _menu_callback_dispatch(update, ctx)
+
+    # Sirf tab timer (re)start karo jab click asli owner ne kiya ho aur
+    # panel abhi bhi khula ho (close/dismiss/warn-actions apni delete-lifecycle
+    # khud handle karte hain, unhe idle-timer se chhedna nahi hai).
+    if (
+        is_owner_click and chat and chat.type != "private" and data
+        and data not in ("close_menu", "dismiss_warn")
+        and not data.startswith(("unban_", "unmute_"))
+    ):
+        try:
+            schedule_panel_autodelete(ctx, chat.id, query.message.message_id)
+        except Exception:
+            pass
+
+
+async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data  = query.data
     chat  = update.effective_chat
@@ -2256,10 +2290,11 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         # Try colored Bot API edit
         chat_id = update.effective_chat.id if update.effective_chat else 0
+        is_admin_here = (query.from_user.id == OWNER_ID) or await is_adm(ctx, chat_id, query.from_user.id)
         await query.answer()
-        success = await edit_colored_message(chat_id, query.message.message_id, text, ckb_main_menu())
+        success = await edit_colored_message(chat_id, query.message.message_id, text, ckb_main_menu(is_admin_here))
         if not success:
-            await query.edit_message_text(text, reply_markup=kb_main_menu(), parse_mode='Markdown')
+            await query.edit_message_text(text, reply_markup=kb_main_menu(is_admin_here), parse_mode='Markdown')
         return
 
     elif data == "menu_user":
@@ -2730,8 +2765,10 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup(buttons)
             )
             _remember_menu_owner(ch.id, sent.message_id, u.id)
+            schedule_panel_autodelete(ctx, ch.id, sent.message_id)
         else:
             _remember_menu_owner(ch.id, msg_id, u.id)
+            schedule_panel_autodelete(ctx, ch.id, msg_id)
         return
 
     # DM — Owner panel
@@ -2863,6 +2900,8 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ])
         )
         _remember_menu_owner(ch.id, sent.message_id, u.id)
+        if in_group:
+            schedule_panel_autodelete(ctx, ch.id, sent.message_id)
         return sent
 
     # ── Admin / Owner full help ──────────────────────────────
@@ -2936,6 +2975,7 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     if in_group:
         _remember_menu_owner(ch.id, sent.message_id, u.id)
+        schedule_panel_autodelete(ctx, ch.id, sent.message_id)
 
 
 # ─── /rule ──────────────────────────────────────────────────
