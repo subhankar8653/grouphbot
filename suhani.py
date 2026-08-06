@@ -120,6 +120,7 @@ VIOLATION_MSG = {
     "contact":      "📇 Sharing contacts is not allowed here!",
     "hashtag":      "#️⃣ Hashtags are not allowed here!",
     "voice":        "🎙️ Voice messages are not allowed here!",
+    "chinese":      "🈲 Chinese language text is not allowed here!",
 }
 
 # Usernames that are always exempt from @mention filtering
@@ -157,6 +158,7 @@ DEFAULT_FILTERS = {
     "nocommands":   False,  # other-bots' commands block (spam-command protection)
     "nohashtags":   False,  # hashtag-heavy messages block
     "novoice":      False,  # voice note messages block
+    "nochinese":    False,  # Chinese-language text messages block
     "nobots":       True,   # auto-kick bots added by non-admins
     "profanity":    True,   # built-in bad-words filter
     "blacklist":    True,   # group + global blacklist word enforcement
@@ -176,6 +178,7 @@ FILTER_LABELS = {
     "nocommands":  "🤖 Other-Bot Commands",
     "nohashtags":  "#️⃣ Hashtags Filter",
     "novoice":     "🎙️ Voice Filter",
+    "nochinese":   "🈲 Chinese Text Filter",
     "nobots":      "🛑 Adding Spambots",
     "profanity":   "🤬 Bad Words Filter",
     "blacklist":   "⛔ Bad Domains/Words",
@@ -1575,6 +1578,19 @@ def count_adult_emojis(text):
     return sum(text.count(e) for e in ADULT_EMOJIS)
 
 
+# Chinese/CJK-ideograph detection — nochinese filter ke liye.
+# Common CJK Unified Ideographs block (Chinese hanzi jyada tar isi range mein aate hain).
+CHINESE_RE = re.compile(
+    r'[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]'
+)
+
+def has_chinese_text(text):
+    """True agar text mein Chinese (Han) characters ho."""
+    if not text:
+        return False
+    return bool(CHINESE_RE.search(text))
+
+
 def check_link(text):
     for match in URL_RE.findall(text):
         m = match if isinstance(match, str) else (match[0] if match[0] else '')
@@ -2002,6 +2018,9 @@ async def check_violations(msg, group_bots, ctx, chat_id):
 
     if filt.get("nohashtags", False) and text and "#" in text:
         return "hashtag", None
+
+    if filt.get("nochinese", False) and has_chinese_text(text):
+        return "chinese", None
 
     # Everything below this line is part of the "antispam" master filter
     if not filt.get("antispam", True):
