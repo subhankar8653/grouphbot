@@ -185,6 +185,15 @@ FILTER_LABELS = {
     "whitelist":   "✅ Safe Domains/Words",
     "welcome":     "👋 Welcome Message",
 }
+# ── Filters grouped into categories for a cleaner /settings → Filters UI ──
+FILTER_GROUPS = [
+    ("🛡️ Core Protection", ["antispam", "antiflood", "nobots", "profanity"]),
+    ("🚫 Content Filters", ["nolinks", "noforwards", "nolocations", "nocontacts",
+                             "nocommands", "nohashtags", "novoice", "nochinese", "imagefilter"]),
+    ("📋 Word Lists", ["blacklist", "whitelist"]),
+    ("👥 Group Behaviour", ["noevents", "welcome"]),
+]
+
 GMUTE_DURATION = 604800   # 1 week — global mute ki duration (seconds)
 # Warning expiry times (seconds). 4th warning (jo gmute trigger karta hai) ki
 # expiry GMUTE_DURATION ke barabar honi chahiye — None NAHI, warna woh warning
@@ -403,10 +412,10 @@ action meanings:
 - ANIME_NOT_FOUND: user searched an anime but provider bot didn't find it → tell them nicely + suggest similar
 
 For ANIME_NOT_FOUND reply example:
-"Yaar, 'The Brilliant Healer's New Life in the Shadows' abhi Hindi mein available nahi hai 😅 Jald add karenge! Tab tak 'Eminence in Shadow' ya 'Overlord' try karo — same vibes hai! 🔥"
+"Hey, 'The Brilliant Healer's New Life in the Shadows' isn't available yet 😅 We'll add it soon! Meanwhile try 'Eminence in Shadow' or 'Overlord' — same vibes! 🔥"
 
 For REPLY with typo correction example:
-"Bhai, 'Narato' nahi, 'Naruto' likho 😄 Provider se maango!"
+"Hey, it's 'Naruto', not 'Narato' 😄 Ask the provider for it!"
 
 For REPLY, write in Hinglish, keep it short and friendly.
 For SAFE — normal conversations between users, greetings, reactions — DO NOT interfere."""
@@ -1759,6 +1768,10 @@ async def global_mute_user(ctx, user_id, display_name=None):
 # baaki members ko nahi. (chat_id, message_id) -> user_id map karta hai.
 MENU_OWNER = {}
 
+# Telegram's "GroupAnonymousBot" pseudo-account id. Used whenever an admin/owner
+# sends a message or command with "Remain Anonymous" turned ON.
+ANON_ADMIN_ID = 1087968824
+
 def _remember_menu_owner(chat_id, message_id, user_id):
     if message_id is None or user_id is None:
         return
@@ -1769,7 +1782,14 @@ def _remember_menu_owner(chat_id, message_id, user_id):
 def _is_menu_owner(chat_id, message_id, user_id) -> bool:
     owner = MENU_OWNER.get((chat_id, message_id))
     if owner is None:
-        # Purana/untracked message (restart se pehle ka) — block mat karo
+        # Old/untracked message (from before a restart) — don't block it.
+        return True
+    if owner == ANON_ADMIN_ID:
+        # The panel was opened by an anonymous admin. Telegram always reveals
+        # the clicker's REAL user id on a button tap — even for admins who are
+        # posting anonymously — so it can never match the recorded owner id
+        # here. Only an admin/owner can post anonymously in the first place,
+        # so it's safe to allow the click through rather than lock everyone out.
         return True
     return owner == user_id
 
@@ -2215,14 +2235,14 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     data  = query.data
     chat  = update.effective_chat
 
-    # 🔒 Group me ye personal navigation buttons (menu_*, show_*, close_menu)
-    # sirf usi user ke liye kaam karein jisne /start (ya help/welcome) chalaya tha.
-    # unmute_ / unban_ / dismiss_warn admin-action buttons hain, unhe exclude karo.
+    # 🔒 In groups, personal navigation buttons (menu_*, show_*, close_menu)
+    # should only work for the user who ran /start (or help/welcome).
+    # unmute_ / unban_ / dismiss_warn are admin-action buttons, so exclude them.
     if chat and chat.type != "private" and not data.startswith(("unmute_", "unban_", "dismiss_warn")):
         if not _is_menu_owner(chat.id, query.message.message_id, query.from_user.id):
             await query.answer(
-                "🔒 Ye menu sirf jisne open kiya hai wahi use kar sakta hai!\n"
-                "Apna menu khud /start karke kholo.",
+                "🔒 This menu can only be used by whoever opened it!\n"
+                "Open your own menu with /start.",
                 show_alert=True
             )
             return
@@ -2252,11 +2272,11 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"💰 `/wallet` — Suhani Points & INR value\n"
             f"🏆 `/repboard` — Group + Global Rep Board\n"
             f"📊 `/rankings` — Group & Global message-activity rank\n"
-            f"💰 `/earn_groups` — Groups jaha msg karke paisa kamao\n"
+            f"💰 `/earn_groups` — Groups where you can earn money by chatting\n"
             f"🆔 `/id` — Your Telegram ID\n\n"
             f"{'─'*32}\n"
             f"💎 *REWARD SYSTEM*\n"
-            f"_Thank You → +100 Rep | Warn maaf → 100 Rep_\n"
+            f"_Thank You → +100 Rep | Clear a warning → 100 Rep_\n"
             f"_10,000 Rep (accepted group) → 1 Suhani Coin → ₹1_\n"
             f"_Active raho → Auto earn! 🔥_\n"
             f"_Min withdrawal: ₹10 → `/withdraw`_"
@@ -2358,9 +2378,7 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         _remember_menu_owner(ch_id, query.message.message_id, query.from_user.id)
         await query.edit_message_text(
-            f"*⚙️ GROUP SETTINGS PANEL*\n{'─'*24}\n\n"
-            f"Neeche buttons se group ki settings manage karo 👇\n"
-            f"_Sirf Admins/Owner in buttons ko use kar sakte hain._",
+            _settings_overview_text(ch_id),
             reply_markup=kb_settings_main(ch_id),
             parse_mode='Markdown'
         )
@@ -2438,7 +2456,7 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         def _lines(entries, key_pts, key_id):
             if not entries:
-                return ["  📉 _Abhi koi data nahi!_"]
+                return ["  📉 _No data yet!_"]
             out = []
             for i, doc in enumerate(entries[:7]):
                 medal = medals[i] if i < 3 else rank_e[i-3]
@@ -2609,11 +2627,11 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif data == "show_my_warnings":
         usr = query.from_user
         if not usr:
-            await query.answer("❌ User identify nahi hua!", show_alert=True)
+            await query.answer("❌ Could not identify the user!", show_alert=True)
             return
         ch_id = update.effective_chat.id if update.effective_chat else 0
         if not ch_id:
-            await query.answer("❌ Group mein use karo!", show_alert=True)
+            await query.answer("❌ Use this in a group!", show_alert=True)
             return
         count = db.get_warnings(ch_id, usr.id)
         bars  = "🟥" * count + "⬜" * (4 - count)
@@ -2743,10 +2761,10 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"  🎌 `/missinganime` — Missing requests\n\n"
             f"{'─'*38}\n"
             f"🪙 *SUHANI COIN CONTROLS*\n\n"
-            f"  ✅ `/Accept_rep <group_id>` — Group ka rep coin-convertible banao\n"
+            f"  ✅ `/Accept_rep <group_id>` — Make a group's rep coin-convertible\n"
             f"  🔒 `/Unaccept_rep <group_id>` — Coin-convertible hatao\n"
-            f"  👥 `/earn_groups` — Members ke liye accepted groups ki link-list\n"
-            f"  💸 Withdrawals — approve/reject buttons DM mein aate hain\n\n"
+            f"  👥 `/earn_groups` — Link-list of accepted groups for members\n"
+            f"  💸 Withdrawals — approve/reject buttons arrive in DM\n\n"
             f"{'─'*38}\n"
             f"🌐 `/gblacklist` • `/gwhitelist` — Global word lists\n"
             f"🤖 `/adexempt` — Autodelete exemptions\n"
@@ -2769,21 +2787,21 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"_Group Protection Bot_\n"
         f"{'─'*24}\n\n"
         f"👋 *Hey {md_esc(u.first_name or 'there')}!*\n\n"
-        f"Main groups ko protect karta hoon aur anime community\n"
-        f"ko safe aur spam-free rakhta hoon! 🔥\n\n"
+        f"I protect groups and keep the anime community\n"
+        f"safe and spam-free! 🔥\n\n"
         f"{'─'*34}\n"
         f"📱 *YOUR COMMANDS*\n\n"
-        f"  📜 `/rules` — Group ke rules dekho\n"
-        f"  ⚠️ `/warnings` — Apni warnings check karo\n"
+        f"  📜 `/rules` — View group rules\n"
+        f"  ⚠️ `/warnings` — Check your warnings\n"
         f"  ⭐ `/rep` — Suhani Profile Card & Wallet\n"
         f"  💰 `/wallet` — Suhani Points & INR\n"
         f"  🏆 `/repboard` — Reputation Ranking\n"
         f"  📊 `/rankings` — Message activity rank (Group & Global)\n"
         f"  💰 `/earn_groups` — Groups jaha msg karke paisa kamao\n"
-        f"  🆔 `/id` — Apna Telegram ID\n\n"
+        f"  🆔 `/id` — Your Telegram ID\n\n"
         f"{'─'*34}\n"
         f"💎 *REWARD SYSTEM*\n"
-        f"_Thank You → +100 Rep | Warn maaf → 100 Rep_\n"
+        f"_Thank You → +100 Rep | Clear a warning → 100 Rep_\n"
         f"_10,000 Rep (accepted group) → 1 Coin → ₹1_\n"
         f"_Min ₹10 withdrawal → `/withdraw`_\n\n"
         f"_Add me to your group & make me admin!_"
@@ -2825,7 +2843,7 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"💰 `/wallet` — Suhani Points & INR value\n"
             f"🏆 `/repboard` — Reputation Leaderboard\n"
             f"📊 `/rankings` — Message activity rank (Group & Global)\n"
-            f"💰 `/earn_groups` — Groups jaha msg karke paisa kamao\n"
+            f"💰 `/earn_groups` — Groups where you can earn money by chatting\n"
             f"🆔 `/id` — Your Telegram ID\n\n"
             f"{'─'*32}\n"
             f"💡 _Thank You → +100 Rep | 10,000 Rep → 1 Coin → ₹1_\n"
@@ -3733,10 +3751,10 @@ async def groups_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     group_ids = db.get_all_groups()
     if not group_ids:
-        return await update.message.reply_text("👥 Koi group nahi mila.")
+        return await update.message.reply_text("👥 No groups found.")
 
     status_msg = await update.message.reply_text(
-        f"⏳ {len(group_ids)} groups ki details fetch ho rahi hain..."
+        f"⏳ Fetching details for {len(group_ids)} groups..."
     )
 
     lines = [f"👥 <b>Active Groups:</b> {len(group_ids)}\n"]
@@ -3860,8 +3878,8 @@ async def makeconvertible_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not args or len(args) < 2:
         return await update.message.reply_text(
             "⚙️ *Usage:*\n`/makeconvertible <user_id> <amount>`\n\n"
-            "_Pehle se diye gaye rep ko retroactively coin-convertible banata hai, "
-            "bina total rep dobara badhaye._",
+            "_Makes previously-given rep retroactively coin-convertible, "
+            "without adding to total rep again._",
             parse_mode='Markdown'
         )
     try:
@@ -3925,11 +3943,11 @@ async def reputation_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if target_id is None or amount is None or chat_id is None:
         return await update.message.reply_text(
             "⚙️ *Usage:*\n\n"
-            "*Bot ki DM se (global rep):*\n"
+            "*Via the bot's DM (global rep):*\n"
             "`/reputation <user_id> <amount>`\n\n"
-            "*Kisi group mein:*\n"
+            "*In a group:*\n"
             "`/reputation <user_id> <amount>`\n"
-            "_ya kisi user ko reply karke:_ `/reputation <amount>`",
+            "_or by replying to a user:_ `/reputation <amount>`",
             parse_mode='Markdown'
         )
 
@@ -3943,13 +3961,13 @@ async def reputation_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     new_rep = db.get_reputation(chat_id, target_id)
     action = "diye gaye" if amount >= 0 else "kaate gaye"
     is_global = chat_id == GLOBAL_REP_ID
-    scope = "🌐 *Global* (DM se diya gaya)" if is_global else "is group mein"
+    scope = "🌐 *Global* (given via DM)" if is_global else "in this group"
     is_accepted = (not is_global) and db.is_rep_group_accepted(chat_id)
 
     wallet = db.get_suhani_points(target_id)
     coin_line = (
         f"🪙 *Suhani Coin:* `{wallet['coins']}` (₹{wallet['coins']}) available "
-        f"— ✅ _owner ke through diya gaya rep hamesha coin-convertible hota hai_"
+        f"— ✅ _rep given by the owner is always coin-convertible_"
     )
 
     await update.message.reply_text(
@@ -3969,7 +3987,7 @@ async def accept_rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.args:
         groups = await _accepted_groups_with_links(ctx)
         if not groups:
-            lines = "  <i>Koi group accepted nahi hai</i>"
+            lines = "  <i>No group is accepted</i>"
         else:
             out = []
             for g in groups:
@@ -3978,18 +3996,18 @@ async def accept_rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 if link:
                     out.append(f"  • <a href=\"{html.escape(link)}\">{title}</a>  (<code>{g['_id']}</code>)")
                 else:
-                    out.append(f"  • {title}  (<code>{g['_id']}</code>) — ⚠️ link nahi mila")
+                    out.append(f"  • {title}  (<code>{g['_id']}</code>) — ⚠️ link not found")
             lines = "\n".join(out)
         return await update.message.reply_text(
             f"⚙️ <b>Usage:</b> <code>/Accept_rep &lt;group_id&gt;</code>\n\n"
             f"✅ <b>Accepted Groups</b> (Suhani Coin convertible):\n{lines}\n\n"
-            f"👥 Members yeh list <code>/earn_groups</code> se dekh sakte hain.",
+            f"👥 Members can view this list with <code>/earn_groups</code>.",
             parse_mode='HTML', disable_web_page_preview=True
         )
     try:
         gid = int(ctx.args[0])
     except ValueError:
-        return await update.message.reply_text("❌ Group ID number mein do!")
+        return await update.message.reply_text("❌ Give the group ID as a number!")
 
     # Group ka title aur public/invite link fetch karo, taaki members
     # ko /earn_groups mein ek clickable link dikh sake.
@@ -3997,10 +4015,10 @@ async def accept_rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     db.accept_rep_group(gid, title=title, link=link)
     link_note = f"\n🔗 Link: {html.escape(link)}" if link else \
-        "\n⚠️ Invite link nahi mil paya — bot ko is group mein admin (invite-link permission ke saath) banao."
+        "\n⚠️ Couldn't get the invite link — make the bot an admin in this group (with invite-link permission)."
     await update.message.reply_text(
-        f"✅ Group <code>{gid}</code> (<b>{html.escape(title)}</b>) ab <b>accepted</b> hai!\n"
-        f"Ab is group ka reputation Suhani Coin (₹) mein convert ho sakta hai."
+        f"✅ Group <code>{gid}</code> (<b>{html.escape(title)}</b>) is now <b>accepted</b>!\n"
+        f"This group's reputation can now be converted into Suhani Coin (₹)."
         + link_note,
         parse_mode='HTML'
     )
@@ -4016,7 +4034,7 @@ async def earn_groups_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     groups = await _accepted_groups_with_links(ctx)
     if not groups:
         return await update.message.reply_text(
-            "📉 <i>Abhi koi group Suhani Coin ke liye accepted nahi hai.</i>",
+            "📉 <i>No group is accepted for Suhani Coin yet.</i>",
             parse_mode='HTML'
         )
     lines = []
@@ -4029,9 +4047,9 @@ async def earn_groups_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             lines.append(f"{i}. {title} — ⚠️ link jald aayega")
     text = (
         f"💰 <b>EARN GROUPS</b>\n"
-        f"<i>Inme active rehke Suhani Coin (₹) kamao</i>\n"
+        f"<i>Stay active in these to earn Suhani Coin (₹)</i>\n"
         f"{'─'*28}\n\n" + "\n".join(lines) +
-        f"\n\n💡 <i>Thank You reply se rep milta hai • 10,000 rep = ₹1</i>"
+        f"\n\n💡 <i>Reply with Thank You to earn rep • 10,000 rep = ₹1</i>"
     )
     await update.message.reply_text(text, parse_mode='HTML', disable_web_page_preview=True)
 
@@ -4044,11 +4062,11 @@ async def unaccept_rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         gid = int(ctx.args[0])
     except ValueError:
-        return await update.message.reply_text("❌ Group ID number mein do!")
+        return await update.message.reply_text("❌ Give the group ID as a number!")
     db.unaccept_rep_group(gid)
     await update.message.reply_text(
-        f"🔒 Group `{gid}` ab *not accepted* hai.\n"
-        f"Is group ka reputation ab sirf warn maaf karne ke kaam aayega, coin nahi banega.",
+        f"🔒 Group `{gid}` is now *not accepted*.\n"
+        f"This group's reputation will now only be usable to clear warnings — it won't generate coins.",
         parse_mode='Markdown'
     )
 
@@ -4446,7 +4464,7 @@ async def gclearwarn_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
     caller = update.effective_user.id
     if caller != OWNER_ID and not db.is_powered(caller):
-        return await update.message.reply_text("❌ Owner ya powered user hi yeh command use kar sakte hain!")
+        return await update.message.reply_text("❌ Only the owner or a powered user can use this command!")
 
     target_id = None
     target_name = None
@@ -4467,12 +4485,12 @@ async def gclearwarn_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 target_name = md_esc(chat_obj.first_name or uname)
             except Exception:
                 return await update.message.reply_text(
-                    f"❌ User nahi mila: `{raw}`", parse_mode='Markdown'
+                    f"❌ User not found: `{raw}`", parse_mode='Markdown'
                 )
     else:
         return await update.message.reply_text(
             "❌ Usage: `/gclearwarn <user_id | @username>`\n"
-            "Ya user ke message pe reply karke `/gclearwarn` likho.",
+            "Or reply to the user's message and type `/gclearwarn`.",
             parse_mode='Markdown'
         )
 
@@ -4483,7 +4501,7 @@ async def gclearwarn_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"{'─'*28}\n\n"
         f"👤 User: {target_name or f'`{target_id}`'}\n"
         f"🗑️ Removed: `{deleted}` warning record(s) across all groups\n\n"
-        f"_Ab yeh user fresh start se hai — koi warning nahi._",
+        f"_This user now has a fresh start — no warnings._",
         parse_mode='Markdown'
     )
 
@@ -4509,8 +4527,8 @@ async def aimod_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Check owner approval
     if not g.get("ai_approved", False):
         return await update.message.reply_text(
-            "⚠️ *Is group ke liye AI approved nahi hai!*\n\n"
-            "_Bot owner se `/aiapprove` karwao pehle._",
+            "⚠️ *AI is not approved for this group!*\n\n"
+            "_Ask the bot owner to run `/aiapprove` first._",
             parse_mode='Markdown'
         )
 
@@ -4555,7 +4573,7 @@ async def missinganime_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             name = ' '.join(args[1:])
             db.clear_missing_anime(name)
             return await update.message.reply_text(
-                f"✅ `{name}` missing list se remove kar diya!",
+                f"✅ `{name}` removed from the missing list!",
                 parse_mode='Markdown'
             )
         else:
@@ -4566,8 +4584,8 @@ async def missinganime_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     missing = db.get_missing_anime_list(30)
     if not missing:
         return await update.message.reply_text(
-            "📋 *Missing Anime List khali hai!*\n\n"
-            "_Koi anime abhi missing report nahi hua._",
+            "📋 *Missing Anime List is empty!*\n\n"
+            "_No anime has been reported missing yet._",
             parse_mode='Markdown'
         )
 
@@ -4604,11 +4622,11 @@ async def aiapprove_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if ch.type == "private":
         if not ctx.args:
             return await update.message.reply_text(
-                "❌ *DM mein chat ID dena zaroori hai!*\n\n"
+                "❌ *You must provide a chat ID in DM!*\n\n"
                 "Usage: `/aiapprove <group_chat_id>`\n\n"
                 "Example:\n"
                 "`/aiapprove -1001234567890`\n\n"
-                "_Group ka ID pane ke liye group mein `/id` use karo._",
+                "_Use `/id` in the group to get its ID._",
                 parse_mode='Markdown'
             )
         try:
@@ -4616,7 +4634,7 @@ async def aiapprove_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except ValueError:
             return await update.message.reply_text(
                 f"❌ Invalid ID: `{ctx.args[0]}`\n\n"
-                f"_Sirf number dalo, jaise `-1001234567890`_",
+                f"_Enter only the number, e.g. `-1001234567890`_",
                 parse_mode='Markdown'
             )
     else:
@@ -4633,10 +4651,10 @@ async def aiapprove_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"✅ *AI Approved!*\n"
             f"{'─'*28}\n\n"
-            f"🤖 Group `{target_chat_id}` ke liye:\n"
+            f"🤖 For group `{target_chat_id}`:\n"
             f"  • AI Approved: ✅\n"
             f"  • AI Status: 🟢 ON\n\n"
-            f"_Group admin `/aimod on/off` se control kar sakte hain._\n"
+            f"_Group admins can control this with `/aimod on/off`._\n"
             f"_Revoke karna ho toh: `/airevoke {target_chat_id}`_",
             parse_mode='Markdown'
         )
@@ -4659,11 +4677,11 @@ async def airevoke_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if ch.type == "private":
         if not ctx.args:
             return await update.message.reply_text(
-                "❌ *DM mein chat ID dena zaroori hai!*\n\n"
+                "❌ *You must provide a chat ID in DM!*\n\n"
                 "Usage: `/airevoke <group_chat_id>`\n\n"
                 "Example:\n"
                 "`/airevoke -1001234567890`\n\n"
-                "_Approved groups dekhne ke liye `/aigroups` use karo._",
+                "_Use `/aigroups` to see approved groups._",
                 parse_mode='Markdown'
             )
         try:
@@ -4671,7 +4689,7 @@ async def airevoke_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except ValueError:
             return await update.message.reply_text(
                 f"❌ Invalid ID: `{ctx.args[0]}`\n\n"
-                f"_Sirf number dalo, jaise `-1001234567890`_",
+                f"_Enter only the number, e.g. `-1001234567890`_",
                 parse_mode='Markdown'
             )
     else:
@@ -4686,10 +4704,10 @@ async def airevoke_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"🔴 *AI Revoked!*\n"
             f"{'─'*28}\n\n"
-            f"Group `{target_chat_id}` ke liye:\n"
+            f"For group `{target_chat_id}`:\n"
             f"  • AI Approved: ❌\n"
             f"  • AI Status: 🔴 OFF\n\n"
-            f"_AI wahan kaam nahi karega._\n"
+            f"_AI won't work there._\n"
             f"_Wapas enable karna ho: `/aiapprove {target_chat_id}`_",
             parse_mode='Markdown'
         )
@@ -4714,7 +4732,7 @@ async def aigroups_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not approved:
         return await update.message.reply_text(
             "📋 *AI Approved Groups: 0*\n\n"
-            "_Kisi bhi group ko approve nahi kiya gaya abhi._\n"
+            "_No group has been approved yet._\n"
             "Use `/aiapprove` in a group or `/aiapprove <chat_id>` in DM.",
             parse_mode='Markdown'
         )
@@ -4755,11 +4773,11 @@ async def addteacher_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 target_name = md_esc(uname)
             except Exception:
                 return await update.message.reply_text(
-                    f"❌ User nahi mila: `{ctx.args[0]}`", parse_mode='Markdown'
+                    f"❌ User not found: `{ctx.args[0]}`", parse_mode='Markdown'
                 )
     else:
         return await update.message.reply_text(
-            "❌ Usage: `/addteacher <id>` ya reply karo user ke message pe",
+            "❌ Usage: `/addteacher <id>` or reply to the user's message",
             parse_mode='Markdown'
         )
 
@@ -4769,10 +4787,10 @@ async def addteacher_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"{'─'*28}\n\n"
         f"👤 User: `{target_id}`{f'  ({target_name})' if target_name else ''}\n\n"
         f"🛡️ *Special handling:*\n"
-        f"  • 1st promo → sirf polite warning, no mute\n"
+        f"  • 1st promo → just a polite warning, no mute\n"
         f"  • 2nd promo → 🔇 10 min mute\n"
         f"  • 3rd promo → 🔇 40 min mute\n"
-        f"  • 4th promo → 🔇 70 min mute _(+30 min har baar badhega)_\n\n"
+        f"  • 4th promo → 🔇 70 min mute _(+30 min added each time)_\n\n"
         f"Use `/removeteacher {target_id}` to remove.",
         parse_mode='Markdown'
     )
@@ -4803,7 +4821,7 @@ async def removeteacher_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     db.reset_teacher_promo_count(ch.id, target_id)
     await update.message.reply_text(
         f"✅ Teacher status removed for `{target_id}`.\n"
-        f"_Unka promo count bhi reset ho gaya._",
+        f"_Their promo count has also been reset._",
         parse_mode='Markdown'
     )
 
@@ -4819,7 +4837,7 @@ async def teachers_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     teachers = db.get_teachers(ch.id)
     if not teachers:
         return await update.message.reply_text(
-            "📚 Is group mein koi teacher nahi hai abhi.\n\n"
+            "📚 This group has no teachers yet.\n\n"
             "_Use `/addteacher` to add one._",
             parse_mode='Markdown'
         )
@@ -4998,7 +5016,7 @@ def build_lb_text(entries, period, scope_title):
             f"🏆 <b>{html.escape(scope_title)}</b>\n"
             f"<i>{html.escape(period_label)}</i>\n"
             f"{'─'*28}\n\n"
-            f"📉 Is period mein koi message activity nahi mili!"
+            f"📉 No message activity found in this period!"
         )
     medals = ["🥇", "🥈", "🥉"]
     lines = []
@@ -5041,7 +5059,7 @@ async def rankings_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if origin_id:
             asyncio.create_task(delete_after(ctx, origin_id, msg.message_id, 600))
     except Exception as e:
-        await update.message.reply_text(f"❌ Rankings load nahi hui: <code>{html.escape(str(e))}</code>", parse_mode='HTML')
+        await update.message.reply_text(f"❌ Failed to load rankings: <code>{html.escape(str(e))}</code>", parse_mode='HTML')
 
 
 # ─── /rankings button callback — scope (Group/Global) aur period switch ───
@@ -5126,8 +5144,8 @@ async def daily_global_winner_job(ctx: ContextTypes.DEFAULT_TYPE):
                 OWNER_ID,
                 f"🏆 Daily Global Winner ({html.escape(yesterday)}): "
                 f'<a href="tg://user?id={user_id}">{html.escape(str(name))}</a> '
-                f"(id <code>{user_id}</code>) ko group <code>{win_chat_id}</code> mein "
-                f"+{DAILY_WINNER_REWARD} free rep mila!",
+                f"(id <code>{user_id}</code>) got +{DAILY_WINNER_REWARD} free rep "
+                f"in group <code>{win_chat_id}</code>!",
                 parse_mode='HTML'
             )
     except Exception:
@@ -5158,12 +5176,12 @@ async def withdraw_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         req_coins = int(ctx.args[0])
     except ValueError:
-        return await update.message.reply_text("❌ Coins ek number hona chahiye! Example: `/withdraw 10 rahul@upi`", parse_mode='Markdown')
+        return await update.message.reply_text("❌ Coins must be a number! Example: `/withdraw 10 rahul@upi`", parse_mode='Markdown')
 
     detail = ' '.join(ctx.args[1:]).strip()
     if req_coins < MIN_WITHDRAW_COINS:
         return await update.message.reply_text(
-            f"❌ Min withdrawal `{MIN_WITHDRAW_COINS}` coins hai (₹{MIN_WITHDRAW_COINS}).",
+            f"❌ Minimum withdrawal is `{MIN_WITHDRAW_COINS}` coins (₹{MIN_WITHDRAW_COINS}).",
             parse_mode='Markdown'
         )
 
@@ -5210,7 +5228,7 @@ async def withdraw_approval_callback(update: Update, ctx: ContextTypes.DEFAULT_T
     """Owner-only: withdrawal request ko approve (paid) ya reject karo."""
     query = update.callback_query
     if not query or not query.from_user or query.from_user.id != OWNER_ID:
-        return await query.answer("❌ Sirf owner isse use kar sakta hai!", show_alert=True)
+        return await query.answer("❌ Only the owner can use this!", show_alert=True)
     await query.answer()
     try:
         _, action, req_id = query.data.split(":", 2)
@@ -5218,9 +5236,9 @@ async def withdraw_approval_callback(update: Update, ctx: ContextTypes.DEFAULT_T
         return
     req = db.get_withdrawal(req_id)
     if not req:
-        return await query.edit_message_text("❌ Request nahi mili \\(shayad already resolved\\)\\.", parse_mode='MarkdownV2')
+        return await query.edit_message_text("❌ Request not found \\(maybe already resolved\\)\\.", parse_mode='MarkdownV2')
     if req.get("status") != "pending":
-        return await query.edit_message_text(f"ℹ️ Yeh request already `{req['status']}` hai\\.", parse_mode='MarkdownV2')
+        return await query.edit_message_text(f"ℹ️ This request is already `{req['status']}`\\.", parse_mode='MarkdownV2')
 
     if action == "approve":
         db.set_withdrawal_status(req_id, "paid")
@@ -5233,7 +5251,7 @@ async def withdraw_approval_callback(update: Update, ctx: ContextTypes.DEFAULT_T
             await ctx.bot.send_message(
                 req["user_id"],
                 f"✅ *Aapki withdrawal approve ho gayi\\!*\n\n"
-                f"🪙 Coins: `{req['coins']}` \\(₹{req['coins']}\\) bhej diye gaye hain\\.",
+                f"🪙 Coins: `{req['coins']}` \\(₹{req['coins']}\\) have been sent\\.",
                 parse_mode='MarkdownV2'
             )
         except Exception:
@@ -5241,7 +5259,7 @@ async def withdraw_approval_callback(update: Update, ctx: ContextTypes.DEFAULT_T
     elif action == "reject":
         db.set_withdrawal_status(req_id, "rejected")
         await query.edit_message_text(
-            f"❌ *REJECTED* — `{req['coins']}` coins ka request reject kiya gaya\\.\n"
+            f"❌ *REJECTED* — request for `{req['coins']}` coins was rejected\\.\n"
             f"👤 User ID: `{req['user_id']}`",
             parse_mode='MarkdownV2'
         )
@@ -5249,7 +5267,7 @@ async def withdraw_approval_callback(update: Update, ctx: ContextTypes.DEFAULT_T
             await ctx.bot.send_message(
                 req["user_id"],
                 f"❌ *Aapki withdrawal request reject ho gayi\\.*\n\n"
-                f"Coins wapas balance mein available hain, dobara request kar sakte ho\\.",
+                f"Coins are back in the balance, you can request again\\.",
                 parse_mode='MarkdownV2'
             )
         except Exception:
@@ -5265,7 +5283,7 @@ async def rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     else:
         tgt = update.effective_user
     if not tgt:
-        return await update.message.reply_text("❌ User identify nahi hua!")
+        return await update.message.reply_text("❌ Could not identify the user!")
 
     # ── Data fetch ───────────────────────────────────────────
     group_rep   = db.get_reputation(ch.id, tgt.id) if ch.type != "private" else 0
@@ -5312,8 +5330,8 @@ async def rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # ── Build reply text (Markdown v1) ─────────────────────────
     name_safe = user_name(tgt, escape=False)
-    accepted_line = "✅ Yeh group Suhani Coin ke liye *accepted* hai" if is_accepted else \
-                    ("🔒 Yeh group accepted nahi hai — rep sirf warn maaf karne ke kaam aayega" if ch.type != "private" else "")
+    accepted_line = "✅ This group is *accepted* for Suhani Coin" if is_accepted else \
+                    ("🔒 This group isn't accepted — rep will only be usable to clear warnings" if ch.type != "private" else "")
 
     text = (
         f"⭐ *SUHANI PROFILE CARD*\n"
@@ -5336,13 +5354,13 @@ async def rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"  {'✅ Withdrawal available!' if can_withdraw else f'🔒 Min {MIN_WITHDRAW_COINS} coins needed  •  {max(0,MIN_WITHDRAW_COINS-coins)} more remaining'}\n\n"
         f"{'─'*28}\n"
         f"📖 *HOW IT WORKS*\n"
-        f"  • Reply kisi ko *Thank You* → +{REP_PER_THANK} Rep\n"
-        f"  • 3 baar max de sakte ho daily\n"
-        f"  • 1 warning maaf = {REP_PER_WARN_REMOVE} rep (auto-deduct)\n"
+        f"  • Reply *Thank You* to someone → +{REP_PER_THANK} Rep\n"
+        f"  • Max 3 times per day\n"
+        f"  • Clear 1 warning = {REP_PER_WARN_REMOVE} rep (auto-deduct)\n"
         f"  • {REP_PER_SUHANI_COIN} Convertible Rep = 1 Suhani Coin = ₹1\n"
-        f"  • Min ₹{MIN_WITHDRAW_COINS} withdrawal • /withdraw se request karo\n\n"
+        f"  • Min ₹{MIN_WITHDRAW_COINS} withdrawal • Request via /withdraw\n\n"
         f"{'─'*28}\n"
-        f"💸 *WITHDRAW* → `/withdraw` command use karo\n"
+        f"💸 *WITHDRAW* → use the `/withdraw` command\n"
         f"_/repboard — Group reputation ranking_"
     )
 
@@ -5394,9 +5412,9 @@ async def wallet_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"  1 Coin  →  ₹1\n"
         f"  Min: {MIN_WITHDRAW_COINS} Coins = ₹{MIN_WITHDRAW_COINS} withdrawal\n\n"
         f"{'─'*26}\n"
-        f"ℹ️ _Sirf accepted groups ka rep hi coin banta hai._\n"
+        f"ℹ️ _Only rep from accepted groups turns into coins._\n"
         f"{'✅ *Withdrawal Ready!*' if can_withdraw else f'🔒 Need `{max(0,MIN_WITHDRAW_COINS-coins)}` more Coins'}\n"
-        f"💸 Withdraw → `/withdraw` command use karo"
+        f"💸 Withdraw → use the `/withdraw` command"
     )
     kb_rows = [[InlineKeyboardButton("🏆 Rep Board", callback_data="rep:board:0")]]
     if can_withdraw:
@@ -5413,7 +5431,7 @@ async def repboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
         return await update.message.reply_text(
-            "❌ Ise group mein use karo!",
+            "❌ Use this in a group!",
             parse_mode='Markdown'
         )
 
@@ -5429,7 +5447,7 @@ async def repboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     def build_board_lines(entries, key_pts="points", key_id="user_id"):
         if not entries:
-            return ["  📉 _Koi data nahi mila!_"]
+            return ["  📉 _No data found!_"]
         lines = []
         for i, doc in enumerate(entries):
             medal = medals[i] if i < 3 else (rank_emojis[i-3] if i-3 < len(rank_emojis) else f"`{i+1}.`")
@@ -5442,8 +5460,8 @@ async def repboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     group_lines  = build_board_lines(group_top,  key_pts="points",  key_id="user_id")
     global_lines = build_board_lines(global_top, key_pts="total",   key_id="_id")
 
-    accepted_note = "✅ *Accepted* — is group ka rep Suhani Coin mein convert hota hai" if is_accepted \
-        else "🔒 *Not Accepted* — is group ka rep sirf warn maaf karne ke kaam aayega"
+    accepted_note = "✅ *Accepted* — this group's rep converts into Suhani Coin" if is_accepted \
+        else "🔒 *Not Accepted* — this group's rep will only be usable to clear warnings"
 
     text = (
         f"*🏆 SUHANI REPUTATION BOARD*\n"
@@ -5458,7 +5476,7 @@ async def repboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"{'┄'*34}\n"
         + "\n".join(global_lines) +
         f"\n\n{'─'*34}\n"
-        f"💡 _Thank You = +{REP_PER_THANK} rep  •  1 warn maaf = {REP_PER_WARN_REMOVE} rep_\n"
+        f"💡 _Thank You = +{REP_PER_THANK} rep  •  Clear 1 warning = {REP_PER_WARN_REMOVE} rep_\n"
         f"💡 _{REP_PER_SUHANI_COIN} convertible rep = 1 Suhani Coin = ₹1_\n"
         f"_Reply *Thank You* to give rep  •  Max 3/day per person_"
     )
@@ -5485,8 +5503,8 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if chat and chat.type != "private":
         if not _is_menu_owner(chat.id, query.message.message_id, query.from_user.id):
             await query.answer(
-                "🔒 Ye menu sirf jisne open kiya hai wahi use kar sakta hai!\n"
-                "Apna menu khud /start karke kholo.",
+                "🔒 This menu can only be used by whoever opened it!\n"
+                "Open your own menu with /start.",
                 show_alert=True
             )
             return
@@ -5496,7 +5514,7 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     def _rep_lines(entries, key_pts, key_id, limit=7):
         if not entries:
-            return ["  📉 _Abhi koi data nahi!_"]
+            return ["  📉 _No data yet!_"]
         out = []
         for i, doc in enumerate(entries[:limit]):
             medal = medals[i] if i < 3 else (rank_emojis[i-3] if i-3 < len(rank_emojis) else f"`{i+1}.`")
@@ -5611,8 +5629,8 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"{'┄'*32}\n"
                 + "\n".join(lines) +
                 f"\n\n{'─'*32}\n"
-                f"_Sab groups ka combined data_\n"
-                f"_Coin sirf accepted groups ke rep se banta hai_"
+                f"_Combined data from all groups_\n"
+                f"_Coins are only generated from accepted groups' rep_"
             )
             await query.edit_message_text(
                 text, parse_mode='Markdown',
@@ -5661,7 +5679,7 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             text = (
                 f"💸 *WITHDRAWAL REQUEST*\n{'─'*26}\n\n"
                 f"🪙 Available Coins: `{coins}` (₹{coins})\n\n"
-                f"Withdraw karne ke liye DM mein ye bhejo:\n"
+                f"To withdraw, send this in DM:\n"
                 f"`/withdraw <amount> <UPI ID>`\n\n"
                 f"_Example:_ `/withdraw {min(coins, MIN_WITHDRAW_COINS)} name@upi`\n\n"
                 f"Min withdrawal: `{MIN_WITHDRAW_COINS}` coins (₹{MIN_WITHDRAW_COINS})"
@@ -5747,7 +5765,7 @@ async def track_activity_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         try:
             notice = await ctx.bot.send_message(
                 ch.id,
-                f"🎉 *{mv2_esc(user_name(usr, escape=False))}* ne group mein `{total_msgs}` messages complete kiye\\!\n"
+                f"🎉 *{mv2_esc(user_name(usr, escape=False))}* has sent `{total_msgs}` messages in the group\\!\n"
                 f"⭐ *\\+{REP_PER_THANK} Reputation Points* auto\\-earn hue\\! Total: `{new_rep}` rep",
                 parse_mode='MarkdownV2'
             )
@@ -5808,7 +5826,7 @@ async def _delayed_ai_check(ctx, msg, ch, usr, txt_for_ai, is_reply_to_bot, g_se
                 f"🎌 Anime: `{anime_name}`\n"
                 f"👤 User: {user_name(usr)}\n"
                 f"💬 Group: {group_name} (`{ch.id}`)\n\n"
-                f"_User ne search kiya lekin available nahi tha._",
+                f"_User searched for it but it wasn't available._",
                 parse_mode='Markdown'
             )
         except Exception:
@@ -5878,8 +5896,8 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if given_today >= 3:
             notice = await msg.reply_text(
                 f"💖 {user_name(usr)} ne thank you bola — but\n\n"
-                f"⚠️ *Isi bande ko aaj 3/3 baar thanks bol chuke ho!*\n"
-                f"Kal phir dena 😊 — _dusre members ko thanks bolna abhi bhi unlimited hai_.",
+                f"⚠️ *You've already thanked this person 3/3 times today!*\n"
+                f"Come back tomorrow 😊 — _thanking other members is still unlimited_.",
                 parse_mode='Markdown'
             )
             asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 60))
@@ -5911,16 +5929,16 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
 
         base_msg = (
-            f"💖 {mv2_esc(user_name(usr, escape=False))} ne {mv2_esc(user_name(target, escape=False))} ko thank you bola\\!\n\n"
+            f"💖 {mv2_esc(user_name(usr, escape=False))} said thank you to {mv2_esc(user_name(target, escape=False))}\\!\n\n"
             f"⭐ *\\+{REP_PER_THANK} Reputation Points* mil gaye\\!\n"
-            f"📊 Is group ka Rep: `{new_rep}` pts\n"
+            f"📊 This group's Rep: `{new_rep}` pts\n"
         )
         if warn_removed:
-            base_msg += f"✅ Bonus: ek warning bhi maaf ho gayi \\(100 rep kat gaye\\)\\!\n"
-        base_msg += f"🎯 Isi bande ko aaj aur de sakte ho: `{remaining}/3`\n"
+            base_msg += f"✅ Bonus: a warning was also cleared \\(100 rep deducted\\)\\!\n"
+        base_msg += f"🎯 You can still give this person: `{remaining}/3` today\n"
         if not is_accepted:
-            base_msg += f"_ℹ️ Yeh group Suhani Coin ke liye accepted nahi hai — rep sirf warn maaf karne ke kaam aayega\\._\n"
-        base_msg += f"{milestone_txt}\n\n_\\/rep karke apna wallet dekho\\!_"
+            base_msg += f"_ℹ️ This group isn't accepted for Suhani Coin — rep will only be usable to clear warnings\\._\n"
+        base_msg += f"{milestone_txt}\n\n_Check your wallet with \\/rep\\!_"
 
         notice = await msg.reply_text(base_msg, parse_mode='MarkdownV2')
         asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 60))
@@ -6047,7 +6065,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     anime_name = txt_for_ai.strip()
                     ai_result = {
                         "action": "REPLY",
-                        "reply": f"Bhai {user_name(usr)}, *{anime_name}* baar baar likhne se kuch nahi hoga 😄 Ye anime available hai toh group mein already pata hoga!"
+                        "reply": f"Hey {user_name(usr)}, typing *{anime_name}* over and over won't help 😄 If this anime is available, it'll already be known in the group!"
                     }
                 else:
                     # Provider bot ka update process hone ke liye background task mein bhejo
@@ -6087,7 +6105,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"🎌 Anime: `{anime_name}`\n"
                 f"👤 User: {user_name(usr)}\n"
                 f"💬 Group: {group_name} (`{ch.id}`)\n\n"
-                f"_User ne search kiya lekin available nahi tha._",
+                f"_User searched for it but it wasn't available._",
                 parse_mode='Markdown'
             )
         except Exception:
@@ -6108,10 +6126,10 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             if promo_count == 1:
                 notice = await ctx.bot.send_message(
                     ch.id,
-                    f"📚 {user_name(usr)} bhai/didi,\n\n"
-                    f"Aap ek teacher ho, toh aapki izzat karte hain 🙏\n"
-                    f"Lekin *promotional content* is group mein allowed nahi hai.\n\n"
-                    f"⚠️ Aage se ऐसा mat karna — agla baar mute hoga!",
+                    f"📚 Hey {user_name(usr)},\n\n"
+                    f"You're a teacher, so you get some respect here 🙏\n"
+                    f"But *promotional content* is not allowed in this group.\n\n"
+                    f"⚠️ Please don't do this again — next time you'll be muted!",
                     parse_mode='Markdown'
                 )
                 asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 90))
@@ -6126,9 +6144,9 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 notice = await ctx.bot.send_message(
                     ch.id,
                     f"📚 {user_name(usr)},\n\n"
-                    f"Promotion rule dobara tod di! 😤\n"
-                    f"🔇 *{mute_min} minutes* ke liye mute kar diya gaya hai.\n\n"
-                    f"_(Yeh {promo_count - 1}th repeat offense hai — mute duration bar bar badhega!)_",
+                    f"Broke the promotion rule again! 😤\n"
+                    f"🔇 Muted for *{mute_min} minutes*.\n\n"
+                    f"_(This is repeat offense #{promo_count - 1} — mute duration keeps increasing!)_",
                     parse_mode='Markdown'
                 )
                 asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 90))
@@ -6347,7 +6365,7 @@ def kb_settings_main(chat_id):
             InlineKeyboardButton("✅ Whitelist", callback_data="cfg_wl"),
         ],
         [
-            InlineKeyboardButton("🛡️ Filters", callback_data="cfg_filters"),
+            InlineKeyboardButton(f"🛡️ Filters ({_filters_status_line(chat_id)})", callback_data="cfg_filters"),
         ],
         [
             InlineKeyboardButton("📊 Rankings", callback_data="menu_rankings"),
@@ -6356,19 +6374,35 @@ def kb_settings_main(chat_id):
         [InlineKeyboardButton("❌ Close", callback_data="close_menu")],
     ])
 
+def _settings_overview_text(chat_id):
+    """/settings main panel ke liye chhota status overview — admin ko ek nazar mein
+    pata chal jaaye ki kya on/off hai, bina har button khole."""
+    g = db.get_group(chat_id)
+    stk = g.get("sticker_delete_min")
+    ad = g.get("autodelete_min")
+    bl_count = len(db.get_blacklist(chat_id) or [])
+    wl_count = len(db.get_whitelist(chat_id) or [])
+    return (
+        f"*⚙️ GROUP SETTINGS PANEL*\n"
+        f"{'─'*24}\n\n"
+        f"📌 *Quick Status*\n"
+        f"  🛡️ Filters: {_filters_status_line(chat_id)}\n"
+        f"  🗑️ Sticker auto-del: {'🟢 ' + _sec_human(stk) if stk else '🔴 Off'}\n"
+        f"  ⏱️ Msg auto-del: {'🟢 ' + _sec_human(ad) if ad else '🔴 Off'}\n"
+        f"  ⛔ Blacklist words: {bl_count}  •  ✅ Whitelist: {wl_count}\n"
+        f"{'─'*24}\n\n"
+        f"Manage your group settings with the buttons below 👇\n"
+        f"_Only Admins/Owner can use these buttons._"
+    )
+
 async def settings_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     u = update.effective_user
     if ch.type == "private":
-        return await update.message.reply_text("❌ Ye command sirf group me kaam karta hai!")
+        return await update.message.reply_text("❌ This command only works in groups!")
     if not await _cfg_is_authorized(ctx, ch.id, u.id):
-        return await update.message.reply_text("❌ Ye panel sirf group Admins/Owner use kar sakte hain!")
-    text = (
-        f"*⚙️ GROUP SETTINGS PANEL*\n"
-        f"{'─'*24}\n\n"
-        f"Neeche buttons se group ki settings manage karo 👇\n"
-        f"_Sirf Admins/Owner in buttons ko use kar sakte hain._"
-    )
+        return await update.message.reply_text("❌ This panel can only be used by group Admins/Owner!")
+    text = _settings_overview_text(ch.id)
     sent = await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb_settings_main(ch.id))
     _remember_menu_owner(ch.id, sent.message_id, u.id)
     schedule_panel_autodelete(ctx, ch.id, sent.message_id)
@@ -6378,16 +6412,24 @@ def kb_back_cfg():
 
 def kb_filters_grid(chat_id):
     filt = db.get_filters(chat_id)
-    keys = list(DEFAULT_FILTERS.keys())
     rows = []
-    for i in range(0, len(keys), 2):
-        row = []
-        for k in keys[i:i+2]:
-            icon = "✅" if filt.get(k) else "▫️"
-            row.append(InlineKeyboardButton(f"{icon} {FILTER_LABELS[k]}", callback_data=f"cfg_f_{k}"))
-        rows.append(row)
+    for group_label, keys in FILTER_GROUPS:
+        rows.append([InlineKeyboardButton(f"— {group_label} —", callback_data="cfg_noop")])
+        for i in range(0, len(keys), 2):
+            row = []
+            for k in keys[i:i+2]:
+                icon = "✅" if filt.get(k) else "▫️"
+                row.append(InlineKeyboardButton(f"{icon} {FILTER_LABELS[k]}", callback_data=f"cfg_f_{k}"))
+            rows.append(row)
     rows.append([InlineKeyboardButton("◀️ Back", callback_data="cfg_main")])
     return InlineKeyboardMarkup(rows)
+
+def _filters_status_line(chat_id):
+    """'12/17 ON' jaisi quick summary — filters panel ke header me dikhane ke liye."""
+    filt = db.get_filters(chat_id)
+    total = len(DEFAULT_FILTERS)
+    on = sum(1 for k in DEFAULT_FILTERS if filt.get(k))
+    return f"{on}/{total} filters ON"
 
 async def cfg_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data: str = None):
     query = update.callback_query
@@ -6401,7 +6443,7 @@ async def cfg_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data: str
         return
 
     if not _is_menu_owner(ch.id, query.message.message_id, u.id):
-        await query.answer("❌ Ye panel kisi aur ne khola tha — apna /settings chalao!", show_alert=True)
+        await query.answer("❌ This panel was opened by someone else — run your own /settings!", show_alert=True)
         return
 
     try:
@@ -6421,19 +6463,17 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
     if data == "cfg_main":
         SETTINGS_PENDING.pop((ch.id, u.id), None)
         await query.edit_message_text(
-            f"*⚙️ GROUP SETTINGS PANEL*\n{'─'*24}\n\n"
-            f"Neeche buttons se group ki settings manage karo 👇\n"
-            f"_Sirf Admins/Owner in buttons ko use kar sakte hain._",
+            _settings_overview_text(ch.id),
             parse_mode='Markdown', reply_markup=kb_settings_main(ch.id)
         )
         return
 
     # ── Rules ──
     if data == "cfg_rules":
-        rules = db.get_rules(ch.id) or "_(default rules use ho rahe hain)_"
+        rules = db.get_rules(ch.id) or "_(using default rules)_"
         await query.edit_message_text(
             f"*📜 GROUP RULES*\n{'─'*24}\n\n{rules}\n\n"
-            f"_Naya rule set karne ke liye niche button dabao aur apna message bhejo._",
+            f"_To set a new rule, tap the button below and send your message._",
             parse_mode='Markdown',
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("✏️ Set New Rules", callback_data="cfg_rules_set")],
@@ -6445,7 +6485,7 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
     if data == "cfg_rules_set":
         SETTINGS_PENDING[(ch.id, u.id)] = {"action": "rules", "panel_msg_id": query.message.message_id}
         await query.edit_message_text(
-            "✏️ *Naye rules type karke bhejo* (agla message):",
+            "✏️ *Type and send the new rules* (next message):",
             parse_mode='Markdown', reply_markup=kb_back_cfg()
         )
         return
@@ -6457,7 +6497,7 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
         await query.edit_message_text(
             f"*🗑️ STICKER AUTO-DELETE*\n{'─'*24}\n\n"
             f"Status: {'🟢 ON — ' + str(stk) + ' min' if stk else '🔴 OFF'}\n\n"
-            f"_Sticker/GIF is duration ke baad auto-delete honge._",
+            f"_Stickers/GIFs will auto-delete after this duration._",
             parse_mode='Markdown',
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔴 Turn OFF" if stk else "🟢 Turn ON", callback_data="cfg_stkdel_toggle")],
@@ -6479,7 +6519,7 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
     if data == "cfg_stkdel_set":
         SETTINGS_PENDING[(ch.id, u.id)] = {"action": "stkdel_min", "panel_msg_id": query.message.message_id}
         await query.edit_message_text(
-            "✏️ *Kitne minutes baad sticker/GIF delete ho?* (number bhejo, e.g. `5`):",
+            "✏️ *After how many minutes should stickers/GIFs be deleted?* (send a number, e.g. `5`):",
             parse_mode='Markdown', reply_markup=kb_back_cfg()
         )
         return
@@ -6491,7 +6531,7 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
         await query.edit_message_text(
             f"*⏱️ AUTO-DELETE MESSAGES*\n{'─'*24}\n\n"
             f"Status: {'🟢 ON — ' + str(ad) + ' min' if ad else '🔴 OFF'}\n\n"
-            f"_Normal messages is duration ke baad auto-delete honge._",
+            f"_Normal messages will auto-delete after this duration._",
             parse_mode='Markdown',
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔴 Turn OFF" if ad else "🟢 Turn ON", callback_data="cfg_autodel_toggle")],
@@ -6513,7 +6553,7 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
     if data == "cfg_autodel_set":
         SETTINGS_PENDING[(ch.id, u.id)] = {"action": "autodel_min", "panel_msg_id": query.message.message_id}
         await query.edit_message_text(
-            "✏️ *Kitne minutes baad normal messages delete ho?* (number bhejo, e.g. `10`):",
+            "✏️ *After how many minutes should normal messages be deleted?* (send a number, e.g. `10`):",
             parse_mode='Markdown', reply_markup=kb_back_cfg()
         )
         return
@@ -6527,7 +6567,7 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
             f"🟠 W2: `{_sec_human(wd[2])}`\n"
             f"🔴 W3: `{_sec_human(wd[3])}`\n"
             f"💀 W4: `{_sec_human(wd[4])}` _(global mute)_\n\n"
-            f"_Edit karne ke liye stage select karo:_",
+            f"_Select a stage to edit:_",
             parse_mode='Markdown',
             reply_markup=InlineKeyboardMarkup([
                 [
@@ -6547,7 +6587,7 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
         stage = int(data.split("_")[-1])
         SETTINGS_PENDING[(ch.id, u.id)] = {"action": "warndur", "extra": stage, "panel_msg_id": query.message.message_id}
         await query.edit_message_text(
-            f"✏️ *W{stage} ke liye seconds bhejo* (e.g. `60`):",
+            f"✏️ *Send seconds for W{stage}* (e.g. `60`):",
             parse_mode='Markdown', reply_markup=kb_back_cfg()
         )
         return
@@ -6559,7 +6599,7 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
         await query.edit_message_text(
             f"*⛔ GROUP BLACKLIST*\n{'─'*24}\n\n"
             f"Words: {preview}\n\n"
-            f"_Owner ke global blacklist words bhi is group ke liye disable kar sakte ho._",
+            f"_You can also disable the owner's global blacklist words for this group._",
             parse_mode='Markdown',
             reply_markup=InlineKeyboardMarkup([
                 [
@@ -6574,12 +6614,12 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
 
     if data == "cfg_bl_add":
         SETTINGS_PENDING[(ch.id, u.id)] = {"action": "bl_add", "panel_msg_id": query.message.message_id}
-        await query.edit_message_text("✏️ *Blacklist me add karne wala word bhejo:*", parse_mode='Markdown', reply_markup=kb_back_cfg())
+        await query.edit_message_text("✏️ *Send the word to add to the blacklist:*", parse_mode='Markdown', reply_markup=kb_back_cfg())
         return
 
     if data == "cfg_bl_rem":
         SETTINGS_PENDING[(ch.id, u.id)] = {"action": "bl_rem", "panel_msg_id": query.message.message_id}
-        await query.edit_message_text("✏️ *Blacklist se hatane wala word bhejo:*", parse_mode='Markdown', reply_markup=kb_back_cfg())
+        await query.edit_message_text("✏️ *Send the word to remove from the blacklist:*", parse_mode='Markdown', reply_markup=kb_back_cfg())
         return
 
     if data == "cfg_bl_g":
@@ -6587,7 +6627,7 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
         disabled = set(db.get_disabled_gwords(ch.id))
         if not gwords:
             await query.edit_message_text(
-                "🌐 *Owner ne abhi koi global blacklist word set nahi kiya.*",
+                "🌐 *Owner hasn't set any global blacklist word yet.*",
                 parse_mode='Markdown', reply_markup=kb_back_cfg()
             )
             return
@@ -6598,7 +6638,7 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
         rows.append([InlineKeyboardButton("◀️ Back", callback_data="cfg_bl")])
         await query.edit_message_text(
             f"*🌐 GLOBAL BLACKLIST WORDS*\n{'─'*24}\n\n"
-            f"_Tap karke apne group ke liye ON/OFF karo (global list nahi badlegi, sirf tumhare group me effect):_",
+            f"_Tap to turn ON/OFF for your group (the global list itself won't change, only your group is affected):_",
             parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(rows)
         )
         return
@@ -6620,7 +6660,7 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
         await query.edit_message_text(
             f"*✅ GROUP WHITELIST*\n{'─'*24}\n\n"
             f"Words: {preview}\n\n"
-            f"_Owner ke global whitelist words bhi is group ke liye disable kar sakte ho._",
+            f"_You can also disable the owner's global whitelist words for this group._",
             parse_mode='Markdown',
             reply_markup=InlineKeyboardMarkup([
                 [
@@ -6635,12 +6675,12 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
 
     if data == "cfg_wl_add":
         SETTINGS_PENDING[(ch.id, u.id)] = {"action": "wl_add", "panel_msg_id": query.message.message_id}
-        await query.edit_message_text("✏️ *Whitelist me add karne wala word bhejo:*", parse_mode='Markdown', reply_markup=kb_back_cfg())
+        await query.edit_message_text("✏️ *Send the word to add to the whitelist:*", parse_mode='Markdown', reply_markup=kb_back_cfg())
         return
 
     if data == "cfg_wl_rem":
         SETTINGS_PENDING[(ch.id, u.id)] = {"action": "wl_rem", "panel_msg_id": query.message.message_id}
-        await query.edit_message_text("✏️ *Whitelist se hatane wala word bhejo:*", parse_mode='Markdown', reply_markup=kb_back_cfg())
+        await query.edit_message_text("✏️ *Send the word to remove from the whitelist:*", parse_mode='Markdown', reply_markup=kb_back_cfg())
         return
 
     if data == "cfg_wl_g":
@@ -6648,7 +6688,7 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
         disabled = set(db.get_disabled_gwhite(ch.id))
         if not gwords:
             await query.edit_message_text(
-                "🌐 *Owner ne abhi koi global whitelist word set nahi kiya.*",
+                "🌐 *Owner hasn't set any global whitelist word yet.*",
                 parse_mode='Markdown', reply_markup=kb_back_cfg()
             )
             return
@@ -6659,7 +6699,7 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
         rows.append([InlineKeyboardButton("◀️ Back", callback_data="cfg_wl")])
         await query.edit_message_text(
             f"*🌐 GLOBAL WHITELIST WORDS*\n{'─'*24}\n\n"
-            f"_Tap karke apne group ke liye ON/OFF karo:_",
+            f"_Tap to turn ON/OFF for your group:_",
             parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(rows)
         )
         return
@@ -6675,10 +6715,14 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
         return
 
     # ── Filters grid ──
+    if data == "cfg_noop":
+        return
+
     if data == "cfg_filters":
         await query.edit_message_text(
-            f"*🛡️ FILTERS*\n{'─'*24}\n\n"
-            f"✅ = ON, ▫️ = OFF — tap karke turant toggle karo:",
+            f"*🛡️ FILTERS — {_filters_status_line(ch.id)}*\n{'─'*24}\n\n"
+            f"✅ = ON     ▫️ = OFF\n"
+            f"_Tap any filter — it toggles ON/OFF instantly._",
             parse_mode='Markdown', reply_markup=kb_filters_grid(ch.id)
         )
         return
@@ -6688,9 +6732,15 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
         if key in DEFAULT_FILTERS:
             cur = db.get_filters(ch.id).get(key)
             db.set_filter(ch.id, key, not cur)
+            state = "🟢 ON" if not cur else "🔴 OFF"
+            try:
+                await query.answer(f"{FILTER_LABELS.get(key, key)} → {state}")
+            except Exception:
+                pass
         await query.edit_message_text(
-            f"*🛡️ FILTERS*\n{'─'*24}\n\n"
-            f"✅ = ON, ▫️ = OFF — tap karke turant toggle karo:",
+            f"*🛡️ FILTERS — {_filters_status_line(ch.id)}*\n{'─'*24}\n\n"
+            f"✅ = ON     ▫️ = OFF\n"
+            f"_Tap any filter — it toggles ON/OFF instantly._",
             parse_mode='Markdown', reply_markup=kb_filters_grid(ch.id)
         )
         return
@@ -6728,14 +6778,14 @@ async def handle_settings_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE, 
     elif action == "stkdel_min":
         n = _int_or_none(text)
         if n is None or n <= 0:
-            reply = "❌ Valid number bhejo (e.g. `5`)."
+            reply = "❌ Send a valid number (e.g. `5`)."
         else:
             db.update_group(ch_id, {"sticker_delete_min": n})
             reply = f"✅ *Sticker auto-delete set to {n} min!*"
     elif action == "autodel_min":
         n = _int_or_none(text)
         if n is None or n <= 0:
-            reply = "❌ Valid number bhejo (e.g. `10`)."
+            reply = "❌ Send a valid number (e.g. `10`)."
         else:
             db.update_group(ch_id, {"autodelete_min": n})
             reply = f"✅ *Auto-delete set to {n} min!*"
@@ -6743,30 +6793,30 @@ async def handle_settings_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE, 
         n = _int_or_none(text)
         stage = pending.get("extra")
         if n is None or n <= 0:
-            reply = "❌ Valid seconds bhejo (e.g. `60`)."
+            reply = "❌ Send a valid number of seconds (e.g. `60`)."
         else:
             db.set_warn_duration(ch_id, stage, n)
             reply = f"✅ *W{stage} duration set to {_sec_human(n)}!*"
     elif action == "bl_add":
         if text:
             db.add_blacklist(ch_id, text.split()[0])
-            reply = f"✅ *'{text.split()[0]}' blacklist me add ho gaya!*"
+            reply = f"✅ *'{text.split()[0]}' added to the blacklist!*"
     elif action == "bl_rem":
         if text:
             db.remove_blacklist(ch_id, text.split()[0])
-            reply = f"✅ *'{text.split()[0]}' blacklist se hata diya!*"
+            reply = f"✅ *'{text.split()[0]}' removed from the blacklist!*"
     elif action == "wl_add":
         if text:
             db.add_whitelist(ch_id, text.split()[0])
-            reply = f"✅ *'{text.split()[0]}' whitelist me add ho gaya!*"
+            reply = f"✅ *'{text.split()[0]}' added to the whitelist!*"
     elif action == "wl_rem":
         if text:
             db.remove_whitelist(ch_id, text.split()[0])
-            reply = f"✅ *'{text.split()[0]}' whitelist se hata diya!*"
+            reply = f"✅ *'{text.split()[0]}' removed from the whitelist!*"
 
     SETTINGS_PENDING.pop(key, None)
     if reply is None:
-        reply = "❌ Kuch galat ho gaya, dobara /settings try karo."
+        reply = "❌ Something went wrong, try /settings again."
 
     panel_msg_id = pending.get("panel_msg_id")
     back_kb = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back to Settings", callback_data="cfg_main")]])
@@ -6941,7 +6991,7 @@ def main():
     if app.job_queue:
         app.job_queue.run_daily(daily_global_winner_job, time=dtime(hour=0, minute=5))
     else:
-        print("⚠️ job_queue unavailable — 'python-telegram-bot[job-queue]' install karo daily reward ke liye.")
+        print("⚠️ job_queue unavailable — install 'python-telegram-bot[job-queue]' for daily rewards.")
 
     print("✅ Bot Started! Polling...")
     app.run_polling(drop_pending_updates=True)
