@@ -1331,6 +1331,23 @@ async def edit_colored_message(chat_id: int, message_id: int, text: str, keyboar
     return False
 
 
+def _rows_to_markup(keyboard_rows: list) -> InlineKeyboardMarkup:
+    """Colored dict-rows ({'text','callback_data'/'url','style'}) ko plain
+    InlineKeyboardMarkup mein convert karta hai — edit_colored_message/
+    send_colored_message fail ho jaaye (jaise Bot API colored buttons na
+    support kare) to yehi fallback keyboard use hota hai."""
+    kb = []
+    for row in keyboard_rows:
+        line = []
+        for btn in row:
+            if "url" in btn:
+                line.append(InlineKeyboardButton(btn["text"], url=btn["url"]))
+            else:
+                line.append(InlineKeyboardButton(btn["text"], callback_data=btn.get("callback_data", "cfg_noop")))
+        kb.append(line)
+    return InlineKeyboardMarkup(kb)
+
+
 # ═══════════════════════════════════════════════════════════
 #  HELPERS
 # ═══════════════════════════════════════════════════════════
@@ -2335,11 +2352,7 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             return
         await query.answer()
         _remember_menu_owner(ch_id, query.message.message_id, query.from_user.id)
-        await query.edit_message_text(
-            _settings_overview_text(ch_id),
-            reply_markup=kb_settings_main(ch_id),
-            parse_mode='Markdown'
-        )
+        await _cfg_edit(query, ch_id, _settings_overview_text(ch_id), kb_settings_main(ch_id))
         return
 
     elif data == "menu_warns":
@@ -5571,6 +5584,10 @@ async def on_leave(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ═══════════════════════════════════════════════════════════
 #  ⚙️  /settings PANEL — Admin/Owner button-based control panel
+#  Colored buttons (🟢 success / 🔵 primary / 🔴 danger) — same
+#  Bot API "style" trick jo main menu (ckb_main_menu) use karta hai.
+#  Agar colored-button API call fail ho jaaye (rare), fallback
+#  turant plain grey InlineKeyboardMarkup pe ho jaata hai (_rows_to_markup).
 # ═══════════════════════════════════════════════════════════
 # (chat_id, user_id) -> {"action": str, "extra": any, "panel_msg_id": int}
 SETTINGS_PENDING = {}
@@ -5592,6 +5609,13 @@ async def _cfg_is_authorized(ctx, chat_id, user_id) -> bool:
         return True
     return await is_adm(ctx, chat_id, user_id)
 
+async def _cfg_edit(query, chat_id, text, rows, parse_mode='Markdown'):
+    """Colored-button edit — Bot API 'style' trick fail ho to turant plain
+    grey buttons pe fallback (user ko kabhi error/blank screen nahi dikhta)."""
+    ok = await edit_colored_message(chat_id, query.message.message_id, text, rows, parse_mode=parse_mode)
+    if not ok:
+        await query.edit_message_text(text, parse_mode=parse_mode, reply_markup=_rows_to_markup(rows))
+
 def kb_settings_main(chat_id):
     g = db.get_group(chat_id)
     stk = g.get("sticker_delete_min")
@@ -5599,28 +5623,33 @@ def kb_settings_main(chat_id):
     captcha_on = bool(g.get("captcha"))
     bl_count = len(db.get_blacklist(chat_id) or [])
     wl_count = len(db.get_whitelist(chat_id) or [])
-    return InlineKeyboardMarkup([
+    return [
         [
-            InlineKeyboardButton("📜 Rules", callback_data="cfg_rules"),
-            InlineKeyboardButton(f"🗑️ Sticker Del {ICON_ON if stk else ICON_OFF}", callback_data="cfg_stkdel"),
+            {"text": "📜 Rules", "callback_data": "cfg_rules", "style": "primary"},
+            {"text": f"🗑️ Sticker Del {ICON_ON if stk else ICON_OFF}", "callback_data": "cfg_stkdel",
+             "style": "success" if stk else "danger"},
         ],
         [
-            InlineKeyboardButton(f"⏱️ Auto-Delete {ICON_ON if ad else ICON_OFF}", callback_data="cfg_autodel"),
-            InlineKeyboardButton("⚠️ Warn Durations", callback_data="cfg_warndur"),
+            {"text": f"⏱️ Auto-Delete {ICON_ON if ad else ICON_OFF}", "callback_data": "cfg_autodel",
+             "style": "success" if ad else "danger"},
+            {"text": "⚠️ Warn Durations", "callback_data": "cfg_warndur", "style": "primary"},
         ],
         [
-            InlineKeyboardButton(f"⛔ Blacklist {ICON_ON if bl_count else ICON_OFF}", callback_data="cfg_bl"),
-            InlineKeyboardButton(f"✅ Whitelist {ICON_ON if wl_count else ICON_OFF}", callback_data="cfg_wl"),
+            {"text": f"⛔ Blacklist {ICON_ON if bl_count else ICON_OFF}", "callback_data": "cfg_bl",
+             "style": "success" if bl_count else "danger"},
+            {"text": f"✅ Whitelist {ICON_ON if wl_count else ICON_OFF}", "callback_data": "cfg_wl",
+             "style": "success" if wl_count else "danger"},
         ],
         [
-            InlineKeyboardButton(f"🛡️ Filters ({_filters_status_line(chat_id)})", callback_data="cfg_filters"),
+            {"text": f"🛡️ Filters ({_filters_status_line(chat_id)})", "callback_data": "cfg_filters", "style": "primary"},
         ],
         [
-            InlineKeyboardButton(f"🎭 Captcha {ICON_ON if captcha_on else ICON_OFF}", callback_data="cfg_captcha"),
-            InlineKeyboardButton("🏆 Reputation", callback_data="menu_repboard"),
+            {"text": f"🎭 Captcha {ICON_ON if captcha_on else ICON_OFF}", "callback_data": "cfg_captcha",
+             "style": "success" if captcha_on else "danger"},
+            {"text": "🏆 Reputation", "callback_data": "menu_repboard", "style": "primary"},
         ],
-        [InlineKeyboardButton("❌ Close", callback_data="close_menu")],
-    ])
+        [{"text": "❌ Close", "callback_data": "close_menu", "style": "danger"}],
+    ]
 
 def _settings_overview_text(chat_id):
     """/settings main panel ke liye chhota status overview — admin ko ek nazar mein
@@ -5653,26 +5682,36 @@ async def settings_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await _cfg_is_authorized(ctx, ch.id, u.id):
         return await update.message.reply_text("❌ This panel can only be used by group Admins/Owner!")
     text = _settings_overview_text(ch.id)
-    sent = await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb_settings_main(ch.id))
-    _remember_menu_owner(ch.id, sent.message_id, u.id)
-    schedule_panel_autodelete(ctx, ch.id, sent.message_id, cmd_msg_id=update.message.message_id)
+    rows = kb_settings_main(ch.id)
+    msg_id = await send_colored_message(ch.id, text, rows, parse_mode='Markdown')
+    if not msg_id:
+        sent = await update.message.reply_text(text, parse_mode='Markdown', reply_markup=_rows_to_markup(rows))
+        msg_id = sent.message_id
+    _remember_menu_owner(ch.id, msg_id, u.id)
+    schedule_panel_autodelete(ctx, ch.id, msg_id, cmd_msg_id=update.message.message_id)
+
+def rows_back_cfg():
+    return [[{"text": "◀️ Back", "callback_data": "cfg_main", "style": "primary"}]]
 
 def kb_back_cfg():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="cfg_main")]])
+    """Fallback ke liye plain-markup version (legacy call-sites)."""
+    return _rows_to_markup(rows_back_cfg())
 
 def kb_filters_grid(chat_id):
     filt = db.get_filters(chat_id)
     rows = []
     for group_label, keys in FILTER_GROUPS:
-        rows.append([InlineKeyboardButton(f"— {group_label} —", callback_data="cfg_noop")])
+        rows.append([{"text": f"— {group_label} —", "callback_data": "cfg_noop"}])
         for i in range(0, len(keys), 2):
             row = []
             for k in keys[i:i+2]:
-                icon = "✅" if filt.get(k) else "▫️"
-                row.append(InlineKeyboardButton(f"{icon} {FILTER_LABELS[k]}", callback_data=f"cfg_f_{k}"))
+                on = bool(filt.get(k))
+                icon = "✅" if on else "▫️"
+                row.append({"text": f"{icon} {FILTER_LABELS[k]}", "callback_data": f"cfg_f_{k}",
+                            "style": "success" if on else "danger"})
             rows.append(row)
-    rows.append([InlineKeyboardButton("◀️ Back", callback_data="cfg_main")])
-    return InlineKeyboardMarkup(rows)
+    rows.append([{"text": "◀️ Back", "callback_data": "cfg_main", "style": "primary"}])
+    return rows
 
 def _filters_status_line(chat_id):
     """'12/17 ON' jaisi quick summary — filters panel ke header me dikhane ke liye."""
@@ -5688,18 +5727,32 @@ async def cfg_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data: str
     ch = update.effective_chat
     u = query.from_user
 
-    if not await _cfg_is_authorized(ctx, ch.id, u.id):
-        await query.answer("❌ Admins/Owner only!", show_alert=True)
-        return
-
-    if not _is_menu_owner(ch.id, query.message.message_id, u.id):
-        await query.answer("❌ This panel was opened by someone else — run your own /settings!", show_alert=True)
-        return
-
+    # Sabse pehle ACK karo — button ka loading-spinner turant hat jaata hai.
+    # Authorization checks iske BAAD hote hain (pehle is_adm() jaisi network
+    # call ke baad answer() karne se click ka reaction late lagta tha).
     try:
         await query.answer()
     except Exception:
         pass
+
+    if not _is_menu_owner(ch.id, query.message.message_id, u.id):
+        try:
+            await ctx.bot.send_message(
+                ch.id, "❌ This panel was opened by someone else — run your own /settings!",
+                reply_to_message_id=query.message.message_id
+            )
+        except Exception:
+            pass
+        return
+
+    if not await _cfg_is_authorized(ctx, ch.id, u.id):
+        try:
+            await ctx.bot.send_message(
+                ch.id, "❌ Admins/Owner only!", reply_to_message_id=query.message.message_id
+            )
+        except Exception:
+            pass
+        return
 
     try:
         await _cfg_callback_body(update, ctx, data, query, ch, u)
@@ -5712,48 +5765,43 @@ async def cfg_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data: str
 async def _cfg_callback_body(update, ctx, data, query, ch, u):
     if data == "cfg_main":
         SETTINGS_PENDING.pop((ch.id, u.id), None)
-        await query.edit_message_text(
-            _settings_overview_text(ch.id),
-            parse_mode='Markdown', reply_markup=kb_settings_main(ch.id)
-        )
+        await _cfg_edit(query, ch.id, _settings_overview_text(ch.id), kb_settings_main(ch.id))
         return
 
     # ── Rules ──
     if data == "cfg_rules":
         rules = db.get_rules(ch.id) or "_(using default rules)_"
-        await query.edit_message_text(
+        await _cfg_edit(
+            query, ch.id,
             f"*📜 GROUP RULES*\n{'─'*24}\n\n{rules}\n\n"
             f"_To set a new rule, tap the button below and send your message._",
-            parse_mode='Markdown',
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✏️ Set New Rules", callback_data="cfg_rules_set")],
-                [InlineKeyboardButton("◀️ Back", callback_data="cfg_main")],
-            ])
+            [
+                [{"text": "✏️ Set New Rules", "callback_data": "cfg_rules_set", "style": "primary"}],
+                [{"text": "◀️ Back", "callback_data": "cfg_main", "style": "primary"}],
+            ]
         )
         return
 
     if data == "cfg_rules_set":
         SETTINGS_PENDING[(ch.id, u.id)] = {"action": "rules", "panel_msg_id": query.message.message_id}
-        await query.edit_message_text(
-            "✏️ *Type and send the new rules* (next message):",
-            parse_mode='Markdown', reply_markup=kb_back_cfg()
-        )
+        await _cfg_edit(query, ch.id, "✏️ *Type and send the new rules* (next message):", rows_back_cfg())
         return
 
     # ── Sticker auto-delete ──
     if data == "cfg_stkdel":
         g = db.get_group(ch.id)
         stk = g.get("sticker_delete_min")
-        await query.edit_message_text(
+        await _cfg_edit(
+            query, ch.id,
             f"*🗑️ STICKER AUTO-DELETE*\n{'─'*24}\n\n"
             f"Status: {'🟢 ON — ' + str(stk) + ' min' if stk else '🔴 OFF'}\n\n"
             f"_Stickers/GIFs will auto-delete after this duration._",
-            parse_mode='Markdown',
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔴 Turn OFF" if stk else "🟢 Turn ON", callback_data="cfg_stkdel_toggle")],
-                [InlineKeyboardButton("✏️ Set Minutes", callback_data="cfg_stkdel_set")],
-                [InlineKeyboardButton("◀️ Back", callback_data="cfg_main")],
-            ])
+            [
+                [{"text": "🔴 Turn OFF" if stk else "🟢 Turn ON", "callback_data": "cfg_stkdel_toggle",
+                  "style": "danger" if stk else "success"}],
+                [{"text": "✏️ Set Minutes", "callback_data": "cfg_stkdel_set", "style": "primary"}],
+                [{"text": "◀️ Back", "callback_data": "cfg_main", "style": "primary"}],
+            ]
         )
         return
 
@@ -5768,9 +5816,10 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
 
     if data == "cfg_stkdel_set":
         SETTINGS_PENDING[(ch.id, u.id)] = {"action": "stkdel_min", "panel_msg_id": query.message.message_id}
-        await query.edit_message_text(
+        await _cfg_edit(
+            query, ch.id,
             "✏️ *After how many minutes should stickers/GIFs be deleted?* (send a number, e.g. `5`):",
-            parse_mode='Markdown', reply_markup=kb_back_cfg()
+            rows_back_cfg()
         )
         return
 
@@ -5778,16 +5827,17 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
     if data == "cfg_autodel":
         g = db.get_group(ch.id)
         ad = g.get("autodelete_min")
-        await query.edit_message_text(
+        await _cfg_edit(
+            query, ch.id,
             f"*⏱️ AUTO-DELETE MESSAGES*\n{'─'*24}\n\n"
             f"Status: {'🟢 ON — ' + str(ad) + ' min' if ad else '🔴 OFF'}\n\n"
             f"_Normal messages will auto-delete after this duration._",
-            parse_mode='Markdown',
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔴 Turn OFF" if ad else "🟢 Turn ON", callback_data="cfg_autodel_toggle")],
-                [InlineKeyboardButton("✏️ Set Minutes", callback_data="cfg_autodel_set")],
-                [InlineKeyboardButton("◀️ Back", callback_data="cfg_main")],
-            ])
+            [
+                [{"text": "🔴 Turn OFF" if ad else "🟢 Turn ON", "callback_data": "cfg_autodel_toggle",
+                  "style": "danger" if ad else "success"}],
+                [{"text": "✏️ Set Minutes", "callback_data": "cfg_autodel_set", "style": "primary"}],
+                [{"text": "◀️ Back", "callback_data": "cfg_main", "style": "primary"}],
+            ]
         )
         return
 
@@ -5802,94 +5852,92 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
 
     if data == "cfg_autodel_set":
         SETTINGS_PENDING[(ch.id, u.id)] = {"action": "autodel_min", "panel_msg_id": query.message.message_id}
-        await query.edit_message_text(
+        await _cfg_edit(
+            query, ch.id,
             "✏️ *After how many minutes should normal messages be deleted?* (send a number, e.g. `10`):",
-            parse_mode='Markdown', reply_markup=kb_back_cfg()
+            rows_back_cfg()
         )
         return
 
     # ── Warn durations ──
     if data == "cfg_warndur":
         wd = db.get_warn_durations(ch.id)
-        await query.edit_message_text(
+        await _cfg_edit(
+            query, ch.id,
             f"*⚠️ WARN → MUTE DURATIONS*\n{'─'*24}\n\n"
             f"🟡 W1: `{_sec_human(wd[1])}`\n"
             f"🟠 W2: `{_sec_human(wd[2])}`\n"
             f"🔴 W3: `{_sec_human(wd[3])}`\n"
             f"💀 W4: `{_sec_human(wd[4])}` _(global mute)_\n\n"
             f"_Select a stage to edit:_",
-            parse_mode='Markdown',
-            reply_markup=InlineKeyboardMarkup([
+            [
                 [
-                    InlineKeyboardButton("W1 ✏️", callback_data="cfg_wd_1"),
-                    InlineKeyboardButton("W2 ✏️", callback_data="cfg_wd_2"),
+                    {"text": "W1 ✏️", "callback_data": "cfg_wd_1", "style": "primary"},
+                    {"text": "W2 ✏️", "callback_data": "cfg_wd_2", "style": "primary"},
                 ],
                 [
-                    InlineKeyboardButton("W3 ✏️", callback_data="cfg_wd_3"),
-                    InlineKeyboardButton("W4 ✏️", callback_data="cfg_wd_4"),
+                    {"text": "W3 ✏️", "callback_data": "cfg_wd_3", "style": "primary"},
+                    {"text": "W4 ✏️", "callback_data": "cfg_wd_4", "style": "primary"},
                 ],
-                [InlineKeyboardButton("◀️ Back", callback_data="cfg_main")],
-            ])
+                [{"text": "◀️ Back", "callback_data": "cfg_main", "style": "primary"}],
+            ]
         )
         return
 
     if data.startswith("cfg_wd_"):
         stage = int(data.split("_")[-1])
         SETTINGS_PENDING[(ch.id, u.id)] = {"action": "warndur", "extra": stage, "panel_msg_id": query.message.message_id}
-        await query.edit_message_text(
-            f"✏️ *Send seconds for W{stage}* (e.g. `60`):",
-            parse_mode='Markdown', reply_markup=kb_back_cfg()
-        )
+        await _cfg_edit(query, ch.id, f"✏️ *Send seconds for W{stage}* (e.g. `60`):", rows_back_cfg())
         return
 
     # ── Blacklist ──
     if data == "cfg_bl":
         words = db.get_blacklist(ch.id)
         preview = ", ".join(words[:15]) if words else "_(khaali)_"
-        await query.edit_message_text(
+        await _cfg_edit(
+            query, ch.id,
             f"*⛔ GROUP BLACKLIST*\n{'─'*24}\n\n"
             f"Words: {preview}\n\n"
             f"_You can also disable the owner's global blacklist words for this group._",
-            parse_mode='Markdown',
-            reply_markup=InlineKeyboardMarkup([
+            [
                 [
-                    InlineKeyboardButton("➕ Add Word", callback_data="cfg_bl_add"),
-                    InlineKeyboardButton("➖ Remove Word", callback_data="cfg_bl_rem"),
+                    {"text": "➕ Add Word", "callback_data": "cfg_bl_add", "style": "success"},
+                    {"text": "➖ Remove Word", "callback_data": "cfg_bl_rem", "style": "danger"},
                 ],
-                [InlineKeyboardButton("🌐 Global Words (owner set)", callback_data="cfg_bl_g")],
-                [InlineKeyboardButton("◀️ Back", callback_data="cfg_main")],
-            ])
+                [{"text": "🌐 Global Words (owner set)", "callback_data": "cfg_bl_g", "style": "primary"}],
+                [{"text": "◀️ Back", "callback_data": "cfg_main", "style": "primary"}],
+            ]
         )
         return
 
     if data == "cfg_bl_add":
         SETTINGS_PENDING[(ch.id, u.id)] = {"action": "bl_add", "panel_msg_id": query.message.message_id}
-        await query.edit_message_text("✏️ *Send the word to add to the blacklist:*", parse_mode='Markdown', reply_markup=kb_back_cfg())
+        await _cfg_edit(query, ch.id, "✏️ *Send the word to add to the blacklist:*", rows_back_cfg())
         return
 
     if data == "cfg_bl_rem":
         SETTINGS_PENDING[(ch.id, u.id)] = {"action": "bl_rem", "panel_msg_id": query.message.message_id}
-        await query.edit_message_text("✏️ *Send the word to remove from the blacklist:*", parse_mode='Markdown', reply_markup=kb_back_cfg())
+        await _cfg_edit(query, ch.id, "✏️ *Send the word to remove from the blacklist:*", rows_back_cfg())
         return
 
     if data == "cfg_bl_g":
         gwords = db.get_gblacklist()
         disabled = set(db.get_disabled_gwords(ch.id))
         if not gwords:
-            await query.edit_message_text(
-                "🌐 *Owner hasn't set any global blacklist word yet.*",
-                parse_mode='Markdown', reply_markup=kb_back_cfg()
-            )
+            await _cfg_edit(query, ch.id, "🌐 *Owner hasn't set any global blacklist word yet.*", rows_back_cfg())
             return
         rows = []
         for w in gwords[:20]:
-            icon = "🔴 OFF" if w in disabled else "🟢 ON"
-            rows.append([InlineKeyboardButton(f"{icon} — {w}", callback_data=f"cfg_bl_gt_{w[:45]}")])
-        rows.append([InlineKeyboardButton("◀️ Back", callback_data="cfg_bl")])
-        await query.edit_message_text(
+            off = w in disabled
+            icon = "🔴 OFF" if off else "🟢 ON"
+            rows.append([{"text": f"{icon} — {w}", "callback_data": f"cfg_bl_gt_{w[:45]}",
+                          "style": "danger" if off else "success"}])
+        rows.append([{"text": "◀️ Back", "callback_data": "cfg_bl", "style": "primary"}])
+        await _cfg_edit(
+            query, ch.id,
             f"*🌐 GLOBAL BLACKLIST WORDS*\n{'─'*24}\n\n"
             f"_Tap to turn ON/OFF for your group (the global list itself won't change, only your group is affected):_",
-            parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(rows)
+            rows
         )
         return
 
@@ -5907,50 +5955,50 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
     if data == "cfg_wl":
         words = db.get_whitelist(ch.id)
         preview = ", ".join(words[:15]) if words else "_(khaali)_"
-        await query.edit_message_text(
+        await _cfg_edit(
+            query, ch.id,
             f"*✅ GROUP WHITELIST*\n{'─'*24}\n\n"
             f"Words: {preview}\n\n"
             f"_You can also disable the owner's global whitelist words for this group._",
-            parse_mode='Markdown',
-            reply_markup=InlineKeyboardMarkup([
+            [
                 [
-                    InlineKeyboardButton("➕ Add Word", callback_data="cfg_wl_add"),
-                    InlineKeyboardButton("➖ Remove Word", callback_data="cfg_wl_rem"),
+                    {"text": "➕ Add Word", "callback_data": "cfg_wl_add", "style": "success"},
+                    {"text": "➖ Remove Word", "callback_data": "cfg_wl_rem", "style": "danger"},
                 ],
-                [InlineKeyboardButton("🌐 Global Words (owner set)", callback_data="cfg_wl_g")],
-                [InlineKeyboardButton("◀️ Back", callback_data="cfg_main")],
-            ])
+                [{"text": "🌐 Global Words (owner set)", "callback_data": "cfg_wl_g", "style": "primary"}],
+                [{"text": "◀️ Back", "callback_data": "cfg_main", "style": "primary"}],
+            ]
         )
         return
 
     if data == "cfg_wl_add":
         SETTINGS_PENDING[(ch.id, u.id)] = {"action": "wl_add", "panel_msg_id": query.message.message_id}
-        await query.edit_message_text("✏️ *Send the word to add to the whitelist:*", parse_mode='Markdown', reply_markup=kb_back_cfg())
+        await _cfg_edit(query, ch.id, "✏️ *Send the word to add to the whitelist:*", rows_back_cfg())
         return
 
     if data == "cfg_wl_rem":
         SETTINGS_PENDING[(ch.id, u.id)] = {"action": "wl_rem", "panel_msg_id": query.message.message_id}
-        await query.edit_message_text("✏️ *Send the word to remove from the whitelist:*", parse_mode='Markdown', reply_markup=kb_back_cfg())
+        await _cfg_edit(query, ch.id, "✏️ *Send the word to remove from the whitelist:*", rows_back_cfg())
         return
 
     if data == "cfg_wl_g":
         gwords = db.get_gwhitelist()
         disabled = set(db.get_disabled_gwhite(ch.id))
         if not gwords:
-            await query.edit_message_text(
-                "🌐 *Owner hasn't set any global whitelist word yet.*",
-                parse_mode='Markdown', reply_markup=kb_back_cfg()
-            )
+            await _cfg_edit(query, ch.id, "🌐 *Owner hasn't set any global whitelist word yet.*", rows_back_cfg())
             return
         rows = []
         for w in gwords[:20]:
-            icon = "🔴 OFF" if w in disabled else "🟢 ON"
-            rows.append([InlineKeyboardButton(f"{icon} — {w}", callback_data=f"cfg_wl_gt_{w[:45]}")])
-        rows.append([InlineKeyboardButton("◀️ Back", callback_data="cfg_wl")])
-        await query.edit_message_text(
+            off = w in disabled
+            icon = "🔴 OFF" if off else "🟢 ON"
+            rows.append([{"text": f"{icon} — {w}", "callback_data": f"cfg_wl_gt_{w[:45]}",
+                          "style": "danger" if off else "success"}])
+        rows.append([{"text": "◀️ Back", "callback_data": "cfg_wl", "style": "primary"}])
+        await _cfg_edit(
+            query, ch.id,
             f"*🌐 GLOBAL WHITELIST WORDS*\n{'─'*24}\n\n"
             f"_Tap to turn ON/OFF for your group:_",
-            parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(rows)
+            rows
         )
         return
 
@@ -5969,11 +6017,12 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
         return
 
     if data == "cfg_filters":
-        await query.edit_message_text(
+        await _cfg_edit(
+            query, ch.id,
             f"*🛡️ FILTERS — {_filters_status_line(ch.id)}*\n{'─'*24}\n\n"
             f"✅ = ON     ▫️ = OFF\n"
             f"_Tap any filter — it toggles ON/OFF instantly._",
-            parse_mode='Markdown', reply_markup=kb_filters_grid(ch.id)
+            kb_filters_grid(ch.id)
         )
         return
 
@@ -5987,11 +6036,12 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
                 await query.answer(f"{FILTER_LABELS.get(key, key)} → {state}")
             except Exception:
                 pass
-        await query.edit_message_text(
+        await _cfg_edit(
+            query, ch.id,
             f"*🛡️ FILTERS — {_filters_status_line(ch.id)}*\n{'─'*24}\n\n"
             f"✅ = ON     ▫️ = OFF\n"
             f"_Tap any filter — it toggles ON/OFF instantly._",
-            parse_mode='Markdown', reply_markup=kb_filters_grid(ch.id)
+            kb_filters_grid(ch.id)
         )
         return
 
@@ -5999,15 +6049,16 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
     if data == "cfg_captcha":
         g = db.get_group(ch.id)
         on = bool(g.get("captcha"))
-        await query.edit_message_text(
+        await _cfg_edit(
+            query, ch.id,
             f"*🎭 CAPTCHA VERIFICATION*\n{'─'*24}\n\n"
             f"Status: {ICON_ON + ' ON' if on else ICON_OFF + ' OFF'}\n\n"
             f"_New members must solve a math question to chat, until verified._",
-            parse_mode='Markdown',
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton(f"{ICON_OFF} Turn OFF" if on else f"{ICON_ON} Turn ON", callback_data="cfg_captcha_toggle")],
-                [InlineKeyboardButton("◀️ Back", callback_data="cfg_main")],
-            ])
+            [
+                [{"text": f"{ICON_OFF} Turn OFF" if on else f"{ICON_ON} Turn ON", "callback_data": "cfg_captcha_toggle",
+                  "style": "danger" if on else "success"}],
+                [{"text": "◀️ Back", "callback_data": "cfg_main", "style": "primary"}],
+            ]
         )
         return
 
@@ -6091,27 +6142,34 @@ async def handle_settings_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE, 
         reply = "❌ Something went wrong, try /settings again."
 
     panel_msg_id = pending.get("panel_msg_id")
-    back_kb = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back to Settings", callback_data="cfg_main")]])
+    back_rows = [[{"text": "◀️ Back to Settings", "callback_data": "cfg_main", "style": "primary"}]]
 
     # Purana "type karke bhejo" prompt ab kaam ka nahi raha — usi message ko edit
     # karke confirmation dikhao, taaki ek fizool message group mein na reh jaaye.
     edited = False
     if panel_msg_id:
-        try:
-            await ctx.bot.edit_message_text(
-                chat_id=ch_id, message_id=panel_msg_id,
-                text=reply, parse_mode='Markdown', reply_markup=back_kb
-            )
+        ok = await edit_colored_message(ch_id, panel_msg_id, reply, back_rows, parse_mode='Markdown')
+        if not ok:
+            try:
+                await ctx.bot.edit_message_text(
+                    chat_id=ch_id, message_id=panel_msg_id,
+                    text=reply, parse_mode='Markdown', reply_markup=_rows_to_markup(back_rows)
+                )
+                ok = True
+            except Exception:
+                ok = False
+        if ok:
             _remember_menu_owner(ch_id, panel_msg_id, user_id)
             schedule_panel_autodelete(ctx, ch_id, panel_msg_id)
             edited = True
-        except Exception:
-            edited = False
 
     if not edited:
-        sent = await msg.reply_text(reply, parse_mode='Markdown', reply_markup=back_kb)
-        _remember_menu_owner(ch_id, sent.message_id, user_id)
-        schedule_panel_autodelete(ctx, ch_id, sent.message_id)
+        msg_id = await send_colored_message(ch_id, reply, back_rows, parse_mode='Markdown')
+        if not msg_id:
+            sent = await msg.reply_text(reply, parse_mode='Markdown', reply_markup=_rows_to_markup(back_rows))
+            msg_id = sent.message_id
+        _remember_menu_owner(ch_id, msg_id, user_id)
+        schedule_panel_autodelete(ctx, ch_id, msg_id)
 
     try:
         await msg.delete()
