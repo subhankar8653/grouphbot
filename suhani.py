@@ -135,7 +135,7 @@ OWN_COMMANDS = {
     "ban","unban","warn","warnings","resetwarnings","rep","repboard","reputation",
     "del","purge","immortal","unimmortal","immortals","addblacklist","removeblacklist",
     "blacklist","addwhitelist","removewhitelist","whitelist","sticker_delete","autodelete",
-    "captcha","broadcast","groups","globalmutes","unglobalmute","gblacklist","gwhitelist",
+    "captcha","broadcast","groups","regroup","globalmutes","unglobalmute","gblacklist","gwhitelist",
     "stats","power","unpower","fban","gunban","gclearwarn","adexempt",
     "unadexempt","aimod","aiapprove","airevoke","aigroups","missinganime","addteacher",
     "removeteacher","teachers","settings",
@@ -3851,6 +3851,49 @@ async def groups_page_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(text, parse_mode='HTML', disable_web_page_preview=True, reply_markup=markup)
 
 
+async def regroup_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Owner-only recovery tool: /regroup <chat_id> [chat_id2 ...]
+    Kisi purani buggy run mein agar koi valid group database se galti se
+    hat gaya tha, to uska chat_id yahan de kar wapas register kiya ja sakta hai —
+    bas condition yeh hai ki bot abhi bhi us group mein ADMIN ho.
+    """
+    if update.effective_user.id != OWNER_ID: return
+    if not ctx.args:
+        return await update.message.reply_text(
+            "⚙️ <b>Usage:</b>\n<code>/regroup -1001234567890 -1009876543210</code>\n\n"
+            "Ek ya ek se zyada group chat_id de do (space se separate karke) — "
+            "bot check karega ki wahan abhi admin hai ya nahi, aur admin hone par "
+            "usse wapas database mein add kar dega.",
+            parse_mode='HTML'
+        )
+
+    me = await ctx.bot.get_me()
+    added, failed = [], []
+    for raw in ctx.args:
+        try:
+            gid = int(raw)
+        except ValueError:
+            failed.append(f"{raw} (invalid id)")
+            continue
+        title, link, members, status = await _resolve_group_full(ctx, gid, me.id)
+        if status == "ok":
+            db.add_group(gid)
+            added.append(html.escape(title))
+        elif status == "removed":
+            failed.append(f"{gid} (bot isn't admin there)")
+        else:
+            failed.append(f"{gid} (couldn't verify — try again)")
+        await asyncio.sleep(0.15)
+
+    lines = []
+    if added:
+        lines.append("✅ <b>Re-added to database:</b>\n" + "\n".join(f"• {t}" for t in added))
+    if failed:
+        lines.append("❌ <b>Could not add:</b>\n" + "\n".join(f"• {f}" for f in failed))
+    await update.message.reply_text("\n\n".join(lines) or "Nothing to do.", parse_mode='HTML')
+
+
 
 
 GLOBAL_REP_ID = 0  # owner DM se diya gaya reputation isi "virtual group" mein store hota hai
@@ -6386,6 +6429,7 @@ def main():
     app.add_handler(CommandHandler("captcha",          captcha_cmd))
     app.add_handler(CommandHandler("broadcast",        broadcast_cmd))
     app.add_handler(CommandHandler("groups",           groups_cmd))
+    app.add_handler(CommandHandler("regroup",          regroup_cmd))
     app.add_handler(CommandHandler("globalmutes",      globalmutes_cmd))
     app.add_handler(CommandHandler("unglobalmute",     unglobalmute_cmd))
     app.add_handler(CommandHandler("gblacklist",       gblacklist_cmd))
