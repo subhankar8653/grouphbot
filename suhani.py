@@ -545,7 +545,6 @@ class DB:
         self.rep_daily  = self.db["rep_daily_limit"] # daily rep-give tracking (3/day cap)
         self.accepted_rep_groups = self.db["accepted_rep_groups"]  # groups jinka rep Suhani Coin mein convert hota hai
         self.withdrawals = self.db["withdrawals"]    # Suhani Coin withdrawal requests
-        self.daily_winners = self.db["daily_winners"] # daily #1 global-ranking auto-reward log
 
         if not self.stats_c.find_one({"_id": "global"}):
             self.stats_c.insert_one({"_id": "global", "warnings": 0, "mutes": 0, "scanned": 0, "gmutes": 0})
@@ -868,26 +867,11 @@ class DB:
         return True
 
     # ── Accepted groups (jinka reputation Suhani Coin mein convert hota hai) ──
-    def accept_rep_group(self, chat_id, title=None, link=None):
-        update = {"$set": {"_id": chat_id, "accepted_at": time.time()}}
-        if title:
-            update["$set"]["title"] = title
-        if link:
-            update["$set"]["link"] = link
-        self.accepted_rep_groups.update_one({"_id": chat_id}, update, upsert=True)
-
-    def unaccept_rep_group(self, chat_id):
-        self.accepted_rep_groups.delete_one({"_id": chat_id})
-
     def is_rep_group_accepted(self, chat_id) -> bool:
         return self.accepted_rep_groups.find_one({"_id": chat_id}) is not None
 
     def get_accepted_rep_groups(self):
         return [g["_id"] for g in self.accepted_rep_groups.find({}, {"_id": 1})]
-
-    def get_accepted_rep_groups_full(self):
-        """Poori detail (title + invite link) ke saath accepted groups — /earn_groups ke liye."""
-        return list(self.accepted_rep_groups.find({}))
 
     def _sync_suhani_points(self, user_id: int):
         """
@@ -1036,84 +1020,6 @@ class DB:
         if display_name:
             update["$set"]["name"] = display_name
         self.activity.update_one({"_id": k}, update, upsert=True)
-
-    @staticmethod
-    def _activity_date_filter(period):
-        """period: 'today' | '2weeks' | 'month' → mongo date-string filter banata hai."""
-        now = datetime.now()
-        if period == "today":
-            return {"date": now.strftime("%Y-%m-%d")}
-        elif period == "2weeks":
-            cutoff = (now - timedelta(days=14)).strftime("%Y-%m-%d")
-            return {"date": {"$gte": cutoff}}
-        else:  # "month"
-            cutoff = (now - timedelta(days=30)).strftime("%Y-%m-%d")
-            return {"date": {"$gte": cutoff}}
-
-    def get_activity_leaderboard(self, chat_id, period="today", limit=10):
-        """Group ke andar top message-senders, given period ke liye."""
-        match = {"chat_id": chat_id}
-        match.update(self._activity_date_filter(period))
-        pipeline = [
-            {"$match": match},
-            {"$group": {
-                "_id": "$user_id",
-                "total": {"$sum": "$count"},
-                "name": {"$last": "$name"},
-            }},
-            {"$sort": {"total": -1}},
-            {"$limit": limit},
-        ]
-        return list(self.activity.aggregate(pipeline))
-
-    def get_global_activity_leaderboard(self, period="today", limit=10):
-        """Saare groups mile ke top message-senders, given period ke liye."""
-        match = {}
-        match.update(self._activity_date_filter(period))
-        pipeline = [
-            {"$match": match},
-            {"$group": {
-                "_id": "$user_id",
-                "total": {"$sum": "$count"},
-                "name": {"$last": "$name"},
-            }},
-            {"$sort": {"total": -1}},
-            {"$limit": limit},
-        ]
-        return list(self.activity.aggregate(pipeline))
-
-    # ── Daily #1 global-ranking auto-reward ─────────────────────────
-    def get_global_activity_top_for_date(self, date_str, limit=1):
-        """EXACT date (YYYY-MM-DD) ke liye global (saare groups) top message-senders."""
-        pipeline = [
-            {"$match": {"date": date_str}},
-            {"$group": {
-                "_id": "$user_id",
-                "total": {"$sum": "$count"},
-                "name": {"$last": "$name"},
-            }},
-            {"$sort": {"total": -1}},
-            {"$limit": limit},
-        ]
-        return list(self.activity.aggregate(pipeline))
-
-    def get_most_active_group_for_user_on_date(self, user_id, date_str):
-        """Us din user sabse zyada kis group mein active tha — wahi group rep credit ke liye use hota hai."""
-        cursor = self.activity.find(
-            {"user_id": user_id, "date": date_str}
-        ).sort("count", -1).limit(1)
-        doc = next(cursor, None)
-        return doc.get("chat_id") if doc else None
-
-    def was_daily_winner_awarded(self, date_str) -> bool:
-        return self.daily_winners.find_one({"_id": date_str}) is not None
-
-    def mark_daily_winner_awarded(self, date_str, user_id, chat_id):
-        self.daily_winners.update_one(
-            {"_id": date_str},
-            {"$set": {"user_id": user_id, "chat_id": chat_id, "awarded_at": time.time()}},
-            upsert=True
-        )
 
     def add_immortal(self, chat_id, user_id):
         k = f"{chat_id}_{user_id}"
@@ -3802,120 +3708,6 @@ async def groups_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(chunk, parse_mode='HTML', disable_web_page_preview=True)
 
 
-# ─── Helper: accepted group ka title/public-link nikaalo (aur missing ho to backfill karo) ──
-async def _resolve_group_link(ctx: ContextTypes.DEFAULT_TYPE, gid: int):
-    """Live Telegram se group ka title + public link fetch karta hai (retries once on flood-wait)."""
-    title, link = str(gid), None
-    for attempt in range(2):
-        try:
-            chat = await ctx.bot.get_chat(gid)
-            title = chat.title or str(gid)
-            if chat.username:
-                link = f"https://t.me/{chat.username}"
-            else:
-                try:
-                    link = await ctx.bot.export_chat_invite_link(gid)
-                except Exception:
-                    link = None
-            break
-        except RetryAfter as e:
-            await asyncio.sleep(e.retry_after + 0.5)
-            continue
-        except Exception:
-            break
-    return title, link
-
-
-async def _resolve_group_full(ctx: ContextTypes.DEFAULT_TYPE, gid: int):
-    """Title + link + member count + kicked-status, retry once on flood-wait."""
-    title, link, members, kicked = str(gid), None, None, False
-    for attempt in range(2):
-        try:
-            chat = await ctx.bot.get_chat(gid)
-            title = chat.title or str(gid)
-            if chat.username:
-                link = f"https://t.me/{chat.username}"
-            else:
-                try:
-                    link = await ctx.bot.export_chat_invite_link(gid)
-                except Exception:
-                    link = None
-            try:
-                members = await ctx.bot.get_chat_member_count(gid)
-            except Exception:
-                members = None
-            break
-        except RetryAfter as e:
-            await asyncio.sleep(e.retry_after + 0.5)
-            continue
-        except Forbidden:
-            kicked = True
-            break
-        except Exception:
-            break
-    return title, link, members, kicked
-
-
-async def _accepted_groups_with_links(ctx: ContextTypes.DEFAULT_TYPE):
-    """
-    Sab accepted groups laata hai. Jin groups ka title/link pehle se DB mein
-    save nahi hai (purane /Accept_rep se add kiye gaye — feature ke pehle),
-    unke liye live fetch karke DB mein backfill (save) kar deta hai, taaki
-    dobara /Accept_rep chalane ki zaroorat na pade.
-    """
-    groups = db.get_accepted_rep_groups_full()
-    result = []
-    for g in groups:
-        gid = g["_id"]
-        title, link = g.get("title"), g.get("link")
-        if not link:
-            fetched_title, fetched_link = await _resolve_group_link(ctx, gid)
-            title = fetched_title or title
-            if fetched_link:
-                link = fetched_link
-            # Backfill DB taaki agli baar live-fetch na karna pade
-            if title or link:
-                db.accept_rep_group(gid, title=title, link=link)
-        result.append({"_id": gid, "title": title or str(gid), "link": link})
-    return result
-
-
-# ─── /reputation ─── Owner-only: kisi bhi user ko manually rep do/kaato ────
-# ─── /makeconvertible ─── Owner-only: existing rep ko retroactively convertible banao ──
-async def makeconvertible_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """
-    Owner-only utility. Jab pehle se diya gaya reputation (jaise /reputation se
-    global/non-accepted-group mein) convertible nahi hua tha, isse fix karo —
-    total_rep ko dobara NAHI badhata, sirf convertible_rep mein add karta hai.
-    Usage: /makeconvertible <user_id> <amount>
-    """
-    if update.effective_user.id != OWNER_ID:
-        return
-    args = ctx.args
-    if not args or len(args) < 2:
-        return await update.message.reply_text(
-            "⚙️ *Usage:*\n`/makeconvertible <user_id> <amount>`\n\n"
-            "_Makes previously-given rep retroactively coin-convertible, "
-            "without adding to total rep again._",
-            parse_mode='Markdown'
-        )
-    try:
-        target_id = int(args[0])
-        amount = int(args[1])
-    except ValueError:
-        return await update.message.reply_text("❌ user_id aur amount dono numbers hone chahiye.")
-
-    db.add_manual_convertible_rep(target_id, amount)
-    wallet = db.get_suhani_points(target_id)
-    await update.message.reply_text(
-        f"✅ *Convertible Rep Fixed*\n"
-        f"{'─'*28}\n"
-        f"👤 User: `{target_id}`\n"
-        f"📈 `+{amount}` convertible rep add kiya (total rep unchanged)\n"
-        f"💠 Naya Convertible Rep: `{wallet['convertible_rep']}` pts\n"
-        f"🪙 Suhani Coins: `{wallet['coins']}` (₹{wallet['coins']})",
-        parse_mode='Markdown'
-    )
 
 
 GLOBAL_REP_ID = 0  # owner DM se diya gaya reputation isi "virtual group" mein store hota hai
@@ -3985,96 +3777,6 @@ async def reputation_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"👤 User: `{target_id}`\n"
         f"📈 `{abs(amount)}` points {action} {scope}\n"
         f"📊 Naya balance: `{new_rep}` rep",
-        parse_mode='Markdown'
-    )
-
-
-# ─── /Accept_rep ─── Owner-only: group ka reputation Suhani Coin ke liye accept karo ──
-async def accept_rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
-    if not ctx.args:
-        groups = await _accepted_groups_with_links(ctx)
-        if not groups:
-            lines = "  <i>No group is accepted</i>"
-        else:
-            out = []
-            for g in groups:
-                title = html.escape(g["title"])
-                link  = g.get("link")
-                if link:
-                    out.append(f"  • <a href=\"{html.escape(link)}\">{title}</a>  (<code>{g['_id']}</code>)")
-                else:
-                    out.append(f"  • {title}  (<code>{g['_id']}</code>) — ⚠️ link not found")
-            lines = "\n".join(out)
-        return await update.message.reply_text(
-            f"⚙️ <b>Usage:</b> <code>/Accept_rep &lt;group_id&gt;</code>\n\n"
-            f"✅ <b>Accepted Groups</b> (Suhani Coin convertible):\n{lines}\n\n"
-            f"👥 Members can view this list with <code>/earn_groups</code>.",
-            parse_mode='HTML', disable_web_page_preview=True
-        )
-    try:
-        gid = int(ctx.args[0])
-    except ValueError:
-        return await update.message.reply_text("❌ Give the group ID as a number!")
-
-    # Group ka title aur public/invite link fetch karo, taaki members
-    # ko /earn_groups mein ek clickable link dikh sake.
-    title, link = await _resolve_group_link(ctx, gid)
-
-    db.accept_rep_group(gid, title=title, link=link)
-    link_note = f"\n🔗 Link: {html.escape(link)}" if link else \
-        "\n⚠️ Couldn't get the invite link — make the bot an admin in this group (with invite-link permission)."
-    await update.message.reply_text(
-        f"✅ Group <code>{gid}</code> (<b>{html.escape(title)}</b>) is now <b>accepted</b>!\n"
-        f"This group's reputation can now be converted into Suhani Coin (₹)."
-        + link_note,
-        parse_mode='HTML'
-    )
-
-
-# ─── /earn_groups ─── Public: accepted groups ki list, link ke saath ────
-async def earn_groups_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """
-    Sabhi 'accepted' groups (jinka reputation Suhani Coin/₹ mein convert hota hai)
-    unke clickable invite link ke saath dikhata hai — taaki members ko pata chale
-    konse group mein message karke paisa kama sakte hain.
-    """
-    groups = await _accepted_groups_with_links(ctx)
-    if not groups:
-        return await update.message.reply_text(
-            "📉 <i>No group is accepted for Suhani Coin yet.</i>",
-            parse_mode='HTML'
-        )
-    lines = []
-    for i, g in enumerate(groups, 1):
-        title = html.escape(g["title"])
-        link  = g.get("link")
-        if link:
-            lines.append(f"{i}. <a href=\"{html.escape(link)}\">{title}</a>")
-        else:
-            lines.append(f"{i}. {title} — ⚠️ link jald aayega")
-    text = (
-        f"💰 <b>EARN GROUPS</b>\n"
-        f"<i>Stay active in these to earn Suhani Coin (₹)</i>\n"
-        f"{'─'*28}\n\n" + "\n".join(lines) +
-        f"\n\n💡 <i>Reply with Thank You to earn rep • 10,000 rep = ₹1</i>"
-    )
-    await update.message.reply_text(text, parse_mode='HTML', disable_web_page_preview=True)
-
-
-# ─── /Unaccept_rep ─── Owner-only: group ka reputation coin-convertible band karo ──
-async def unaccept_rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
-    if not ctx.args:
-        return await update.message.reply_text("⚙️ *Usage:* `/Unaccept_rep <group_id>`", parse_mode='Markdown')
-    try:
-        gid = int(ctx.args[0])
-    except ValueError:
-        return await update.message.reply_text("❌ Give the group ID as a number!")
-    db.unaccept_rep_group(gid)
-    await update.message.reply_text(
-        f"🔒 Group `{gid}` is now *not accepted*.\n"
-        f"This group's reputation will now only be usable to clear warnings — it won't generate coins.",
         parse_mode='Markdown'
     )
 
@@ -4586,7 +4288,7 @@ async def missinganime_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
         else:
             db.clear_missing_anime()
-            return await update.message.reply_text("✅ Puri missing anime list clear kar di!")
+            return await update.message.reply_text("✅ Entire missing anime list has been cleared!")
 
     # Show list
     missing = db.get_missing_anime_list(30)
@@ -4979,307 +4681,6 @@ async def stats_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(text, parse_mode='Markdown')
 
-
-# ═══════════════════════════════════════════════════════════
-#  /rankings — Message-count based (Today / 2 Weeks / Month)
-#  Group + Global dono ek hi command mein, button se switch hota hai.
-#  NOTE: Yeh REPUTATION se ALAG hai — sirf "kitne message bheje"
-#  ke hisaab se ranking hoti hai.
-#
-#  Names ab tg://user?id=<id> link ke roop mein clickable hain —
-#  isse @username na hone par bhi profile khulta hai, aur usernames
-#  mein underscore (_) hone par koi backslash/parsing bug nahi aata
-#  (HTML parse_mode + html.escape use hota hai, Markdown escaping nahi).
-# ═══════════════════════════════════════════════════════════
-LB_PERIOD_LABEL = {"today": "📅 Today", "2weeks": "🗓 Last 2 Weeks", "month": "📆 Last Month"}
-LB_PERIOD_ORDER = ["today", "2weeks", "month"]
-
-def build_rankings_keyboard(scope, chat_id, active_period):
-    """
-    scope: 'g' (group) ya 'a' (all/global).
-    chat_id: origin GROUP chat id (0 agar command private mein aur koi group context nahi hai) —
-             yeh hamesha group id rehta hai, scope switch karne par bhi, taaki "Group" button
-             wapas usi group ki ranking dikha sake.
-    """
-    scope_row = []
-    if chat_id:
-        label_g = "• 👥 Group •" if scope == "g" else "👥 Group"
-        scope_row.append(InlineKeyboardButton(label_g, callback_data=f"lbd:g:{active_period}:{chat_id}"))
-    label_a = "• 🌐 Global •" if scope == "a" else "🌐 Global"
-    scope_row.append(InlineKeyboardButton(label_a, callback_data=f"lbd:a:{active_period}:{chat_id}"))
-
-    period_row = []
-    for p in LB_PERIOD_ORDER:
-        label = LB_PERIOD_LABEL[p]
-        if p == active_period:
-            label = f"• {label} •"
-        period_row.append(InlineKeyboardButton(label, callback_data=f"lbd:{scope}:{p}:{chat_id}"))
-
-    return InlineKeyboardMarkup([scope_row, period_row])
-
-def build_lb_text(entries, period, scope_title):
-    period_label = LB_PERIOD_LABEL[period]
-    if not entries:
-        return (
-            f"🏆 <b>{html.escape(scope_title)}</b>\n"
-            f"<i>{html.escape(period_label)}</i>\n"
-            f"{'─'*28}\n\n"
-            f"📉 No message activity found in this period!"
-        )
-    medals = ["🥇", "🥈", "🥉"]
-    lines = []
-    for i, entry in enumerate(entries):
-        rank = medals[i] if i < 3 else f"<code>{i+1}.</code>"
-        uid = entry.get("_id")
-        raw_name = entry.get("name") or str(uid)
-        # Purane data mein pehle se md_esc() se escape hoke backslash "\_" jaisa
-        # literally save ho chuka ho sakta hai (old bug) — usko yahin clean karo,
-        # taaki naya message aane ka wait kiye bina bhi turant sahi dikhe.
-        # Real Telegram username/name mein backslash kabhi valid nahi hota,
-        # isliye ise hata dena hamesha safe hai.
-        clean_name = str(raw_name).replace('\\', '')
-        name_esc = html.escape(clean_name)
-        # tg://user link — hamesha clickable, chahe @username ho ya na ho
-        name_html = f'<a href="tg://user?id={uid}">{name_esc}</a>' if uid else name_esc
-        total = entry.get("total", 0)
-        lines.append(f"{rank} {name_html} — <b>{total}</b> messages")
-    return (
-        f"🏆 <b>{html.escape(scope_title)}</b>\n"
-        f"<i>{html.escape(period_label)}</i>\n"
-        f"{'─'*28}\n\n" + "\n".join(lines)
-    )
-
-
-# ─── /rankings ─── Group + Global message-activity ranking, button se toggle ──
-async def rankings_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    ch = update.effective_chat
-    origin_id = ch.id if ch.type != "private" else 0
-    scope = "g" if origin_id else "a"
-    try:
-        if scope == "g":
-            entries = db.get_activity_leaderboard(origin_id, period="today", limit=10)
-            text = build_lb_text(entries, "today", "GROUP RANKINGS")
-        else:
-            entries = db.get_global_activity_leaderboard(period="today", limit=10)
-            text = build_lb_text(entries, "today", "GLOBAL RANKINGS")
-        kb = build_rankings_keyboard(scope, origin_id, "today")
-        msg = await update.message.reply_text(text, parse_mode='HTML', reply_markup=kb, disable_web_page_preview=True)
-        if origin_id:
-            asyncio.create_task(delete_after(ctx, origin_id, msg.message_id, 600))
-    except Exception as e:
-        await update.message.reply_text(f"❌ Failed to load rankings: <code>{html.escape(str(e))}</code>", parse_mode='HTML')
-
-
-# ─── /rankings button callback — scope (Group/Global) aur period switch ───
-async def rankings_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    try:
-        _, scope, period, chat_id_str = query.data.split(":")
-        chat_id = int(chat_id_str)
-    except Exception:
-        return
-
-    if period not in LB_PERIOD_LABEL:
-        return
-
-    try:
-        if scope == "g" and chat_id:
-            entries = db.get_activity_leaderboard(chat_id, period=period, limit=10)
-            text = build_lb_text(entries, period, "GROUP RANKINGS")
-        else:
-            scope = "a"
-            entries = db.get_global_activity_leaderboard(period=period, limit=10)
-            text = build_lb_text(entries, period, "GLOBAL RANKINGS")
-        kb = build_rankings_keyboard(scope, chat_id, period)
-
-        await query.edit_message_text(text, parse_mode='HTML', reply_markup=kb, disable_web_page_preview=True)
-    except Exception:
-        pass
-
-
-# ═══════════════════════════════════════════════════════════
-#  DAILY GLOBAL #1 AUTO-REWARD
-#  Har din (server-time midnight ke thodi der baad) chalta hai —
-#  PICHLE poore din ka GLOBAL (sab groups milaake) #1 message-sender
-#  ko 1000 Reputation Points FREE mein milte hain, uske sabse active
-#  group mein credit hoke (taaki warn-maafi/Suhani-Coin dono kaam karein
-#  agar wo group accepted hai).
-# ═══════════════════════════════════════════════════════════
-DAILY_WINNER_REWARD = 1000
-
-async def daily_global_winner_job(ctx: ContextTypes.DEFAULT_TYPE):
-    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-
-    # Idempotency — agar bot restart hoke job dobara chal jaye to dobara na de
-    if db.was_daily_winner_awarded(yesterday):
-        return
-
-    top = db.get_global_activity_top_for_date(yesterday, limit=1)
-    if not top:
-        return
-
-    winner = top[0]
-    user_id = winner.get("_id")
-    if not user_id:
-        return
-
-    win_chat_id = db.get_most_active_group_for_user_on_date(user_id, yesterday)
-    if not win_chat_id:
-        return
-
-    name = winner.get("name") or str(user_id)
-    db.add_reputation(win_chat_id, user_id, DAILY_WINNER_REWARD, name)
-    db.mark_daily_winner_awarded(yesterday, user_id, win_chat_id)
-
-    total_msgs = winner.get("total", 0)
-    announce = (
-        f"🏆 <b>DAILY GLOBAL #1!</b>\n\n"
-        f'🎉 <a href="tg://user?id={user_id}">{html.escape(str(name))}</a> ne kal '
-        f"({html.escape(yesterday)}) sabse zyada <b>{total_msgs}</b> messages bheje "
-        f"— sabhi groups milaake!\n\n"
-        f"⭐ Reward: <b>+{DAILY_WINNER_REWARD} Reputation Points</b> (free!) 🎁"
-    )
-    # Winner ke sabse active group mein announce karo
-    try:
-        await ctx.bot.send_message(win_chat_id, announce, parse_mode='HTML')
-    except Exception:
-        pass
-    # Owner ko bhi log bhej do
-    try:
-        if OWNER_ID:
-            await ctx.bot.send_message(
-                OWNER_ID,
-                f"🏆 Daily Global Winner ({html.escape(yesterday)}): "
-                f'<a href="tg://user?id={user_id}">{html.escape(str(name))}</a> '
-                f"(id <code>{user_id}</code>) got +{DAILY_WINNER_REWARD} free rep "
-                f"in group <code>{win_chat_id}</code>!",
-                parse_mode='HTML'
-            )
-    except Exception:
-        pass
-
-
-# ─── /withdraw ─── Suhani Coin withdrawal request ───────────
-async def withdraw_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """
-    Usage: /withdraw <coins> <upi_id/detail>
-    User apna Suhani Coin withdrawal request bhejta hai — owner ko notify
-    hota hai approve/reject buttons ke saath. Coins tabhi minus hote hain
-    (via withdrawn_coins ledger) jab owner APPROVE kare — reject par kuch
-    nahi katega, user dobara request kar sakta hai.
-    """
-    usr = update.effective_user
-    if not usr:
-        return
-    if not ctx.args or len(ctx.args) < 2:
-        wallet = db.get_suhani_points(usr.id)
-        return await update.message.reply_text(
-            f"⚙️ *Usage:* `/withdraw <coins> <UPI ID / payment detail>`\n\n"
-            f"🪙 Available Coins: `{wallet['coins']}` (₹{wallet['coins']})\n"
-            f"Min withdrawal: `{MIN_WITHDRAW_COINS}` coins (₹{MIN_WITHDRAW_COINS})\n\n"
-            f"_Example:_ `/withdraw 10 rahul@upi`",
-            parse_mode='Markdown'
-        )
-    try:
-        req_coins = int(ctx.args[0])
-    except ValueError:
-        return await update.message.reply_text("❌ Coins must be a number! Example: `/withdraw 10 rahul@upi`", parse_mode='Markdown')
-
-    detail = ' '.join(ctx.args[1:]).strip()
-    if req_coins < MIN_WITHDRAW_COINS:
-        return await update.message.reply_text(
-            f"❌ Minimum withdrawal is `{MIN_WITHDRAW_COINS}` coins (₹{MIN_WITHDRAW_COINS}).",
-            parse_mode='Markdown'
-        )
-
-    wallet = db.get_suhani_points(usr.id)
-    pending_already = db.get_pending_withdrawal_coins(usr.id)
-    if req_coins + pending_already > wallet["coins"]:
-        return await update.message.reply_text(
-            f"❌ Insufficient balance!\n"
-            f"🪙 Available: `{wallet['coins']}`  •  Already pending: `{pending_already}`",
-            parse_mode='Markdown'
-        )
-
-    req_id = db.create_withdrawal(usr.id, user_name(usr, escape=False), req_coins, detail)
-    await update.message.reply_text(
-        f"✅ *Withdrawal Request Submitted\\!*\n\n"
-        f"🪙 Coins: `{req_coins}` \\(₹{req_coins}\\)\n"
-        f"💳 Detail: `{mv2_esc(detail)}`\n"
-        f"🆔 Request ID: `{req_id}`\n\n"
-        f"_Owner review karega aur payment jaldi bhej dega\\._",
-        parse_mode='MarkdownV2'
-    )
-
-    # ── Owner ko notify karo, approve/reject buttons ke saath ──
-    try:
-        kb = InlineKeyboardMarkup([[
-            InlineKeyboardButton("✅ Approve & Paid", callback_data=f"wd:approve:{req_id}"),
-            InlineKeyboardButton("❌ Reject",          callback_data=f"wd:reject:{req_id}"),
-        ]])
-        await ctx.bot.send_message(
-            OWNER_ID,
-            f"💸 *NEW WITHDRAWAL REQUEST*\n{'─'*26}\n\n"
-            f"👤 User: {mv2_esc(user_name(usr, escape=False))} \\(`{usr.id}`\\)\n"
-            f"🪙 Coins: `{req_coins}` \\(₹{req_coins}\\)\n"
-            f"💳 Detail: `{mv2_esc(detail)}`\n"
-            f"🆔 ID: `{req_id}`",
-            parse_mode='MarkdownV2',
-            reply_markup=kb
-        )
-    except Exception:
-        pass
-
-
-async def withdraw_approval_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Owner-only: withdrawal request ko approve (paid) ya reject karo."""
-    query = update.callback_query
-    if not query or not query.from_user or query.from_user.id != OWNER_ID:
-        return await query.answer("❌ Only the owner can use this!", show_alert=True)
-    await query.answer()
-    try:
-        _, action, req_id = query.data.split(":", 2)
-    except ValueError:
-        return
-    req = db.get_withdrawal(req_id)
-    if not req:
-        return await query.edit_message_text("❌ Request not found \\(maybe already resolved\\)\\.", parse_mode='MarkdownV2')
-    if req.get("status") != "pending":
-        return await query.edit_message_text(f"ℹ️ This request is already `{req['status']}`\\.", parse_mode='MarkdownV2')
-
-    if action == "approve":
-        db.set_withdrawal_status(req_id, "paid")
-        await query.edit_message_text(
-            f"✅ *PAID* — `{req['coins']}` coins \\(₹{req['coins']}\\) settle ho gaye\\.\n"
-            f"👤 User ID: `{req['user_id']}`",
-            parse_mode='MarkdownV2'
-        )
-        try:
-            await ctx.bot.send_message(
-                req["user_id"],
-                f"✅ *Aapki withdrawal approve ho gayi\\!*\n\n"
-                f"🪙 Coins: `{req['coins']}` \\(₹{req['coins']}\\) have been sent\\.",
-                parse_mode='MarkdownV2'
-            )
-        except Exception:
-            pass
-    elif action == "reject":
-        db.set_withdrawal_status(req_id, "rejected")
-        await query.edit_message_text(
-            f"❌ *REJECTED* — request for `{req['coins']}` coins was rejected\\.\n"
-            f"👤 User ID: `{req['user_id']}`",
-            parse_mode='MarkdownV2'
-        )
-        try:
-            await ctx.bot.send_message(
-                req["user_id"],
-                f"❌ *Aapki withdrawal request reject ho gayi\\.*\n\n"
-                f"Coins are back in the balance, you can request again\\.",
-                parse_mode='MarkdownV2'
-            )
-        except Exception:
-            pass
 
 
 # ─── /rep ─── Suhani Points Wallet + Reputation Card ───────
@@ -6195,24 +5596,27 @@ def kb_settings_main(chat_id):
     g = db.get_group(chat_id)
     stk = g.get("sticker_delete_min")
     ad = g.get("autodelete_min")
+    captcha_on = bool(g.get("captcha"))
+    bl_count = len(db.get_blacklist(chat_id) or [])
+    wl_count = len(db.get_whitelist(chat_id) or [])
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("📜 Rules", callback_data="cfg_rules"),
-            InlineKeyboardButton(f"🗑️ Sticker Del {'🟢' if stk else '🔴'}", callback_data="cfg_stkdel"),
+            InlineKeyboardButton(f"🗑️ Sticker Del {ICON_ON if stk else ICON_OFF}", callback_data="cfg_stkdel"),
         ],
         [
-            InlineKeyboardButton(f"⏱️ Auto-Delete {'🟢' if ad else '🔴'}", callback_data="cfg_autodel"),
+            InlineKeyboardButton(f"⏱️ Auto-Delete {ICON_ON if ad else ICON_OFF}", callback_data="cfg_autodel"),
             InlineKeyboardButton("⚠️ Warn Durations", callback_data="cfg_warndur"),
         ],
         [
-            InlineKeyboardButton("⛔ Blacklist", callback_data="cfg_bl"),
-            InlineKeyboardButton("✅ Whitelist", callback_data="cfg_wl"),
+            InlineKeyboardButton(f"⛔ Blacklist {ICON_ON if bl_count else ICON_OFF}", callback_data="cfg_bl"),
+            InlineKeyboardButton(f"✅ Whitelist {ICON_ON if wl_count else ICON_OFF}", callback_data="cfg_wl"),
         ],
         [
             InlineKeyboardButton(f"🛡️ Filters ({_filters_status_line(chat_id)})", callback_data="cfg_filters"),
         ],
         [
-            InlineKeyboardButton("📊 Rankings", callback_data="menu_rankings"),
+            InlineKeyboardButton(f"🎭 Captcha {ICON_ON if captcha_on else ICON_OFF}", callback_data="cfg_captcha"),
             InlineKeyboardButton("🏆 Reputation", callback_data="menu_repboard"),
         ],
         [InlineKeyboardButton("❌ Close", callback_data="close_menu")],
@@ -6224,6 +5628,7 @@ def _settings_overview_text(chat_id):
     g = db.get_group(chat_id)
     stk = g.get("sticker_delete_min")
     ad = g.get("autodelete_min")
+    captcha_on = bool(g.get("captcha"))
     bl_count = len(db.get_blacklist(chat_id) or [])
     wl_count = len(db.get_whitelist(chat_id) or [])
     return (
@@ -6231,12 +5636,13 @@ def _settings_overview_text(chat_id):
         f"{'─'*24}\n\n"
         f"📌 *Quick Status*\n"
         f"  🛡️ Filters: {_filters_status_line(chat_id)}\n"
-        f"  🗑️ Sticker auto-del: {'🟢 ' + _sec_human(stk) if stk else '🔴 Off'}\n"
-        f"  ⏱️ Msg auto-del: {'🟢 ' + _sec_human(ad) if ad else '🔴 Off'}\n"
+        f"  🗑️ Sticker auto-del: {ICON_ON + ' ' + _sec_human(stk) if stk else ICON_OFF + ' Off'}\n"
+        f"  ⏱️ Msg auto-del: {ICON_ON + ' ' + _sec_human(ad) if ad else ICON_OFF + ' Off'}\n"
+        f"  🎭 Captcha: {ICON_ON + ' On' if captcha_on else ICON_OFF + ' Off'}\n"
         f"  ⛔ Blacklist words: {bl_count}  •  ✅ Whitelist: {wl_count}\n"
         f"{'─'*24}\n\n"
-        f"Manage your group settings with the buttons below 👇\n"
-        f"_Only Admins/Owner can use these buttons._"
+        f"Tap a button below to view or change that setting 👇\n"
+        f"_Only Admins/Owner can use this panel — it auto-closes when idle._"
     )
 
 async def settings_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -6587,6 +5993,28 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
             f"_Tap any filter — it toggles ON/OFF instantly._",
             parse_mode='Markdown', reply_markup=kb_filters_grid(ch.id)
         )
+        return
+
+    # ── Captcha ──
+    if data == "cfg_captcha":
+        g = db.get_group(ch.id)
+        on = bool(g.get("captcha"))
+        await query.edit_message_text(
+            f"*🎭 CAPTCHA VERIFICATION*\n{'─'*24}\n\n"
+            f"Status: {ICON_ON + ' ON' if on else ICON_OFF + ' OFF'}\n\n"
+            f"_New members must solve a math question to chat, until verified._",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(f"{ICON_OFF} Turn OFF" if on else f"{ICON_ON} Turn ON", callback_data="cfg_captcha_toggle")],
+                [InlineKeyboardButton("◀️ Back", callback_data="cfg_main")],
+            ])
+        )
+        return
+
+    if data == "cfg_captcha_toggle":
+        g = db.get_group(ch.id)
+        db.update_group(ch.id, {"captcha": not bool(g.get("captcha"))})
+        await cfg_callback_reroute(update, ctx, "cfg_captcha")
         return
 
 
