@@ -132,12 +132,11 @@ MUTE_TIME  = {1: 35, 2: 60, 3: 120, 4: 604800}
 # jab command yahan list mein NAHI ho (matlab kisi doosre bot ke liye tha).
 OWN_COMMANDS = {
     "start","help","rule","rules","setrules","id","setlinked","testmute","mute","unmute",
-    "ban","unban","warn","warnings","resetwarnings","rep","wallet","repboard","withdraw",
-    "accept_rep","unaccept_rep","earn_groups","earngroups","reputation","makeconvertible",
+    "ban","unban","warn","warnings","resetwarnings","rep","repboard","reputation",
     "del","purge","immortal","unimmortal","immortals","addblacklist","removeblacklist",
     "blacklist","addwhitelist","removewhitelist","whitelist","sticker_delete","autodelete",
     "captcha","broadcast","groups","globalmutes","unglobalmute","gblacklist","gwhitelist",
-    "stats","rankings","power","unpower","fban","gunban","gclearwarn","adexempt",
+    "stats","power","unpower","fban","gunban","gclearwarn","adexempt",
     "unadexempt","aimod","aiapprove","airevoke","aigroups","missinganime","addteacher",
     "removeteacher","teachers","settings",
 }
@@ -1801,8 +1800,19 @@ def _is_menu_owner(chat_id, message_id, user_id) -> bool:
 PANEL_TIMERS = {}
 PANEL_IDLE_SECONDS = 60
 
-def schedule_panel_autodelete(ctx, chat_id, message_id, delay=PANEL_IDLE_SECONDS):
+# ── Panel ↔ trigger-command linking ─────────────────────────
+# Jab bot koi command (jaise /start, /help, /settings) ke jawab mein
+# ek panel bhejta hai, uska (chat_id, panel_message_id) → trigger command
+# ka message_id yahan store hota hai. Jab bhi panel khud delete hota hai
+# (idle-timeout se ya Close button se), uske saath uska trigger command
+# wala message bhi turant delete ho jaata hai — taaki group mein na
+# panel bacha rahe, na woh /command wala message.
+PANEL_TRIGGER = {}
+
+def schedule_panel_autodelete(ctx, chat_id, message_id, delay=PANEL_IDLE_SECONDS, cmd_msg_id=None):
     key = (chat_id, message_id)
+    if cmd_msg_id is not None:
+        PANEL_TRIGGER[key] = cmd_msg_id
     old = PANEL_TIMERS.get(key)
     if old and not old.done():
         old.cancel()
@@ -1816,6 +1826,13 @@ def schedule_panel_autodelete(ctx, chat_id, message_id, delay=PANEL_IDLE_SECONDS
         finally:
             PANEL_TIMERS.pop(key, None)
             MENU_OWNER.pop(key, None)
+            # Panel ke saath uska trigger command message bhi delete karo.
+            trig_id = PANEL_TRIGGER.pop(key, None)
+            if trig_id:
+                try:
+                    await ctx.bot.delete_message(chat_id, trig_id)
+                except Exception:
+                    pass
             # Panel gaya to uske andar ka pending text-input bhi cancel karo —
             # lekin sirf agar wo isi panel message ka pending input tha
             # (naya /settings session shuru ho chuka ho to usko mat chuo).
@@ -1831,6 +1848,16 @@ def cancel_panel_autodelete(chat_id, message_id):
     if t and not t.done():
         t.cancel()
 
+async def _delete_panel_trigger(ctx, chat_id, message_id):
+    """Panel ko manually (Close/Dismiss button se) delete karte waqt,
+    uska linked trigger command-message bhi turant delete karo."""
+    trig_id = PANEL_TRIGGER.pop((chat_id, message_id), None)
+    if trig_id:
+        try:
+            await ctx.bot.delete_message(chat_id, trig_id)
+        except Exception:
+            pass
+
 
 def kb_main_menu(is_admin=False):
     """Main menu — Settings & Admin Panel sirf admins/owner ko dikhte hain,
@@ -1842,10 +1869,9 @@ def kb_main_menu(is_admin=False):
         ],
         [
             InlineKeyboardButton("👤 My Commands", callback_data="menu_user"),
-            InlineKeyboardButton("📊 Rankings", callback_data="menu_rankings"),
+            InlineKeyboardButton("📜 Rules", callback_data="show_rules"),
         ],
         [
-            InlineKeyboardButton("📜 Rules", callback_data="show_rules"),
             InlineKeyboardButton("⚠️ Warn System", callback_data="menu_warns"),
         ],
         [
@@ -1932,10 +1958,9 @@ def ckb_main_menu(is_admin=False):
         ],
         [
             {"text": "👤 My Commands",   "callback_data": "menu_user",       "style": "primary"},
-            {"text": "📊 Rankings",      "callback_data": "menu_rankings",   "style": "success"},
+            {"text": "📜 Rules",         "callback_data": "show_rules",      "style": "primary"},
         ],
         [
-            {"text": "📜 Rules",         "callback_data": "show_rules",      "style": "primary"},
             {"text": "⚠️ Warn System",  "callback_data": "menu_warns",      "style": "danger"},
         ],
         [
@@ -1960,7 +1985,6 @@ def ckb_stats_refresh():
 def ckb_repinfo(user_id=0):
     return [[
         {"text": "◀️ Back",     "callback_data": "menu_main",  "style": "primary"},
-        {"text": "💸 Withdraw", "callback_data": f"rep:wdinfo:{user_id}", "style": "success"},
     ]]
 
 def ckb_warn_actions(chat_id, user_id):
@@ -1995,11 +2019,10 @@ def ckb_rep_board(chat_id, user_id):
     return [
         [
             {"text": "🔄 Refresh",       "callback_data": f"rep:board:{chat_id}", "style": "primary"},
-            {"text": "⭐ My Profile",    "callback_data": f"rep:wallet:{user_id}", "style": "success"},
+            {"text": "⭐ My Profile",    "callback_data": "rep:myprofile", "style": "success"},
         ],
         [
             {"text": "🌐 Global Refresh","callback_data": "rep:global:0",          "style": "primary"},
-            {"text": "💸 Withdraw",      "callback_data": f"rep:wdinfo:{user_id}", "style": "success"},
         ]
     ]
 
@@ -2303,18 +2326,12 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             f"{'─'*24}\n\n"
             f"📜 `/rules` — View group rules\n"
             f"⚠️ `/warnings` — Check your warnings\n"
-            f"⭐ `/rep` — Suhani Profile Card & Wallet\n"
-            f"💰 `/wallet` — Suhani Points & INR value\n"
+            f"⭐ `/rep` — Suhani Profile Card\n"
             f"🏆 `/repboard` — Group + Global Rep Board\n"
-            f"📊 `/rankings` — Group & Global message-activity rank\n"
-            f"💰 `/earn_groups` — Groups where you can earn money by chatting\n"
             f"🆔 `/id` — Your Telegram ID\n\n"
             f"{'─'*32}\n"
-            f"💎 *REWARD SYSTEM*\n"
-            f"_Thank You → +100 Rep | Clear a warning → 100 Rep_\n"
-            f"_10,000 Rep (accepted group) → 1 Suhani Coin → ₹1_\n"
-            f"_Active raho → Auto earn! 🔥_\n"
-            f"_Min withdrawal: ₹10 → `/withdraw`_"
+            f"💎 *REPUTATION*\n"
+            f"_Thank You → +{REP_PER_THANK} Rep | Clear a warning → {REP_PER_WARN_REMOVE} Rep_"
         )
         await query.answer()
         await query.edit_message_text(
@@ -2354,7 +2371,7 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             f"📋 `/immortals` — List immune users\n"
             f"📚 `/addteacher` `/removeteacher` `/teachers`\n\n"
             f"{'─'*32}\n"
-            f"📊 `/rankings` • `/repboard`"
+            f"🏆 `/repboard`"
         )
         await query.answer()
         await query.edit_message_text(
@@ -2516,8 +2533,7 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             f"{'┄'*32}\n"
             + "\n".join(global_lines) +
             f"\n\n{'─'*32}\n"
-            f"💡 _Reply 'Thank You' → +1 Rep_\n"
-            f"_Active raho → Auto earn! 🔥_"
+            f"💡 _Reply 'Thank You' to give rep_"
         )
         user_id = query.from_user.id if query.from_user else 0
         await query.answer()
@@ -2538,31 +2554,6 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
                 ],
             ]),
             parse_mode='Markdown'
-        )
-        return
-
-    elif data == "menu_rankings":
-        # /rankings ka main-menu version — Group/Global + period buttons ke saath
-        ch = update.effective_chat
-        origin_id = ch.id if ch and ch.type != "private" else 0
-        scope = "g" if origin_id else "a"
-        if scope == "g":
-            entries = db.get_activity_leaderboard(origin_id, period="today", limit=10)
-            text = build_lb_text(entries, "today", "GROUP RANKINGS")
-        else:
-            entries = db.get_global_activity_leaderboard(period="today", limit=10)
-            text = build_lb_text(entries, "today", "GLOBAL RANKINGS")
-        kb_rows = list(build_rankings_keyboard(scope, origin_id, "today").inline_keyboard)
-        kb_rows.append([
-            InlineKeyboardButton("◀️ Back", callback_data="menu_main"),
-            InlineKeyboardButton("❌ Close", callback_data="close_menu"),
-        ])
-        await query.answer()
-        await query.edit_message_text(
-            text,
-            reply_markup=InlineKeyboardMarkup(kb_rows),
-            parse_mode='HTML',
-            disable_web_page_preview=True
         )
         return
 
@@ -2712,10 +2703,12 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
 
     elif data == "dismiss_warn":
         if await is_adm(ctx, update.effective_chat.id if update.effective_chat else 0, query.from_user.id) or query.from_user.id == OWNER_ID:
+            ch_id = update.effective_chat.id if update.effective_chat else 0
             try:
                 await query.message.delete()
             except:
                 pass
+            await _delete_panel_trigger(ctx, ch_id, query.message.message_id)
         else:
             await query.answer("❌ Admins only!", show_alert=True)
         return
@@ -2726,6 +2719,7 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             await query.message.delete()
         except:
             await query.answer("✅ Closed!")
+        await _delete_panel_trigger(ctx, chat.id, query.message.message_id)
         return
 
     await query.answer()
@@ -2765,10 +2759,10 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup(buttons)
             )
             _remember_menu_owner(ch.id, sent.message_id, u.id)
-            schedule_panel_autodelete(ctx, ch.id, sent.message_id)
+            schedule_panel_autodelete(ctx, ch.id, sent.message_id, cmd_msg_id=update.message.message_id)
         else:
             _remember_menu_owner(ch.id, msg_id, u.id)
-            schedule_panel_autodelete(ctx, ch.id, msg_id)
+            schedule_panel_autodelete(ctx, ch.id, msg_id, cmd_msg_id=update.message.message_id)
         return
 
     # DM — Owner panel
@@ -2797,12 +2791,6 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"  📋 `/aigroups` — AI approved list\n"
             f"  🎌 `/missinganime` — Missing requests\n\n"
             f"{'─'*38}\n"
-            f"🪙 *SUHANI COIN CONTROLS*\n\n"
-            f"  ✅ `/Accept_rep <group_id>` — Make a group's rep coin-convertible\n"
-            f"  🔒 `/Unaccept_rep <group_id>` — Coin-convertible hatao\n"
-            f"  👥 `/earn_groups` — Link-list of accepted groups for members\n"
-            f"  💸 Withdrawals — approve/reject buttons arrive in DM\n\n"
-            f"{'─'*38}\n"
             f"🌐 `/gblacklist` • `/gwhitelist` — Global word lists\n"
             f"🤖 `/adexempt` — Autodelete exemptions\n"
         )
@@ -2830,17 +2818,12 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"📱 *YOUR COMMANDS*\n\n"
         f"  📜 `/rules` — View group rules\n"
         f"  ⚠️ `/warnings` — Check your warnings\n"
-        f"  ⭐ `/rep` — Suhani Profile Card & Wallet\n"
-        f"  💰 `/wallet` — Suhani Points & INR\n"
+        f"  ⭐ `/rep` — Suhani Profile Card\n"
         f"  🏆 `/repboard` — Reputation Ranking\n"
-        f"  📊 `/rankings` — Message activity rank (Group & Global)\n"
-        f"  💰 `/earn_groups` — Groups jaha msg karke paisa kamao\n"
         f"  🆔 `/id` — Your Telegram ID\n\n"
         f"{'─'*34}\n"
-        f"💎 *REWARD SYSTEM*\n"
-        f"_Thank You → +100 Rep | Clear a warning → 100 Rep_\n"
-        f"_10,000 Rep (accepted group) → 1 Coin → ₹1_\n"
-        f"_Min ₹10 withdrawal → `/withdraw`_\n\n"
+        f"💎 *REPUTATION*\n"
+        f"_Thank You → +{REP_PER_THANK} Rep | Clear a warning → {REP_PER_WARN_REMOVE} Rep_\n\n"
         f"_Add me to your group & make me admin!_"
     )
     await update.message.reply_text(
@@ -2851,9 +2834,6 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton("📋 All Commands", callback_data="menu_user"),
                 InlineKeyboardButton("⚠️ Warn System", callback_data="menu_warns"),
             ],
-            [
-                InlineKeyboardButton("💸 Withdraw Info", callback_data=f"rep:wdinfo:{update.effective_user.id}"),
-            ]
         ])
     )
 
@@ -2876,15 +2856,12 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{'─'*24}\n\n"
             f"📜 `/rules` — View group rules\n"
             f"⚠️ `/warnings` — Check your warnings\n"
-            f"⭐ `/rep` — Suhani Profile Card & Wallet\n"
-            f"💰 `/wallet` — Suhani Points & INR value\n"
+            f"⭐ `/rep` — Suhani Profile Card\n"
             f"🏆 `/repboard` — Reputation Leaderboard\n"
-            f"📊 `/rankings` — Message activity rank (Group & Global)\n"
-            f"💰 `/earn_groups` — Groups where you can earn money by chatting\n"
             f"🆔 `/id` — Your Telegram ID\n\n"
             f"{'─'*32}\n"
-            f"💡 _Thank You → +100 Rep | 10,000 Rep → 1 Coin → ₹1_\n"
-            f"_Min ₹10 withdraw → `/withdraw` | Violations auto-detected!_"
+            f"💡 _Thank You → +{REP_PER_THANK} Rep | Clear a warning → {REP_PER_WARN_REMOVE} Rep_\n"
+            f"_Violations auto-detected!_"
         )
         sent = await update.message.reply_text(
             text,
@@ -2901,7 +2878,7 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         _remember_menu_owner(ch.id, sent.message_id, u.id)
         if in_group:
-            schedule_panel_autodelete(ctx, ch.id, sent.message_id)
+            schedule_panel_autodelete(ctx, ch.id, sent.message_id, cmd_msg_id=update.message.message_id)
         return sent
 
     # ── Admin / Owner full help ──────────────────────────────
@@ -4002,21 +3979,12 @@ async def reputation_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     action = "diye gaye" if amount >= 0 else "kaate gaye"
     is_global = chat_id == GLOBAL_REP_ID
     scope = "🌐 *Global* (given via DM)" if is_global else "in this group"
-    is_accepted = (not is_global) and db.is_rep_group_accepted(chat_id)
-
-    wallet = db.get_suhani_points(target_id)
-    coin_line = (
-        f"🪙 *Suhani Coin:* `{wallet['coins']}` (₹{wallet['coins']}) available "
-        f"— ✅ _rep given by the owner is always coin-convertible_"
-    )
-
     await update.message.reply_text(
         f"✅ *Reputation Updated*\n"
         f"{'─'*28}\n"
         f"👤 User: `{target_id}`\n"
         f"📈 `{abs(amount)}` points {action} {scope}\n"
-        f"📊 Naya balance: `{new_rep}` rep\n"
-        f"{coin_line}",
+        f"📊 Naya balance: `{new_rep}` rep",
         parse_mode='Markdown'
     )
 
@@ -5328,9 +5296,6 @@ async def rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # ── Data fetch ───────────────────────────────────────────
     group_rep   = db.get_reputation(ch.id, tgt.id) if ch.type != "private" else 0
     total_rep   = db.get_total_reputation(tgt.id)
-    wallet      = db.get_suhani_points(tgt.id)
-    coins       = wallet["coins"]
-    is_accepted = db.is_rep_group_accepted(ch.id) if ch.type != "private" else False
 
     # Group rank
     if ch.type != "private":
@@ -5342,13 +5307,6 @@ async def rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Global rank (all groups combined)
     global_top  = db.get_global_reputation_top(limit=50)
     global_rank = next((i + 1 for i, d in enumerate(global_top) if d.get("_id") == tgt.id), None)
-
-    # ── Progress bar toward next Suhani Coin (10,000 rep, convertible groups only) ──
-    progress   = wallet["convertible_rep"] % REP_PER_SUHANI_COIN
-    bar_filled = progress // (REP_PER_SUHANI_COIN // 10)
-    bar_empty  = 10 - bar_filled
-    prog_bar   = "█" * bar_filled + "░" * bar_empty
-    pts_needed = REP_PER_SUHANI_COIN - progress
 
     # ── Rep tier badge ────────────────────────────────────────
     def rep_tier(pts):
@@ -5362,16 +5320,11 @@ async def rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     tier = rep_tier(total_rep)
 
-    # ── Min withdrawal check ──────────────────────────────────
-    can_withdraw = coins >= MIN_WITHDRAW_COINS
-
     rank_group_txt = f"#{group_rank}" if group_rank else "Unranked"
     rank_global_txt = f"#{global_rank}" if global_rank else "Unranked"
 
     # ── Build reply text (Markdown v1) ─────────────────────────
     name_safe = user_name(tgt, escape=False)
-    accepted_line = "✅ This group is *accepted* for Suhani Coin" if is_accepted else \
-                    ("🔒 This group isn't accepted — rep will only be usable to clear warnings" if ch.type != "private" else "")
 
     text = (
         f"⭐ *SUHANI PROFILE CARD*\n"
@@ -5381,89 +5334,24 @@ async def rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"{'─'*28}\n"
         f"📊 *REPUTATION*\n"
         f"  🏠 Group Rep:  `{group_rep}` pts  •  Rank `{rank_group_txt}`\n"
-        f"  🌐 Total Rep:  `{total_rep}` pts  •  Global `{rank_global_txt}`\n"
-        f"  💠 Convertible Rep: `{wallet['convertible_rep']}` pts\n"
-        + (f"  {accepted_line}\n" if accepted_line else "") +
-        f"\n⚡ *Next Suhani Coin*\n"
-        f"  [{prog_bar}] `{progress}/{REP_PER_SUHANI_COIN}`\n"
-        f"  _{pts_needed} more convertible rep → +1 Suhani Coin_\n\n"
-        f"{'─'*28}\n"
-        f"💰 *SUHANI WALLET*\n"
-        f"  🪙 Suhani Coins: `{coins}`\n"
-        f"  💵 INR Value:    `₹{coins}`\n"
-        f"  {'✅ Withdrawal available!' if can_withdraw else f'🔒 Min {MIN_WITHDRAW_COINS} coins needed  •  {max(0,MIN_WITHDRAW_COINS-coins)} more remaining'}\n\n"
+        f"  🌐 Total Rep:  `{total_rep}` pts  •  Global `{rank_global_txt}`\n\n"
         f"{'─'*28}\n"
         f"📖 *HOW IT WORKS*\n"
         f"  • Reply *Thank You* to someone → +{REP_PER_THANK} Rep\n"
-        f"  • Max 3 times per day\n"
-        f"  • Clear 1 warning = {REP_PER_WARN_REMOVE} rep (auto-deduct)\n"
-        f"  • {REP_PER_SUHANI_COIN} Convertible Rep = 1 Suhani Coin = ₹1\n"
-        f"  • Min ₹{MIN_WITHDRAW_COINS} withdrawal • Request via /withdraw\n\n"
-        f"{'─'*28}\n"
-        f"💸 *WITHDRAW* → use the `/withdraw` command\n"
-        f"_/repboard — Group reputation ranking_"
+        f"  • Max 3 times per day (per person)\n"
+        f"  • Clear 1 warning = {REP_PER_WARN_REMOVE} rep (auto-deduct)\n\n"
+        f"_/repboard — Group + Global reputation ranking_"
     )
 
     # ── Keyboard ──────────────────────────────────────────────
-    kb_rows = [
-        [InlineKeyboardButton("🏆 Rep Leaderboard", callback_data=f"rep:board:{ch.id}"),
-         InlineKeyboardButton("💰 My Wallet", callback_data=f"rep:wallet:{tgt.id}")]
-    ]
-    if can_withdraw:
-        kb_rows.append([InlineKeyboardButton(
-            "💸 Request Withdrawal", callback_data=f"rep:wdinfo:{tgt.id}"
-        )])
-    kb = InlineKeyboardMarkup(kb_rows)
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🏆 Rep Leaderboard", callback_data=f"rep:board:{ch.id}")]
+    ])
 
     msg = await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
     if ch.type != "private":
         _remember_menu_owner(ch.id, msg.message_id, update.effective_user.id)
         asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 600))
-
-
-# ─── /wallet ─── Suhani Points wallet (DM + group) ───────────
-async def wallet_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    usr = update.effective_user
-    ch  = update.effective_chat
-    if not usr:
-        return
-    total_rep  = db.get_total_reputation(usr.id)
-    wallet     = db.get_suhani_points(usr.id)
-    coins      = wallet["coins"]
-    progress   = wallet["convertible_rep"] % REP_PER_SUHANI_COIN
-    bar_filled = progress // (REP_PER_SUHANI_COIN // 10)
-    prog_bar   = "█" * bar_filled + "░" * (10 - bar_filled)
-    can_withdraw = coins >= MIN_WITHDRAW_COINS
-
-    text = (
-        f"💰 *SUHANI WALLET*\n"
-        f"{'─'*24}\n\n"
-        f"👤 *{user_name(usr)}*\n\n"
-        f"{'─'*26}\n"
-        f"🪙 Suhani Coins:   `{coins}`\n"
-        f"🌐 Total Rep:      `{total_rep} pts`\n"
-        f"💠 Convertible Rep: `{wallet['convertible_rep']} pts`\n"
-        f"💵 INR Value:      `₹{coins}`\n\n"
-        f"⚡ *Next Coin*\n"
-        f"  [{prog_bar}] `{progress}/{REP_PER_SUHANI_COIN} rep`\n\n"
-        f"{'─'*26}\n"
-        f"📋 *CONVERSION RATES*\n"
-        f"  {REP_PER_SUHANI_COIN} Convertible Rep  →  1 Suhani Coin\n"
-        f"  1 Coin  →  ₹1\n"
-        f"  Min: {MIN_WITHDRAW_COINS} Coins = ₹{MIN_WITHDRAW_COINS} withdrawal\n\n"
-        f"{'─'*26}\n"
-        f"ℹ️ _Only rep from accepted groups turns into coins._\n"
-        f"{'✅ *Withdrawal Ready!*' if can_withdraw else f'🔒 Need `{max(0,MIN_WITHDRAW_COINS-coins)}` more Coins'}\n"
-        f"💸 Withdraw → use the `/withdraw` command"
-    )
-    kb_rows = [[InlineKeyboardButton("🏆 Rep Board", callback_data="rep:board:0")]]
-    if can_withdraw:
-        kb_rows[0].insert(0, InlineKeyboardButton("✅ Request Withdrawal", callback_data=f"rep:wdinfo:{usr.id}"))
-    kb = InlineKeyboardMarkup(kb_rows)
-    msg = await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
-    if ch.type != "private":
-        _remember_menu_owner(ch.id, msg.message_id, usr.id)
-        asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 300))
 
 
 # ─── /repboard ─── Reputation Leaderboard (Group + Global) ────
@@ -5477,8 +5365,6 @@ async def repboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     medals = ["🥇", "🥈", "🥉"]
     rank_emojis = ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
-
-    is_accepted = db.is_rep_group_accepted(ch.id)
 
     # ── Group leaderboard ──────────────────────────────────────
     group_top = db.get_reputation_top(ch.id, limit=10)
@@ -5500,15 +5386,11 @@ async def repboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     group_lines  = build_board_lines(group_top,  key_pts="points",  key_id="user_id")
     global_lines = build_board_lines(global_top, key_pts="total",   key_id="_id")
 
-    accepted_note = "✅ *Accepted* — this group's rep converts into Suhani Coin" if is_accepted \
-        else "🔒 *Not Accepted* — this group's rep will only be usable to clear warnings"
-
     text = (
         f"*🏆 SUHANI REPUTATION BOARD*\n"
 
         f"{'─'*24}\n\n"
         f"🏠 *GROUP TOP* — {md_esc(getattr(ch, 'title', 'This Group')[:22])}\n"
-        f"{accepted_note}\n"
         f"{'┄'*34}\n"
         + "\n".join(group_lines) +
         f"\n\n"
@@ -5517,18 +5399,16 @@ async def repboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         + "\n".join(global_lines) +
         f"\n\n{'─'*34}\n"
         f"💡 _Thank You = +{REP_PER_THANK} rep  •  Clear 1 warning = {REP_PER_WARN_REMOVE} rep_\n"
-        f"💡 _{REP_PER_SUHANI_COIN} convertible rep = 1 Suhani Coin = ₹1_\n"
         f"_Reply *Thank You* to give rep  •  Max 3/day per person_"
     )
 
     kb = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🔄 Refresh", callback_data=f"rep:board:{ch.id}"),
-            InlineKeyboardButton("⭐ My Profile", callback_data=f"rep:wallet:{update.effective_user.id}"),
+            InlineKeyboardButton("⭐ My Profile", callback_data="rep:myprofile"),
         ],
         [
             InlineKeyboardButton("🌐 Global Refresh", callback_data="rep:global:0"),
-            InlineKeyboardButton("💸 Withdraw", callback_data=f"rep:wdinfo:{update.effective_user.id}"),
         ]
     ])
 
@@ -5575,12 +5455,6 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 return
             group_rep   = db.get_reputation(ch_id, usr.id) if ch_id else 0
             total_rep   = db.get_total_reputation(usr.id)
-            wallet      = db.get_suhani_points(usr.id)
-            coins       = wallet["coins"]
-            progress    = wallet["convertible_rep"] % REP_PER_SUHANI_COIN
-            prog_bar    = "█" * (progress // (REP_PER_SUHANI_COIN // 10)) + "░" * (10 - progress // (REP_PER_SUHANI_COIN // 10))
-            pts_needed  = REP_PER_SUHANI_COIN - progress
-            can_wd      = coins >= MIN_WITHDRAW_COINS
 
             def rep_tier(p):
                 if p >= 100000: return "💎 LEGENDARY"
@@ -5601,16 +5475,8 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"{'─'*28}\n"
                 f"📊 *REPUTATION*\n"
                 f"  🏠 Group Rep:  `{group_rep}` pts\n"
-                f"  🌐 Total Rep:  `{total_rep}` pts\n"
-                f"  💠 Convertible: `{wallet['convertible_rep']}` pts\n\n"
-                f"⚡ *Next Suhani Coin*\n"
-                f"  [{prog_bar}] `{progress}/{REP_PER_SUHANI_COIN}`\n"
-                f"  _{pts_needed} more convertible rep → +1 Coin_\n\n"
-                f"{'─'*28}\n"
-                f"💰 *WALLET*\n"
-                f"  🪙 Suhani Coins: `{coins}`\n"
-                f"  💵 INR Value:    `₹{coins}`\n"
-                f"  {'✅ Withdrawal ready!' if can_wd else f'🔒 Need {max(0,MIN_WITHDRAW_COINS-coins)} more Coins'}"
+                f"  🌐 Total Rep:  `{total_rep}` pts\n\n"
+                f"_Reply 'Thank You' to earn rep • Clear a warning for {REP_PER_WARN_REMOVE} rep_"
             )
             kb_rows = [
                 [
@@ -5619,30 +5485,23 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 ],
                 [InlineKeyboardButton("◀️ Back", callback_data="menu_main")],
             ]
-            if can_wd:
-                kb_rows.insert(1, [InlineKeyboardButton("💸 Withdraw", callback_data=f"rep:wdinfo:{usr.id}")])
             await query.edit_message_text(text, parse_mode='Markdown',
                 reply_markup=InlineKeyboardMarkup(kb_rows))
 
         elif action == "board":
             chat_id = int(parts[2]) if len(parts) > 2 else ch_id
-            is_accepted = db.is_rep_group_accepted(chat_id)
             group_top  = db.get_reputation_top(chat_id, limit=7)
             global_top = db.get_global_reputation_top(limit=7)
             group_lines  = _rep_lines(group_top,  "points", "user_id")
             global_lines = _rep_lines(global_top, "total",  "_id")
-            accepted_note = "✅ Accepted group (Coin-convertible)" if is_accepted else "🔒 Not accepted (warn-only rep)"
             text = (
                 f"*🏆 REPUTATION BOARD*\n"
 
                 f"{'─'*24}\n\n"
-                f"{accepted_note}\n\n"
                 f"🏠 *GROUP TOP*\n{'┄'*32}\n"
                 + "\n".join(group_lines) +
                 f"\n\n🌐 *GLOBAL TOP*\n{'┄'*32}\n"
-                + "\n".join(global_lines) +
-                f"\n\n{'─'*32}\n"
-                f"_{REP_PER_SUHANI_COIN} convertible rep = 1 Coin = ₹1_"
+                + "\n".join(global_lines)
             )
             await query.edit_message_text(
                 text, parse_mode='Markdown',
@@ -5669,8 +5528,7 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"{'┄'*32}\n"
                 + "\n".join(lines) +
                 f"\n\n{'─'*32}\n"
-                f"_Combined data from all groups_\n"
-                f"_Coins are only generated from accepted groups' rep_"
+                f"_Combined data from all groups_"
             )
             await query.edit_message_text(
                 text, parse_mode='Markdown',
@@ -5685,47 +5543,6 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     ],
                 ])
             )
-
-        elif action == "wallet":
-            user_id    = int(parts[2]) if len(parts) > 2 else (query.from_user.id if query.from_user else 0)
-            total_rep  = db.get_total_reputation(user_id)
-            wallet     = db.get_suhani_points(user_id)
-            coins      = wallet["coins"]
-            progress   = wallet["convertible_rep"] % REP_PER_SUHANI_COIN
-            prog_bar   = "█" * (progress // (REP_PER_SUHANI_COIN // 10)) + "░" * (10 - progress // (REP_PER_SUHANI_COIN // 10))
-            can_wd     = coins >= MIN_WITHDRAW_COINS
-            text = (
-                f"💰 *SUHANI WALLET*\n{'─'*26}\n\n"
-                f"🪙 Coins: `{coins}`\n"
-                f"🌐 Total Rep: `{total_rep} pts`\n"
-                f"💠 Convertible Rep: `{wallet['convertible_rep']} pts`\n"
-                f"💵 Value: `₹{coins}`\n\n"
-                f"[{prog_bar}] `{progress}/{REP_PER_SUHANI_COIN}`\n\n"
-                f"{'✅ Withdrawal ready!' if can_wd else f'🔒 {max(0,MIN_WITHDRAW_COINS-coins)} Coins needed'}"
-            )
-            kb_rows = [[InlineKeyboardButton("◀️ Back", callback_data="rep:myprofile")]]
-            if can_wd:
-                kb_rows.insert(0, [InlineKeyboardButton("💸 Withdraw", callback_data=f"rep:wdinfo:{user_id}")])
-            await query.edit_message_text(text, parse_mode='Markdown',
-                reply_markup=InlineKeyboardMarkup(kb_rows))
-
-        elif action == "wdinfo":
-            # Withdrawal info — /withdraw command ka pointer
-            usr_id = int(parts[2]) if len(parts) > 2 else (query.from_user.id if query.from_user else 0)
-            if query.from_user and query.from_user.id != usr_id:
-                return
-            wallet = db.get_suhani_points(usr_id)
-            coins  = wallet["coins"]
-            text = (
-                f"💸 *WITHDRAWAL REQUEST*\n{'─'*26}\n\n"
-                f"🪙 Available Coins: `{coins}` (₹{coins})\n\n"
-                f"To withdraw, send this in DM:\n"
-                f"`/withdraw <amount> <UPI ID>`\n\n"
-                f"_Example:_ `/withdraw {min(coins, MIN_WITHDRAW_COINS)} name@upi`\n\n"
-                f"Min withdrawal: `{MIN_WITHDRAW_COINS}` coins (₹{MIN_WITHDRAW_COINS})"
-            )
-            await query.edit_message_text(text, parse_mode='Markdown',
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="rep:myprofile")]]))
 
     except Exception:
         pass
@@ -5948,7 +5765,6 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         db.add_reputation(ch.id, target.id, REP_PER_THANK, user_name(target, escape=False))
         new_rep = db.get_reputation(ch.id, target.id)
         remaining = 3 - new_count
-        is_accepted = db.is_rep_group_accepted(ch.id)
 
         # ── Agar target ke paas warning hai aur balance sufficient hai → auto-redeem ──
         warn_removed = False
@@ -5958,16 +5774,6 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 warn_removed = True
                 new_rep = db.get_reputation(ch.id, target.id)
 
-        wallet = db.get_suhani_points(target.id)
-
-        # ── Milestone: naya Suhani Coin ban gaya kya? (sirf accepted group) ──
-        milestone_txt = ""
-        if is_accepted and wallet["convertible_rep"] % REP_PER_SUHANI_COIN < REP_PER_THANK and wallet["coins"] > 0:
-            milestone_txt = (
-                f"\n\n🎉 *MILESTONE\\!* Naya Suhani Coin ban gaya\\!\n"
-                f"💰 Wallet: `{wallet['coins']}` Suhani Coin \\= ₹`{wallet['coins']}`"
-            )
-
         base_msg = (
             f"💖 {mv2_esc(user_name(usr, escape=False))} said thank you to {mv2_esc(user_name(target, escape=False))}\\!\n\n"
             f"⭐ *\\+{REP_PER_THANK} Reputation Points* mil gaye\\!\n"
@@ -5976,9 +5782,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if warn_removed:
             base_msg += f"✅ Bonus: a warning was also cleared \\(100 rep deducted\\)\\!\n"
         base_msg += f"🎯 You can still give this person: `{remaining}/3` today\n"
-        if not is_accepted:
-            base_msg += f"_ℹ️ This group isn't accepted for Suhani Coin — rep will only be usable to clear warnings\\._\n"
-        base_msg += f"{milestone_txt}\n\n_Check your wallet with \\/rep\\!_"
+        base_msg += f"\n_Check your rep with \\/rep\\!_"
 
         notice = await msg.reply_text(base_msg, parse_mode='MarkdownV2')
         asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 60))
@@ -6445,7 +6249,7 @@ async def settings_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = _settings_overview_text(ch.id)
     sent = await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb_settings_main(ch.id))
     _remember_menu_owner(ch.id, sent.message_id, u.id)
-    schedule_panel_autodelete(ctx, ch.id, sent.message_id)
+    schedule_panel_autodelete(ctx, ch.id, sent.message_id, cmd_msg_id=update.message.message_id)
 
 def kb_back_cfg():
     return InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="cfg_main")]])
@@ -6943,17 +6747,13 @@ def main():
     app.add_handler(CommandHandler("warnings",         warnings_cmd))
     app.add_handler(CommandHandler("resetwarnings",    reset_cmd))
     app.add_handler(CommandHandler("rep",              rep_cmd))
-    app.add_handler(CommandHandler("wallet",           wallet_cmd))
     app.add_handler(CommandHandler("repboard",         repboard_cmd))
-    app.add_handler(CommandHandler("withdraw",         withdraw_cmd))
-    app.add_handler(CommandHandler("Accept_rep",       accept_rep_cmd))
-    app.add_handler(CommandHandler("accept_rep",       accept_rep_cmd))
-    app.add_handler(CommandHandler("Unaccept_rep",     unaccept_rep_cmd))
-    app.add_handler(CommandHandler("unaccept_rep",     unaccept_rep_cmd))
-    app.add_handler(CommandHandler("earn_groups",      earn_groups_cmd))
-    app.add_handler(CommandHandler("earngroups",       earn_groups_cmd))
+    # ── Suhani Coin / money reward system: DISABLED (2026-08) ──
+    # Reputation ab sirf warnings clear karne ke kaam aata hai, koi
+    # paisa/coin conversion nahi hota. Isliye /wallet, /withdraw,
+    # /accept_rep, /unaccept_rep, /earn_groups, /makeconvertible
+    # commands register nahi kiye ja rahe.
     app.add_handler(CommandHandler("reputation",       reputation_cmd))
-    app.add_handler(CommandHandler("makeconvertible",   makeconvertible_cmd))
     app.add_handler(CommandHandler("del",              del_cmd))
     app.add_handler(CommandHandler("purge",            purge_cmd))
     app.add_handler(CommandHandler("immortal",         immortal_cmd))
@@ -6975,7 +6775,9 @@ def main():
     app.add_handler(CommandHandler("gblacklist",       gblacklist_cmd))
     app.add_handler(CommandHandler("gwhitelist",       gwhitelist_cmd))
     app.add_handler(CommandHandler("stats",            stats_cmd))
-    app.add_handler(CommandHandler("rankings",          rankings_cmd))
+    # /rankings (message-activity leaderboard): DISABLED — isko chalu rakhne
+    # ke liye har group ke har message ko scan karna padta tha, jo bade
+    # groups mein bot ko slow/busy kar deta tha.
     app.add_handler(CommandHandler("power",            power_cmd))
     app.add_handler(CommandHandler("unpower",          unpower_cmd))
     app.add_handler(CommandHandler("fban",             fban_cmd))
@@ -6997,18 +6799,16 @@ def main():
     app.add_handler(CallbackQueryHandler(cfg_callback,        pattern=r"^cfg_"))
     app.add_handler(CallbackQueryHandler(captcha_callback,    pattern=r"^captcha_"))
     app.add_handler(CallbackQueryHandler(menu_callback,       pattern=r"^(menu_|show_|unmute_|unban_|dismiss_|close_)"))
-    app.add_handler(CallbackQueryHandler(rankings_callback, pattern=r"^lbd:"))
     app.add_handler(CallbackQueryHandler(rep_callback,        pattern=r"^rep:"))
-    app.add_handler(CallbackQueryHandler(withdraw_approval_callback, pattern=r"^wd:"))
+    # rankings_callback (lbd:) aur withdraw_approval_callback (wd:) DISABLED
+    # saath saath /rankings aur /withdraw feature ke — neeche dekho.
 
     # ── Message Handlers ─────────────────────────────────────
-    # Activity tracker (message-count leaderboard) — apna ALAG group (-1),
-    # taaki yeh COMMANDS samet har message ko count kare, bina kisi
-    # doosre handler (commands/check_msg/auto-delete) se conflict kiye.
-    app.add_handler(MessageHandler(
-        filters.ALL & filters.ChatType.GROUPS,
-        track_activity_msg
-    ), group=-1)
+    # NOTE: activity tracker (message-count leaderboard) handler yahan se
+    # HATA diya gaya hai — yeh pehle group=-1 pe har single group message
+    # (commands samet) scan karta tha sirf /rankings leaderboard ke liye,
+    # jisse bade groups mein bot busy/slow ho jaata tha. Ab yeh scan hi
+    # nahi hota — bot ka load kaafi kam ho gaya hai.
     # Bot reply tracker — group ke saare messages dekho (bots ke replies track karne ke liye)
     app.add_handler(MessageHandler(
         filters.ALL & filters.ChatType.GROUPS,
@@ -7027,11 +6827,9 @@ def main():
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_join))
     app.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER,  on_leave))
 
-    # ── Daily job: global #1 message-sender ko 1000 free rep (pichle din ka) ──
-    if app.job_queue:
-        app.job_queue.run_daily(daily_global_winner_job, time=dtime(hour=0, minute=5))
-    else:
-        print("⚠️ job_queue unavailable — install 'python-telegram-bot[job-queue]' for daily rewards.")
+    # NOTE: daily_global_winner_job (activity-leaderboard #1 ko free rep dena)
+    # DISABLED — yeh /rankings activity-tracking data pe depend karta tha,
+    # jo ab scan hi nahi hota.
 
     print("✅ Bot Started! Polling...")
     app.run_polling(drop_pending_updates=True)
