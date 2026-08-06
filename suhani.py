@@ -24,7 +24,7 @@ from threading import Thread
 from flask import Flask
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
-from telegram.error import RetryAfter, Forbidden
+from telegram.error import RetryAfter, Forbidden, BadRequest, TimedOut, NetworkError
 import aiohttp
 
 # ═══════════════════════════════════════════════════════════
@@ -3680,56 +3680,108 @@ async def broadcast_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def _resolve_group_full(ctx: ContextTypes.DEFAULT_TYPE, gid: int):
+GROUPS_PER_PAGE = 25
+_groups_list_cache: dict[int, list] = {}   # owner_id -> resolved group rows (in-memory cache for pagination)
+
+
+async def _resolve_group_full(ctx: ContextTypes.DEFAULT_TYPE, gid: int, me_id: int):
     """
-    Ek group ke baare mein poori detail nikalta hai: (title, invite_link, member_count, stale)
-    "stale" True hoga agar:
-      • Bot us group mein ab member hi nahi hai (left/kicked/banned), YA
-      • Bot member to hai lekin ADMIN nahi hai.
-    Bot admin nahi hai matlab wo group properly manage nahi kar sakta,
-    isliye aisi entry ko caller (groups_cmd) database se hata deta hai —
-    list mein sirf wahi groups rehte hain jahan bot admin hoke active hai.
+    Ek group ke baare mein poori detail nikalta hai: (title, invite_link, member_count, status)
+    status teen values le sakta hai:
+      "ok"      → bot is group mein ADMIN/CREATOR hai, sab sahi hai
+      "removed" → CONFIRM ho gaya ki bot ab is group ka admin nahi hai
+                  (bot ko group se nikala gaya / left / kicked / banned / demote kiya gaya)
+                  → caller ise database se hata dega
+      "unknown" → Telegram se temporary error aaya (network/timeout/flood-wait)
+                  → yeh group SKIP hoga is baar, par database se DELETE NAHI hoga,
+                  agli baar /groups chalane par firse try hoga
     """
+    # get_chat_member ek hi call kaafi hai — get_chat + get_chat_member_count
+    # alag se maangna matlab har group ke liye 3x zyada API calls, jisse
+    # bade group count par Telegram flood-control lag jaata hai.
+    for attempt in range(2):
+        try:
+            bot_member = await ctx.bot.get_chat_member(gid, me_id)
+            break
+        except RetryAfter as e:
+            # Flood control — thoda ruk ke ek baar aur try karo, group ko galat se stale mat maano
+            await asyncio.sleep(e.retry_after + 0.5)
+            continue
+        except Forbidden:
+            # Bot ko definitely block/kick kiya gaya hai is group se
+            return (str(gid), None, None, "removed")
+        except BadRequest as e:
+            msg = str(e).lower()
+            if "chat not found" in msg or "user not found" in msg or "not enough rights" in msg:
+                return (str(gid), None, None, "removed")
+            return (str(gid), None, None, "unknown")
+        except (TimedOut, NetworkError):
+            return (str(gid), None, None, "unknown")
+        except Exception:
+            return (str(gid), None, None, "unknown")
+    else:
+        return (str(gid), None, None, "unknown")
+
+    if bot_member.status in ("left", "kicked", "banned"):
+        return (str(gid), None, None, "removed")
+    if bot_member.status not in ("administrator", "creator"):
+        # Group mein member to hai par admin nahi — protection features kaam nahi karenge
+        return (str(gid), None, None, "removed")
+
+    # Ab title/username/member-count nikalo (bot admin confirm ho chuka hai)
     try:
         chat = await ctx.bot.get_chat(gid)
+        title = chat.title or chat.first_name or str(gid)
     except Exception:
-        # Chat hi resolve nahi ho raha — bot ko block/remove kar diya gaya hoga
-        return (str(gid), None, None, True)
+        # Admin status confirm hai, sirf naam fetch fail hua — group ko list mein rakho
+        title = str(gid)
+        chat = None
 
-    title = chat.title or chat.first_name or str(gid)
-
-    # Bot ka apna status is group mein check karo
-    try:
-        me = await ctx.bot.get_me()
-        bot_member = await ctx.bot.get_chat_member(gid, me.id)
-        bot_status = bot_member.status
-    except Exception:
-        return (title, None, None, True)
-
-    if bot_status in ("left", "kicked", "banned"):
-        return (title, None, None, True)
-    if bot_status not in ("administrator", "creator"):
-        # Member to hai par admin nahi — protection/help features kaam nahi karenge
-        return (title, None, None, True)
-
-    # Member count nikalne ki koshish
     members = None
     try:
         members = await ctx.bot.get_chat_member_count(gid)
     except Exception:
         pass
 
-    # Invite link nikalne ki koshish (username agar public group hai)
     link = None
     try:
-        if chat.username:
+        if chat and chat.username:
             link = f"https://t.me/{chat.username}"
-        elif chat.invite_link:
+        elif chat and chat.invite_link:
             link = chat.invite_link
     except Exception:
         pass
 
-    return (title, link, members, False)
+    return (title, link, members, "ok")
+
+
+def _build_groups_page(rows: list, page: int):
+    total = len(rows)
+    total_pages = max(1, (total + GROUPS_PER_PAGE - 1) // GROUPS_PER_PAGE)
+    page = max(0, min(page, total_pages - 1))
+    start = page * GROUPS_PER_PAGE
+    chunk = rows[start:start + GROUPS_PER_PAGE]
+
+    lines = [f"👥 <b>𝗔𝗰𝘁𝗶𝘃𝗲 𝗚𝗿𝗼𝘂𝗽𝘀:</b> {total}  <i>(page {page+1}/{total_pages})</i>\n"]
+    for i, (title, link, members) in enumerate(chunk, start=start + 1):
+        title_safe = html.escape(title)
+        mem_txt = f" — 👤 {members}" if members is not None else ""
+        if link:
+            lines.append(f"{i}. <a href=\"{html.escape(link)}\">{title_safe}</a>{mem_txt}")
+        else:
+            lines.append(f"{i}. {title_safe}{mem_txt}")
+
+    buttons = []
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton("◀️ Prev", callback_data=f"grppg_{page-1}"))
+    if page < total_pages - 1:
+        nav_row.append(InlineKeyboardButton("Next ▶️", callback_data=f"grppg_{page+1}"))
+    if nav_row:
+        buttons.append(nav_row)
+
+    markup = InlineKeyboardMarkup(buttons) if buttons else None
+    return "\n".join(lines), markup
 
 
 async def groups_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -3742,41 +3794,61 @@ async def groups_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"⏳ Fetching details for {len(group_ids)} groups..."
     )
 
-    lines = []
-    stale_ids = []
-    active_count = 0
-    for gid in group_ids:
-        title, link, members, stale = await _resolve_group_full(ctx, gid)
-        if stale:
-            # Bot ab is group ka admin nahi hai (ya group mein hi nahi hai) —
-            # database se turant clean kar do, list mein isse show hi mat karo.
-            stale_ids.append(gid)
-            await asyncio.sleep(0.1)
-            continue
-        active_count += 1
-        title_safe = html.escape(title)
-        mem_txt = f" — 👤 {members}" if members is not None else ""
-        if link:
-            lines.append(f"{active_count}. <a href=\"{html.escape(link)}\">{title_safe}</a>{mem_txt}")
-        else:
-            lines.append(f"{active_count}. {title_safe}{mem_txt}")
-        await asyncio.sleep(0.1)  # flood-control se bachne ke liye
+    me = await ctx.bot.get_me()
 
-    if stale_ids:
-        for gid in stale_ids:
+    rows = []          # (title, link, members) — sirf confirmed-admin groups
+    removed_ids = []   # confirmed removed/non-admin groups
+    unknown_count = 0  # temporary errors — in groups ko haath nahi lagaya
+
+    for gid in group_ids:
+        title, link, members, status = await _resolve_group_full(ctx, gid, me.id)
+        if status == "ok":
+            rows.append((title, link, members))
+        elif status == "removed":
+            removed_ids.append(gid)
+        else:
+            unknown_count += 1
+        await asyncio.sleep(0.15)  # flood-control se bachne ke liye
+
+    if removed_ids:
+        for gid in removed_ids:
             db.remove_group(gid)
 
-    header = f"👥 <b>Active Groups:</b> {active_count}"
-    if stale_ids:
-        header += f"\n🧹 <i>{len(stale_ids)} inactive group(s) removed from database.</i>"
-    lines.insert(0, header + "\n")
+    _groups_list_cache[update.effective_user.id] = rows
 
-    text = "\n".join(lines)
-    # Telegram message limit ~4096 chars — split into chunks agar zyada groups hain
-    chunks = [text[j:j+4000] for j in range(0, len(text), 4000)]
     await status_msg.delete()
-    for chunk in chunks:
-        await update.message.reply_text(chunk, parse_mode='HTML', disable_web_page_preview=True)
+
+    if not rows:
+        note = "👥 No groups found where the bot is currently admin."
+        if unknown_count:
+            note += f"\n⚠️ {unknown_count} group(s) could not be checked right now — try /groups again in a bit."
+        return await update.message.reply_text(note)
+
+    text, markup = _build_groups_page(rows, 0)
+    footer = []
+    if removed_ids:
+        footer.append(f"🧹 <i>{len(removed_ids)} group(s) where bot isn't admin were cleaned from database.</i>")
+    if unknown_count:
+        footer.append(f"⚠️ <i>{unknown_count} group(s) skipped due to a temporary error — re-run /groups to recheck them.</i>")
+    if footer:
+        text += "\n\n" + "\n".join(footer)
+
+    await update.message.reply_text(text, parse_mode='HTML', disable_web_page_preview=True, reply_markup=markup)
+
+
+async def groups_page_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if update.effective_user.id != OWNER_ID:
+        return await query.answer("❌ Not for you.", show_alert=True)
+
+    rows = _groups_list_cache.get(update.effective_user.id)
+    if not rows:
+        return await query.answer("⚠️ List expired — please run /groups again.", show_alert=True)
+
+    page = int(query.data.split("_", 1)[1])
+    text, markup = _build_groups_page(rows, page)
+    await query.answer()
+    await query.edit_message_text(text, parse_mode='HTML', disable_web_page_preview=True, reply_markup=markup)
 
 
 
@@ -6344,6 +6416,7 @@ def main():
     app.add_handler(CallbackQueryHandler(captcha_callback,    pattern=r"^captcha_"))
     app.add_handler(CallbackQueryHandler(menu_callback,       pattern=r"^(menu_|show_|unmute_|unban_|dismiss_|close_)"))
     app.add_handler(CallbackQueryHandler(rep_callback,        pattern=r"^rep:"))
+    app.add_handler(CallbackQueryHandler(groups_page_callback, pattern=r"^grppg_"))
     # rankings_callback (lbd:) aur withdraw_approval_callback (wd:) DISABLED
     # saath saath /rankings aur /withdraw feature ke — neeche dekho.
 
