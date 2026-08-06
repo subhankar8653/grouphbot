@@ -3658,26 +3658,56 @@ async def purge_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ─── Owner Commands ──────────────────────────────────────────
 async def broadcast_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    if not ctx.args:
-        return await update.message.reply_text("❌ /broadcast <msg>")
-    msg_text = ' '.join(ctx.args)
+    reply = update.message.reply_to_message
+    args = list(ctx.args) if ctx.args else []
+
+    # Agar aakhri argument ek number hai, use auto-delete minutes maano
+    # (dono cases mein chalega: "/broadcast <msg> 30" aur reply karke "/broadcast 30")
+    delete_minutes = None
+    if args and args[-1].isdigit():
+        delete_minutes = int(args[-1])
+        args = args[:-1]
+
+    msg_text = ' '.join(args) if args else None
+
+    if not reply and not msg_text:
+        return await update.message.reply_text(
+            "⚙️ <b>Usage:</b>\n"
+            "• <code>/broadcast &lt;message&gt;</code> — sends plain text to all groups\n"
+            "• <code>/broadcast &lt;message&gt; 30</code> — same, but auto-deletes after 30 min\n"
+            "• Reply to any message (text, photo, video, etc.) with <code>/broadcast</code> — "
+            "sends that exact message (as-is) to all groups\n"
+            "• Reply with <code>/broadcast 30</code> — same, but auto-deletes after 30 min",
+            parse_mode='HTML'
+        )
+
     s = f = 0
     for gid in db.get_all_groups():
         try:
-            await ctx.bot.send_message(
-                gid,
-                f"📢 *BROADCAST*\n{'─'*20}\n\n{msg_text}",
-                parse_mode='Markdown'
-            )
+            if reply:
+                # Jo bhi message reply kiya gaya hai (text/photo/video/document/etc.)
+                # usse hoobahoo copy karke bhejo — koi extra header/footer nahi.
+                sent = await ctx.bot.copy_message(
+                    chat_id=gid,
+                    from_chat_id=update.effective_chat.id,
+                    message_id=reply.message_id
+                )
+            else:
+                # Sirf woh text jo diya gaya hai — koi "📢 BROADCAST" wrapper nahi
+                sent = await ctx.bot.send_message(gid, msg_text, parse_mode='Markdown')
+
+            if delete_minutes:
+                asyncio.create_task(delete_after(ctx, gid, sent.message_id, delete_minutes * 60))
+
             s += 1
             await asyncio.sleep(0.1)
         except:
             f += 1
-    await update.message.reply_text(
-        f"📢 *Broadcast Complete!*\n\n"
-        f"✅ Sent: `{s}`\n❌ Failed: `{f}`",
-        parse_mode='Markdown'
-    )
+
+    summary = f"📢 *Broadcast Complete!*\n\n✅ Sent: `{s}`\n❌ Failed: `{f}`"
+    if delete_minutes:
+        summary += f"\n🗑️ Auto-delete in: `{delete_minutes} min` (in every group it was sent to)"
+    await update.message.reply_text(summary, parse_mode='Markdown')
 
 
 GROUPS_PER_PAGE = 25
