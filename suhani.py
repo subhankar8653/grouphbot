@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ╔══════════════════════════════════════════════════╗
-║   🛡️  SUHANI GROUP PROTECTION BOT  v2.0        ║
+║   🛡️  GUARDIAN GROUP PROTECTION BOT  v2.0        ║
 ║   ⚡  MongoDB Persistent Database                ║
 ║   🔗  Advanced Link Detection                    ║
 ║   🕵️  Hidden Link Detection                     ║
@@ -128,7 +128,7 @@ EXEMPT_USERNAMES = {"admin", "owner", "request", "sbnime"}
 
 MUTE_TIME  = {1: 35, 2: 60, 3: 120, 4: 604800}
 
-# Suhani's own commands — /settings → "Other-Bot Commands" filter tabhi delete karta hai
+# Guardian's own commands — /settings → "Other-Bot Commands" filter tabhi delete karta hai
 # jab command yahan list mein NAHI ho (matlab kisi doosre bot ke liye tha).
 OWN_COMMANDS = {
     "start","help","rule","rules","setrules","id","setlinked","testmute","mute","unmute",
@@ -208,18 +208,18 @@ THANK_YOU_WORDS = {
 }
 
 # ═══════════════════════════════════════════════════════════
-#  SUHANI COIN / REPUTATION ECONOMY — CONFIG
+#  GUARDIAN COIN / REPUTATION ECONOMY — CONFIG
 #  • Har "Thank You" = 100 Reputation Points
 #  • 1 warning maaf karne ka cost = 100 Reputation Points
-#  • 10,000 Reputation Points = 1 Suhani Coin = ₹1
-#  • Suhani Coin sirf "accepted" groups ke reputation se banta hai.
+#  • 10,000 Reputation Points = 1 Guardian Coin = ₹1
+#  • Guardian Coin sirf "accepted" groups ke reputation se banta hai.
 #    Non-accepted group ka reputation SIRF warning maaf karne ke
 #    kaam aata hai, coin mein convert nahi hota.
-#  • Min withdrawal = 10 Suhani Coins (₹10)
+#  • Min withdrawal = 10 Guardian Coins (₹10)
 # ═══════════════════════════════════════════════════════════
 REP_PER_THANK        = 100      # 1 thank you = 100 rep points
 REP_PER_WARN_REMOVE  = 100      # 1 warning maaf = 100 rep points
-REP_PER_SUHANI_COIN  = 10000    # 10,000 rep = 1 Suhani Coin (₹1)
+REP_PER_GUARDIAN_COIN  = 10000    # 10,000 rep = 1 Guardian Coin (₹1)
 MIN_WITHDRAW_COINS   = 10       # Min ₹10 withdrawal
 
 # ═══════════════════════════════════════════════════════════
@@ -364,30 +364,27 @@ def is_anime_message(text: str) -> bool:
                 return True
     return False
 
-# ── Suhani system prompt ────────────────────────────────────
-SUHANI_SYSTEM = """You are Suhani, a friendly Telegram group protection bot for an anime Hindi dub group.
+# ── Guardian system prompt ────────────────────────────────────
+GUARDIAN_SYSTEM = """You are Guardian, a professional Telegram group protection & help bot.
 
 Your identity:
-- Name: Suhani
+- Name: Guardian
 - Created by: Lucky
-- Owner/Partners: @Suhanibots and @sbanime
-- You are a group protection bot AND an anime lover
-- You speak in Hinglish (Hindi + English mix) naturally, like a desi friend
+- Role: Group protection and moderation assistant
+- You are a dependable group protection bot, always ready to help admins and members
+- You speak in Hinglish (Hindi + English mix) naturally, in a polite, professional tone
 
 Your personality:
-- Friendly, helpful, slightly playful
-- Anime enthusiast — you know and love anime deeply
+- Professional, helpful, courteous
 - You help people who are confused or in trouble
 - You keep responses SHORT (2-4 lines max) — this is a chat, not an essay
 
 What you do:
 1. MODERATION: Detect if a message is promotional spam
-2. ANIME_SEARCH: User wrote an anime name (to search/request it) — provider bot handles actual search
-3. ANIME_NOT_FOUND: Provider bot did NOT reply → anime not available yet
-4. HELP: Help users who seem confused or ask questions
-5. IDENTITY: Answer questions about who you are
+2. HELP: Help users who seem confused or ask questions
+3. IDENTITY: Answer questions about who you are
 
-When asked about your AI/technology — NEVER mention Groq, LLaMA, or any AI company. Say you are Suhani, made by Lucky.
+When asked about your AI/technology — NEVER mention Groq, LLaMA, or any AI company. Say you are Guardian, made by Lucky.
 
 IMPORTANT CONTEXT about this group:
 - This is a Hindi dubbed anime group
@@ -463,7 +460,7 @@ async def ai_check(text: str, user_id: int, chat_id: int, username: str = "",
             "max_tokens": 150,
             "temperature": 0.3,
             "messages": [
-                {"role": "system", "content": SUHANI_SYSTEM},
+                {"role": "system", "content": GUARDIAN_SYSTEM},
                 {"role": "user", "content": user_content}
             ]
         }
@@ -524,7 +521,7 @@ class DB:
         try:
             self.client = MongoClient(MONGO_URL, serverSelectionTimeoutMS=5000)
             self.client.admin.command('ping')
-            self.db = self.client["suhanigroupbot"]
+            self.db = self.client["guardiangroupbot"]
             print("✅ MongoDB Connected!")
         except ConnectionFailure as e:
             raise RuntimeError(f"❌ MongoDB connection failed: {e}")
@@ -541,10 +538,10 @@ class DB:
         self.ad_exempt = self.db["autodel_exempt"] # bots exempt from autodelete
         self.reputation = self.db["reputation"]   # group-wise reputation points (SEPARATE from leaderboard)
         self.activity  = self.db["activity"]      # daily message-count tracking (leaderboard source)
-        self.suhani_pts = self.db["suhani_points"]   # global suhani points wallet per user
+        self.guardian_pts = self.db["guardian_points"]   # global guardian points wallet per user
         self.rep_daily  = self.db["rep_daily_limit"] # daily rep-give tracking (3/day cap)
-        self.accepted_rep_groups = self.db["accepted_rep_groups"]  # groups jinka rep Suhani Coin mein convert hota hai
-        self.withdrawals = self.db["withdrawals"]    # Suhani Coin withdrawal requests
+        self.accepted_rep_groups = self.db["accepted_rep_groups"]  # groups jinka rep Guardian Coin mein convert hota hai
+        self.withdrawals = self.db["withdrawals"]    # Guardian Coin withdrawal requests
 
         if not self.stats_c.find_one({"_id": "global"}):
             self.stats_c.insert_one({"_id": "global", "warnings": 0, "mutes": 0, "scanned": 0, "gmutes": 0})
@@ -791,9 +788,9 @@ class DB:
         return [g["_id"] for g in self.gmutes.find()]
 
     # ══════════════════════════════════════════════════════════════
-    #  SUHANI POINTS SYSTEM
-    #  10,000 Reputation Points (accepted groups only) → 1 Suhani Coin → ₹1
-    #  Min withdrawal: 10 INR (100 Suhani Points)
+    #  GUARDIAN POINTS SYSTEM
+    #  10,000 Reputation Points (accepted groups only) → 1 Guardian Coin → ₹1
+    #  Min withdrawal: 10 INR (100 Guardian Points)
     #  Daily rep-give cap: SAME target ko max 3x/din (alag logon ko UNLIMITED baar de sakte ho)
     # ══════════════════════════════════════════════════════════════
 
@@ -819,10 +816,10 @@ class DB:
     # ── Reputation (group-wise) ───────────────────────────────────
     def add_reputation(self, chat_id, user_id, amount=REP_PER_THANK, display_name=None, force_convertible=False):
         """
-        Group-wise reputation point add karo + suhani wallet resync karo.
+        Group-wise reputation point add karo + guardian wallet resync karo.
         force_convertible=True → ye manually owner ne diya hai (e.g. /reputation
         command se), isliye chahe group accepted ho ya na ho, ye rep hamesha
-        Suhani Coin mein convertible rahega.
+        Guardian Coin mein convertible rahega.
         """
         k = f"{chat_id}_{user_id}"
         update = {"$inc": {"points": amount}, "$set": {"chat_id": chat_id, "user_id": user_id}}
@@ -830,30 +827,30 @@ class DB:
             update["$set"]["name"] = display_name
         self.reputation.update_one({"_id": k}, update, upsert=True)
         if force_convertible and not self.is_rep_group_accepted(chat_id):
-            self.suhani_pts.update_one(
+            self.guardian_pts.update_one(
                 {"_id": user_id},
                 {"$inc": {"manual_rep": amount}, "$set": {"user_id": user_id}},
                 upsert=True
             )
-        self._sync_suhani_points(user_id)
+        self._sync_guardian_points(user_id)
 
     def add_manual_convertible_rep(self, user_id, amount):
         """
         Owner utility: existing rep ko retroactively convertible banao,
         BINA total_rep badhaye (jo pehle se hi reputation collection mein hai).
         """
-        self.suhani_pts.update_one(
+        self.guardian_pts.update_one(
             {"_id": user_id},
             {"$inc": {"manual_rep": amount}, "$set": {"user_id": user_id}},
             upsert=True
         )
-        self._sync_suhani_points(user_id)
+        self._sync_guardian_points(user_id)
 
     def spend_reputation(self, chat_id, user_id, amount=REP_PER_WARN_REMOVE) -> bool:
         """
         Kisi ek group ka reputation kharch karo (warning maaf karne ke liye).
         Yeh HAR group (accepted ho ya na ho) mein kaam karta hai — reputation
-        hamesha warn-se-bachne ke liye valid hota hai, sirf Suhani Coin
+        hamesha warn-se-bachne ke liye valid hota hai, sirf Guardian Coin
         conversion accepted groups tak limited hai.
         Returns True agar kharch ho gaya, False agar balance kam tha.
         """
@@ -863,23 +860,23 @@ class DB:
         if current < amount:
             return False
         self.reputation.update_one({"_id": k}, {"$inc": {"points": -amount}})
-        self._sync_suhani_points(user_id)
+        self._sync_guardian_points(user_id)
         return True
 
-    # ── Accepted groups (jinka reputation Suhani Coin mein convert hota hai) ──
+    # ── Accepted groups (jinka reputation Guardian Coin mein convert hota hai) ──
     def is_rep_group_accepted(self, chat_id) -> bool:
         return self.accepted_rep_groups.find_one({"_id": chat_id}) is not None
 
     def get_accepted_rep_groups(self):
         return [g["_id"] for g in self.accepted_rep_groups.find({}, {"_id": 1})]
 
-    def _sync_suhani_points(self, user_id: int):
+    def _sync_guardian_points(self, user_id: int):
         """
         Do cheezein calculate karo:
           • total_rep        → SAB groups (accepted + non-accepted) ka total,
                                 sirf tier-badge / display ke liye use hota hai
           • convertible_rep  → SIRF accepted groups ka total, isi se
-                                Suhani Coin banta hai (10,000 rep = 1 coin)
+                                Guardian Coin banta hai (10,000 rep = 1 coin)
         """
         accepted_ids = self.get_accepted_rep_groups()
 
@@ -901,11 +898,11 @@ class DB:
             convertible_rep = 0
 
         # Manual/owner-granted convertible bucket (independent of group accept-status)
-        existing = self.suhani_pts.find_one({"_id": user_id})
+        existing = self.guardian_pts.find_one({"_id": user_id})
         manual_rep = existing.get("manual_rep", 0) if existing else 0
         convertible_rep += manual_rep
 
-        self.suhani_pts.update_one(
+        self.guardian_pts.update_one(
             {"_id": user_id},
             {"$set": {
                 "user_id": user_id,
@@ -929,16 +926,16 @@ class DB:
         result = list(self.reputation.aggregate(pipeline))
         return result[0]["total"] if result else 0
 
-    def get_suhani_points(self, user_id: int) -> dict:
+    def get_guardian_points(self, user_id: int) -> dict:
         """
-        User ka suhani wallet return karo.
+        User ka guardian wallet return karo.
         coins = floor(convertible_rep / 10000) − ab tak withdraw kiye gaye coins
         """
-        doc = self.suhani_pts.find_one({"_id": user_id})
+        doc = self.guardian_pts.find_one({"_id": user_id})
         total_rep       = doc.get("total_rep", 0) if doc else 0
         convertible_rep = doc.get("convertible_rep", 0) if doc else 0
         withdrawn_coins = doc.get("withdrawn_coins", 0) if doc else 0
-        earned_coins    = convertible_rep // REP_PER_SUHANI_COIN
+        earned_coins    = convertible_rep // REP_PER_GUARDIAN_COIN
         available_coins = max(0, earned_coins - withdrawn_coins)
         return {
             "total_rep": total_rep,
@@ -947,7 +944,7 @@ class DB:
             "withdrawn_coins": withdrawn_coins,
             "coins": available_coins,
             # backward-compat key used elsewhere in file
-            "suhani_pts": available_coins,
+            "guardian_pts": available_coins,
         }
 
     # ── Withdrawals ─────────────────────────────────────────────
@@ -982,7 +979,7 @@ class DB:
         if status == "paid":
             doc = self.get_withdrawal(req_id)
             if doc:
-                self.suhani_pts.update_one(
+                self.guardian_pts.update_one(
                     {"_id": doc["user_id"]},
                     {"$inc": {"withdrawn_coins": doc["coins"]}},
                     upsert=True
@@ -2229,7 +2226,7 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
 
     if data == "menu_main":
         text = (
-            f"*🛡️ SUHANI BOT v10.0*\n"
+            f"🛡️ *𝗚𝗨𝗔𝗥𝗗𝗜𝗔𝗡 𝗕𝗢𝗧* — v10.0\n"
             f"_Group Protection Bot_\n"
             f"{'─'*24}\n\n"
             f"_Choose a category below 👇_"
@@ -2249,7 +2246,7 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             f"{'─'*24}\n\n"
             f"📜 `/rules` — View group rules\n"
             f"⚠️ `/warnings` — Check your warnings\n"
-            f"⭐ `/rep` — Suhani Profile Card\n"
+            f"⭐ `/rep` — Guardian Profile Card\n"
             f"🏆 `/repboard` — Group + Global Rep Board\n"
             f"🆔 `/id` — Your Telegram ID\n\n"
             f"{'─'*32}\n"
@@ -2492,7 +2489,7 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             f"*🤖 AI MODERATION*\n"
 
             f"{'─'*24}\n\n"
-            f"AI Engine: {'🟢 *Suhani AI — Active*' if AI_API_KEY else '🔴 *Not Configured*'}\n\n"
+            f"AI Engine: {'🟢 *Guardian AI — Active*' if AI_API_KEY else '🔴 *Not Configured*'}\n\n"
             f"{'─'*32}\n"
             f"*What AI Does:*\n"
             f"  🚨 Detects promo/spam content\n"
@@ -2657,7 +2654,7 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if ch.type != "private":
         is_admin_here = (u.id == OWNER_ID) or await is_adm(ctx, ch.id, u.id)
         start_text = (
-            f"🛡️ *Suhani Bot* is active & protecting this group!\n"
+            f"🛡️ *Guardian Bot* is active & protecting this group!\n"
             f"_Use /help for all commands._"
         )
         if is_admin_here:
@@ -2687,7 +2684,7 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # DM — Owner panel
     if u.id == OWNER_ID:
         text = (
-            f"*👑 SUHANI BOT — OWNER PANEL*\n"
+            f"👑 *𝗢𝗪𝗡𝗘𝗥 𝗣𝗔𝗡𝗘𝗟*\n"
             f"_v10.0 • MongoDB • AI-Powered_\n"
             f"{'─'*24}\n\n"
             f"🌐 *GLOBAL CONTROLS*\n\n"
@@ -2727,7 +2724,7 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # DM — Regular user
     text = (
-                f"*🛡️ SUHANI PROTECTION BOT*\n"
+                f"🛡️ *𝗚𝗨𝗔𝗥𝗗𝗜𝗔𝗡 — 𝗚𝗿𝗼𝘂𝗽 𝗣𝗿𝗼𝘁𝗲𝗰𝘁𝗶𝗼𝗻 & 𝗛𝗲𝗹𝗽 𝗕𝗼𝘁*\n"
         f"_Group Protection Bot_\n"
         f"{'─'*24}\n\n"
         f"👋 *Hey {md_esc(u.first_name or 'there')}!*\n\n"
@@ -2737,7 +2734,7 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"📱 *YOUR COMMANDS*\n\n"
         f"  📜 `/rules` — View group rules\n"
         f"  ⚠️ `/warnings` — Check your warnings\n"
-        f"  ⭐ `/rep` — Suhani Profile Card\n"
+        f"  ⭐ `/rep` — Guardian Profile Card\n"
         f"  🏆 `/repboard` — Reputation Ranking\n"
         f"  🆔 `/id` — Your Telegram ID\n\n"
         f"{'─'*34}\n"
@@ -2775,7 +2772,7 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{'─'*24}\n\n"
             f"📜 `/rules` — View group rules\n"
             f"⚠️ `/warnings` — Check your warnings\n"
-            f"⭐ `/rep` — Suhani Profile Card\n"
+            f"⭐ `/rep` — Guardian Profile Card\n"
             f"🏆 `/repboard` — Reputation Leaderboard\n"
             f"🆔 `/id` — Your Telegram ID\n\n"
             f"{'─'*32}\n"
@@ -3683,6 +3680,58 @@ async def broadcast_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def _resolve_group_full(ctx: ContextTypes.DEFAULT_TYPE, gid: int):
+    """
+    Ek group ke baare mein poori detail nikalta hai: (title, invite_link, member_count, stale)
+    "stale" True hoga agar:
+      • Bot us group mein ab member hi nahi hai (left/kicked/banned), YA
+      • Bot member to hai lekin ADMIN nahi hai.
+    Bot admin nahi hai matlab wo group properly manage nahi kar sakta,
+    isliye aisi entry ko caller (groups_cmd) database se hata deta hai —
+    list mein sirf wahi groups rehte hain jahan bot admin hoke active hai.
+    """
+    try:
+        chat = await ctx.bot.get_chat(gid)
+    except Exception:
+        # Chat hi resolve nahi ho raha — bot ko block/remove kar diya gaya hoga
+        return (str(gid), None, None, True)
+
+    title = chat.title or chat.first_name or str(gid)
+
+    # Bot ka apna status is group mein check karo
+    try:
+        me = await ctx.bot.get_me()
+        bot_member = await ctx.bot.get_chat_member(gid, me.id)
+        bot_status = bot_member.status
+    except Exception:
+        return (title, None, None, True)
+
+    if bot_status in ("left", "kicked", "banned"):
+        return (title, None, None, True)
+    if bot_status not in ("administrator", "creator"):
+        # Member to hai par admin nahi — protection/help features kaam nahi karenge
+        return (title, None, None, True)
+
+    # Member count nikalne ki koshish
+    members = None
+    try:
+        members = await ctx.bot.get_chat_member_count(gid)
+    except Exception:
+        pass
+
+    # Invite link nikalne ki koshish (username agar public group hai)
+    link = None
+    try:
+        if chat.username:
+            link = f"https://t.me/{chat.username}"
+        elif chat.invite_link:
+            link = chat.invite_link
+    except Exception:
+        pass
+
+    return (title, link, members, False)
+
+
 async def groups_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     group_ids = db.get_all_groups()
@@ -3693,25 +3742,34 @@ async def groups_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"⏳ Fetching details for {len(group_ids)} groups..."
     )
 
-    lines = [f"👥 <b>Active Groups:</b> {len(group_ids)}\n"]
-    kicked_ids = []
-    for i, gid in enumerate(group_ids, 1):
-        title, link, members, kicked = await _resolve_group_full(ctx, gid)
-        if kicked:
-            kicked_ids.append(gid)
+    lines = []
+    stale_ids = []
+    active_count = 0
+    for gid in group_ids:
+        title, link, members, stale = await _resolve_group_full(ctx, gid)
+        if stale:
+            # Bot ab is group ka admin nahi hai (ya group mein hi nahi hai) —
+            # database se turant clean kar do, list mein isse show hi mat karo.
+            stale_ids.append(gid)
+            await asyncio.sleep(0.1)
+            continue
+        active_count += 1
         title_safe = html.escape(title)
         mem_txt = f" — 👤 {members}" if members is not None else ""
-        if kicked:
-            lines.append(f"{i}. {title_safe} <i>(bot removed)</i>")
-        elif link:
-            lines.append(f"{i}. <a href=\"{html.escape(link)}\">{title_safe}</a>{mem_txt}")
+        if link:
+            lines.append(f"{active_count}. <a href=\"{html.escape(link)}\">{title_safe}</a>{mem_txt}")
         else:
-            lines.append(f"{i}. {title_safe}{mem_txt}")
+            lines.append(f"{active_count}. {title_safe}{mem_txt}")
         await asyncio.sleep(0.1)  # flood-control se bachne ke liye
 
-    if kicked_ids:
-        for gid in kicked_ids:
+    if stale_ids:
+        for gid in stale_ids:
             db.remove_group(gid)
+
+    header = f"👥 <b>Active Groups:</b> {active_count}"
+    if stale_ids:
+        header += f"\n🧹 <i>{len(stale_ids)} inactive group(s) removed from database.</i>"
+    lines.insert(0, header + "\n")
 
     text = "\n".join(lines)
     # Telegram message limit ~4096 chars — split into chunks agar zyada groups hain
@@ -3731,7 +3789,7 @@ async def reputation_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     Owner-only command. Teen tarike se chalti hai:
       1) Bot ki DM se:            /reputation <user_id> <amount>
          → is user ka GLOBAL rep (total_rep mein count hoga, kisi ek
-           group se bandha nahi hai, isliye Suhani Coin mein convert
+           group se bandha nahi hai, isliye Guardian Coin mein convert
            nahi hota — sirf tier/display ke liye).
       2) Group mein, kisi user ko reply karke: /reputation <amount>
          → usi group ke rep balance mein credit/debit hota hai.
@@ -4696,7 +4754,7 @@ async def stats_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 
-# ─── /rep ─── Suhani Points Wallet + Reputation Card ───────
+# ─── /rep ─── Guardian Points Wallet + Reputation Card ───────
 async def rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     # Works in group + private (private mein sirf own wallet)
@@ -4741,7 +4799,7 @@ async def rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     name_safe = user_name(tgt, escape=False)
 
     text = (
-        f"⭐ *SUHANI PROFILE CARD*\n"
+        f"⭐ *𝗣𝗥𝗢𝗙𝗜𝗟𝗘 𝗖𝗔𝗥𝗗*\n"
         f"{'─'*24}\n\n"
         f"👤 *{name_safe}*\n"
         f"🏷️ Tier: *{tier}*\n\n"
@@ -4801,7 +4859,7 @@ async def repboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     global_lines = build_board_lines(global_top, key_pts="total",   key_id="_id")
 
     text = (
-        f"*🏆 SUHANI REPUTATION BOARD*\n"
+        f"🏆 *𝗥𝗘𝗣𝗨𝗧𝗔𝗧𝗜𝗢𝗡 𝗕𝗢𝗔𝗥𝗗*\n"
 
         f"{'─'*24}\n\n"
         f"🏠 *GROUP TOP* — {md_esc(getattr(ch, 'title', 'This Group')[:22])}\n"
@@ -4882,7 +4940,7 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             tier = rep_tier(total_rep)
             name_safe = user_name(usr)
             text = (
-                f"⭐ *SUHANI PROFILE CARD*\n"
+                f"⭐ *𝗣𝗥𝗢𝗙𝗜𝗟𝗘 𝗖𝗔𝗥𝗗*\n"
                 f"{'─'*24}\n\n"
                 f"👤 *{name_safe}*\n"
                 f"🏷️ Tier: *{tier}*\n\n"
@@ -5148,7 +5206,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     #    - target ko HAMESHA +100 Reputation Points milte hain (is group mein)
     #    - agar target ke paas active warning hai aur balance ≥100 hai,
     #      to 100 rep apne aap kat ke 1 warning maaf ho jaati hai
-    #    - reputation sirf "accepted" group mein Suhani Coin banta hai —
+    #    - reputation sirf "accepted" group mein Guardian Coin banta hai —
     #      baaki sab groups mein sirf warn-se-bachne ke kaam aata hai
     if (
         msg.reply_to_message
@@ -5202,9 +5260,9 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 60))
         return
 
-    # ── "Suhani ban" natural language command ──────────────
-    # Admin group mein "suhani ban @user" ya "suhani ban userid" likh sakta hai
-    if txt_lower.startswith("suhani ban"):
+    # ── "Guardian ban" natural language command ──────────────
+    # Admin group mein "guardian ban @user" ya "guardian ban userid" likh sakta hai
+    if txt_lower.startswith("guardian ban"):
         caller_is_admin = await is_adm(ctx, ch.id, usr.id) or usr.id == OWNER_ID
         if caller_is_admin:
             target_id = None
@@ -5214,7 +5272,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 target_id = msg.reply_to_message.from_user.id
                 target_name = user_name(msg.reply_to_message.from_user)
             else:
-                # "suhani ban @username" ya "suhani ban 123456"
+                # "guardian ban @username" ya "guardian ban 123456"
                 parts = txt.split()
                 if len(parts) >= 3:
                     raw = parts[2]
@@ -5487,7 +5545,7 @@ async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             except:
                 pass
             bot_added_text = (
-                                f"*🛡️ SUHANI BOT — ACTIVATED!*\n"
+                                f"🛡️ *𝗚𝗨𝗔𝗥𝗗𝗜𝗔𝗡 𝗔𝗖𝗧𝗜𝗩𝗔𝗧𝗘𝗗!*\n"
                 f"_v10.0 • AI-Powered Guard_\n"
                 f"{'─'*24}\n\n"
                 f"⚡ *Protection is now ACTIVE!*\n\n"
@@ -6185,7 +6243,7 @@ web_app = Flask(__name__)
 
 @web_app.route('/')
 def home():
-    return "🛡️ Suhani Bot v9.0 — Active!"
+    return "🛡️ Guardian Bot v9.0 — Active!"
 
 @web_app.route('/health')
 def health():
@@ -6201,7 +6259,7 @@ def run_web():
 # ═══════════════════════════════════════════════════════════
 def main():
     print("╔" + "═"*43 + "╗")
-    print("║   🛡️  SUHANI GROUP PROTECTION BOT v9.0   ║")
+    print("║   🛡️  GUARDIAN GROUP PROTECTION BOT v9.0   ║")
     print("╠" + "═"*43 + "╣")
     print("║   ⚡ MongoDB Database Active              ║")
     print("║   👑 Immortal Users System                ║")
@@ -6234,7 +6292,7 @@ def main():
     app.add_handler(CommandHandler("resetwarnings",    reset_cmd))
     app.add_handler(CommandHandler("rep",              rep_cmd))
     app.add_handler(CommandHandler("repboard",         repboard_cmd))
-    # ── Suhani Coin / money reward system: DISABLED (2026-08) ──
+    # ── Guardian Coin / money reward system: DISABLED (2026-08) ──
     # Reputation ab sirf warnings clear karne ke kaam aata hai, koi
     # paisa/coin conversion nahi hota. Isliye /wallet, /withdraw,
     # /accept_rep, /unaccept_rep, /earn_groups, /makeconvertible
