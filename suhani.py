@@ -2092,7 +2092,7 @@ async def send_captcha(ctx, chat_id, user_id, user_display):
 
     msg = await ctx.bot.send_message(
         chat_id,
-        f"🔐 *VERIFICATION REQUIRED*\n"
+        f"🔐 *𝗩𝗘𝗥𝗜𝗙𝗜𝗖𝗔𝗧𝗜𝗢𝗡 𝗥𝗘𝗤𝗨𝗜𝗥𝗘𝗗*\n"
         f"{'─'*14}\n\n"
         f"👤 Welcome, {user_display}!\n\n"
         f"🧮 Solve this to unlock the chat:\n\n"
@@ -2248,7 +2248,7 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             f"🏆 `/repboard` — Group + Global Rep Board\n"
             f"🆔 `/id` — Your Telegram ID\n\n"
             f"{'─'*14}\n"
-            f"💎 *REPUTATION*\n"
+            f"💎 *𝗥𝗘𝗣𝗨𝗧𝗔𝗧𝗜𝗢𝗡*\n"
             f"_Thank You → +{REP_PER_THANK} Rep | Clear a warning → {REP_PER_WARN_REMOVE} Rep_"
         )
         await query.answer()
@@ -2272,7 +2272,7 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             await query.answer("🔒 Admins only.", show_alert=True)
             return
         text = (
-            f"*👮 ADMIN COMMANDS*\n"
+            f"*👮 𝗔𝗗𝗠𝗜𝗡 𝗖𝗢𝗠𝗠𝗔𝗡𝗗𝗦*\n"
 
             f"{'─'*14}\n\n"
             f"🔇 `/mute [sec]` — Mute _(reply)_\n"
@@ -2307,7 +2307,7 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
 
     elif data == "menu_protection":
         text = (
-            f"🛡️ *ACTIVE PROTECTIONS*\n"
+            f"🛡️ *𝗔𝗖𝗧𝗜𝗩𝗘 𝗣𝗥𝗢𝗧𝗘𝗖𝗧𝗜𝗢𝗡𝗦*\n"
             f"{'─'*14}\n\n"
             f"🤖 External bot usernames\n"
             f"👤 External @mentions\n"
@@ -2352,7 +2352,7 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
 
     elif data == "menu_warns":
         text = (
-            f"*⚠️ WARNING SYSTEM*\n"
+            f"*⚠️ 𝗪𝗔𝗥𝗡𝗜𝗡𝗚 𝗦𝗬𝗦𝗧𝗘𝗠*\n"
 
             f"{'─'*14}\n\n"
             f"🟡 *W1* → 35 second mute\n"
@@ -2440,10 +2440,10 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             f"*🏆 REPUTATION BOARD*\n"
 
             f"{'─'*14}\n\n"
-            f"🏠 *GROUP TOP*\n"
+            f"🏠 *𝗚𝗥𝗢𝗨𝗣 𝗧𝗢𝗣*\n"
             f"{'┄'*14}\n"
             + "\n".join(group_lines) +
-            f"\n\n🌐 *GLOBAL TOP*\n"
+            f"\n\n🌐 *𝗚𝗟𝗢𝗕𝗔𝗟 𝗧𝗢𝗣*\n"
             f"{'┄'*14}\n"
             + "\n".join(global_lines) +
             f"\n\n{'─'*14}\n"
@@ -2484,7 +2484,7 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
 
     elif data == "menu_ai":
         text = (
-            f"*🤖 AI MODERATION*\n"
+            f"*🤖 𝗔𝗜 𝗠𝗢𝗗𝗘𝗥𝗔𝗧𝗜𝗢𝗡*\n"
 
             f"{'─'*14}\n\n"
             f"AI Engine: {'🟢 *Guardian AI — Active*' if AI_API_KEY else '🔴 *Not Configured*'}\n\n"
@@ -2519,7 +2519,7 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
         custom = db.get_rules(chat_id) if chat_id else None
         if custom:
             rules_text = (
-                f"📜 *GROUP RULES*\n"
+                f"📜 *𝗚𝗥𝗢𝗨𝗣 𝗥𝗨𝗟𝗘𝗦*\n"
                 f"{'─'*14}\n\n"
                 f"{custom}\n\n"
                 f"{'─'*14}\n"
@@ -2527,7 +2527,7 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             )
         else:
             rules_text = (
-                f"📜 *GROUP RULES*\n"
+                f"📜 *𝗚𝗥𝗢𝗨𝗣 𝗥𝗨𝗟𝗘𝗦*\n"
                 f"{'─'*14}\n\n"
                 f"🚫 *NOT ALLOWED:*\n\n"
                 f"  1️⃣  🤖 External bot usernames\n"
@@ -2684,21 +2684,21 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"👑 *𝗢𝗪𝗡𝗘𝗥 𝗖𝗢𝗡𝗧𝗥𝗢𝗟 𝗣𝗔𝗡𝗘𝗟*\n"
             f"_v10.0 · MongoDB · AI-Powered_\n"
             f"{'─'*14}\n\n"
-            f"🌐 *GLOBAL*\n\n"
+            f"🌐 *𝗚𝗟𝗢𝗕𝗔𝗟*\n\n"
             f"  📢 `/broadcast <msg>` — Message every group\n"
             f"  👥 `/groups` — Active group count\n"
             f"  📊 `/stats` — Full bot statistics\n"
             f"  🗓️ `/globalmutes` — View global mutes\n"
             f"  🌐 `/autodelete <min>` — Set global default\n\n"
             f"{'─'*14}\n"
-            f"⚡ *MODERATION*\n\n"
+            f"⚡ *𝗠𝗢𝗗𝗘𝗥𝗔𝗧𝗜𝗢𝗡*\n\n"
             f"  💀 `/fban <id> [reason]` — Ban across all groups\n"
             f"  ✅ `/gunban <id>` — Reverse a global ban\n"
             f"  🧹 `/gclearwarn <id>` — Clear all warnings\n"
             f"  ⚡ `/power <id>` — Grant ban authority\n"
             f"  🔻 `/unpower <id>` — Revoke ban authority\n\n"
             f"{'─'*14}\n"
-            f"🤖 *AI ASSISTANT*\n\n"
+            f"🤖 *𝗔𝗜 𝗔𝗦𝗦𝗜𝗦𝗧𝗔𝗡𝗧*\n\n"
             f"  ✅ `/aiapprove <id>` — Enable for a group\n"
             f"  🔴 `/airevoke <id>` — Disable for a group\n"
             f"  📋 `/aigroups` — List enabled groups\n"
@@ -2728,14 +2728,14 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"I keep groups safe, clean, and spam-free —\n"
         f"around the clock, with zero effort from admins. 🔥\n\n"
         f"{'─'*14}\n"
-        f"📱 *YOUR COMMANDS*\n\n"
+        f"📱 *𝗬𝗢𝗨𝗥 𝗖𝗢𝗠𝗠𝗔𝗡𝗗𝗦*\n\n"
         f"  📜 `/rules` — View group rules\n"
         f"  ⚠️ `/warnings` — Check your warnings\n"
         f"  ⭐ `/rep` — Your profile card\n"
         f"  🏆 `/repboard` — Reputation ranking\n"
         f"  🆔 `/id` — Your Telegram ID\n\n"
         f"{'─'*14}\n"
-        f"💎 *REPUTATION*\n"
+        f"💎 *𝗥𝗘𝗣𝗨𝗧𝗔𝗧𝗜𝗢𝗡*\n"
         f"_Say thanks → +{REP_PER_THANK} rep · Clear a warning → {REP_PER_WARN_REMOVE} rep_\n\n"
         f"_Add me to your group and make me admin to get started._"
     )
@@ -2796,7 +2796,7 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # ── Admin / Owner full help ──────────────────────────────
     admin_text = (
-        f"*👮 ADMIN COMMAND PANEL*\n"
+        f"*👮 𝗔𝗗𝗠𝗜𝗡 𝗖𝗢𝗠𝗠𝗔𝗡𝗗 𝗣𝗔𝗡𝗘𝗟*\n"
 
         f"{'─'*14}\n\n"
         f"🔇 `/mute [sec]` — Mute a user _(reply)_\n"
@@ -2812,7 +2812,7 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"💀 `/unimmortal <id>` — Remove immunity\n"
         f"📋 `/immortals` — List immune users\n\n"
         f"{'─'*14}\n"
-        f"⚙️ *SETTINGS*\n\n"
+        f"⚙️ *𝗦𝗘𝗧𝗧𝗜𝗡𝗚𝗦*\n\n"
         f"🎛️ `/settings` — Open the settings panel\n"
         f"📜 `/setrules <text>` — Set group rules\n"
         f"🔗 `/setlinked` — Set linked channel\n"
@@ -2830,7 +2830,7 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if is_owner:
         admin_text += (
             f"\n{'─'*14}\n"
-            f"👑 *OWNER ONLY*\n\n"
+            f"👑 *𝗢𝗪𝗡𝗘𝗥 𝗢𝗡𝗟𝗬*\n\n"
             f"🌐 `/autodelete <min>` _(DM)_ — Set global default\n"
             f"💀 `/fban <id>` — Ban across all groups\n"
             f"✅ `/gunban <id>` — Reverse a global ban\n"
@@ -2875,7 +2875,7 @@ async def rule_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if custom:
         text = (
-            f"📜 *GROUP RULES*\n"
+            f"📜 *𝗚𝗥𝗢𝗨𝗣 𝗥𝗨𝗟𝗘𝗦*\n"
             f"{'─'*14}\n\n"
             f"{custom}\n\n"
             f"{'─'*14}\n"
@@ -2883,9 +2883,9 @@ async def rule_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
     else:
         text = (
-            f"📜 *GROUP RULES*\n"
+            f"📜 *𝗚𝗥𝗢𝗨𝗣 𝗥𝗨𝗟𝗘𝗦*\n"
             f"{'─'*14}\n\n"
-            f"🚫 *NOT ALLOWED*\n\n"
+            f"🚫 *𝗡𝗢𝗧 𝗔𝗟𝗟𝗢𝗪𝗘𝗗*\n\n"
             f"  1️⃣  🤖 External bot usernames\n"
             f"  2️⃣  🔗 Links & URLs\n"
             f"  3️⃣  ↩️ Forwarded messages\n"
@@ -2895,7 +2895,7 @@ async def rule_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"  6️⃣  ⛔ Blacklisted words\n"
             f"  7️⃣  🌊 Spamming or flooding\n\n"
             f"{'─'*14}\n\n"
-            f"⚠️ *PENALTIES*\n"
+            f"⚠️ *𝗣𝗘𝗡𝗔𝗟𝗧𝗜𝗘𝗦*\n"
             f"  🟡 1st → 35 sec mute\n"
             f"  🟠 2nd → 60 sec mute\n"
             f"  🔴 3rd → 120 sec mute\n"
@@ -2985,7 +2985,7 @@ async def immortal_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     db.add_immortal(ch.id, target_id)
     await update.message.reply_text(
-        f"👑 *IMMORTAL STATUS GRANTED*\n"
+        f"👑 *𝗜𝗠𝗠𝗢𝗥𝗧𝗔𝗟 𝗦𝗧𝗔𝗧𝗨𝗦 𝗚𝗥𝗔𝗡𝗧𝗘𝗗*\n"
         f"{'─'*14}\n\n"
         f"🆔 User: `{target_id}`"
         f"{f'  ({target_name})' if target_name else ''}\n\n"
@@ -3042,7 +3042,7 @@ async def immortals_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     lines = [f"  • `{uid}`" for uid in immortals]
     await update.message.reply_text(
-        f"👑 *IMMORTAL USERS*\n"
+        f"👑 *𝗜𝗠𝗠𝗢𝗥𝗧𝗔𝗟 𝗨𝗦𝗘𝗥𝗦*\n"
         f"{'─'*14}\n\n"
         + "\n".join(lines) +
         f"\n\n_Total: {len(immortals)} user(s)_",
@@ -3106,7 +3106,7 @@ async def blacklist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown'
         )
     await update.message.reply_text(
-        f"⛔ *BLACKLISTED WORDS* ({len(words)})\n"
+        f"⛔ *𝗕𝗟𝗔𝗖𝗞𝗟𝗜𝗦𝗧𝗘𝗗 𝗪𝗢𝗥𝗗𝗦* ({len(words)})\n"
         f"{'─'*14}\n\n"
         + "\n".join(f"  • `{w}`" for w in words),
         parse_mode='Markdown'
@@ -3169,7 +3169,7 @@ async def whitelist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown'
         )
     await update.message.reply_text(
-        f"✅ *WHITELISTED WORDS* ({len(words)})\n"
+        f"✅ *𝗪𝗛𝗜𝗧𝗘𝗟𝗜𝗦𝗧𝗘𝗗 𝗪𝗢𝗥𝗗𝗦* ({len(words)})\n"
         f"{'─'*14}\n\n"
         + "\n".join(f"  • `{w}`" for w in words),
         parse_mode='Markdown'
@@ -3547,7 +3547,7 @@ async def warn_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Build warning bar
     bars = "🟥" * cnt + "⬜" * (4 - cnt)
     msg = await update.message.reply_text(
-        f"⚠️ *WARNING ISSUED*\n"
+        f"⚠️ *𝗪𝗔𝗥𝗡𝗜𝗡𝗚 𝗜𝗦𝗦𝗨𝗘𝗗*\n"
         f"{'─'*14}\n\n"
         f"👤 {user_name(tgt)}\n"
         f"📋 Reason: _{reason}_\n\n"
@@ -3572,7 +3572,7 @@ async def warnings_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if db.is_gmuted(tgt.id):
         msg = await update.message.reply_text(
             f"👤 {user_name(tgt)}\n\n"
-            f"💀 *GLOBALLY MUTED* — 1-week mute active.",
+            f"💀 *𝗚𝗟𝗢𝗕𝗔𝗟𝗟𝗬 𝗠𝗨𝗧𝗘𝗗* — 1-week mute active.",
             parse_mode='Markdown'
         )
         asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 600))
@@ -4768,7 +4768,7 @@ async def teachers_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         lines.append(f"  • `{tid}` — promo violations: `{cnt}`")
 
     await update.message.reply_text(
-        f"📚 *TEACHERS*\n"
+        f"📚 *𝗧𝗘𝗔𝗖𝗛𝗘𝗥𝗦*\n"
         f"{'─'*14}\n\n"
         + "\n".join(lines) +
         f"\n\n_Total: {len(teachers)} teacher(s)_",
@@ -4878,7 +4878,7 @@ async def stats_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     groups = db.get_all_groups()
     gmutes = db.get_all_gmutes()
     text = (
-        f"📊 *BOT STATISTICS*\n"
+        f"📊 *𝗕𝗢𝗧 𝗦𝗧𝗔𝗧𝗜𝗦𝗧𝗜𝗖𝗦*\n"
         f"{'═'*14}\n\n"
         f"👥  Groups Active:       `{len(groups)}`\n"
         f"⚠️  Warnings Given:     `{s.get('warnings', 0)}`\n"
@@ -4943,11 +4943,11 @@ async def rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"👤 *{name_safe}*\n"
         f"🏷️ Tier: *{tier}*\n\n"
         f"{'─'*14}\n"
-        f"📊 *REPUTATION*\n"
+        f"📊 *𝗥𝗘𝗣𝗨𝗧𝗔𝗧𝗜𝗢𝗡*\n"
         f"  🏠 Group Rep:  `{group_rep}` pts  •  Rank `{rank_group_txt}`\n"
         f"  🌐 Total Rep:  `{total_rep}` pts  •  Global `{rank_global_txt}`\n\n"
         f"{'─'*14}\n"
-        f"📖 *HOW IT WORKS*\n"
+        f"📖 *𝗛𝗢𝗪 𝗜𝗧 𝗪𝗢𝗥𝗞𝗦*\n"
         f"  • Reply “thank you” to someone → +{REP_PER_THANK} rep\n"
         f"  • Max 3 times per day (per person)\n"
         f"  • Clearing 1 warning costs {REP_PER_WARN_REMOVE} rep\n\n"
@@ -5001,11 +5001,11 @@ async def repboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"🏆 *𝗥𝗘𝗣𝗨𝗧𝗔𝗧𝗜𝗢𝗡 𝗕𝗢𝗔𝗥𝗗*\n"
 
         f"{'─'*14}\n\n"
-        f"🏠 *GROUP TOP* — {md_esc(getattr(ch, 'title', 'This Group')[:22])}\n"
+        f"🏠 *𝗚𝗥𝗢𝗨𝗣 𝗧𝗢𝗣* — {md_esc(getattr(ch, 'title', 'This Group')[:22])}\n"
         f"{'┄'*14}\n"
         + "\n".join(group_lines) +
         f"\n\n"
-        f"🌐 *GLOBAL TOP* — All Groups Combined\n"
+        f"🌐 *𝗚𝗟𝗢𝗕𝗔𝗟 𝗧𝗢𝗣* — All Groups Combined\n"
         f"{'┄'*14}\n"
         + "\n".join(global_lines) +
         f"\n\n{'─'*14}\n"
@@ -5084,7 +5084,7 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"👤 *{name_safe}*\n"
                 f"🏷️ Tier: *{tier}*\n\n"
                 f"{'─'*14}\n"
-                f"📊 *REPUTATION*\n"
+                f"📊 *𝗥𝗘𝗣𝗨𝗧𝗔𝗧𝗜𝗢𝗡*\n"
                 f"  🏠 Group Rep:  `{group_rep}` pts\n"
                 f"  🌐 Total Rep:  `{total_rep}` pts\n\n"
                 f"_Reply “thank you” to earn rep · clearing a warning costs {REP_PER_WARN_REMOVE} rep_"
@@ -5109,9 +5109,9 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"*🏆 REPUTATION BOARD*\n"
 
                 f"{'─'*14}\n\n"
-                f"🏠 *GROUP TOP*\n{'┄'*14}\n"
+                f"🏠 *𝗚𝗥𝗢𝗨𝗣 𝗧𝗢𝗣*\n{'┄'*14}\n"
                 + "\n".join(group_lines) +
-                f"\n\n🌐 *GLOBAL TOP*\n{'┄'*14}\n"
+                f"\n\n🌐 *𝗚𝗟𝗢𝗕𝗔𝗟 𝗧𝗢𝗣*\n{'┄'*14}\n"
                 + "\n".join(global_lines)
             )
             await query.edit_message_text(
@@ -5133,7 +5133,7 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             top = db.get_global_reputation_top(limit=10)
             lines = _rep_lines(top, "total", "_id", limit=10)
             text = (
-                f"*🌐 GLOBAL REP BOARD*\n"
+                f"*🌐 𝗚𝗟𝗢𝗕𝗔𝗟 𝗥𝗘𝗣 𝗕𝗢𝗔𝗥𝗗*\n"
 
                 f"{'─'*14}\n\n"
                 f"{'┄'*14}\n"
@@ -5858,7 +5858,7 @@ def _settings_overview_text(chat_id):
     bl_count = len(db.get_blacklist(chat_id) or [])
     wl_count = len(db.get_whitelist(chat_id) or [])
     return (
-        f"*⚙️ GROUP SETTINGS PANEL*\n"
+        f"*⚙️ 𝗚𝗥𝗢𝗨𝗣 𝗦𝗘𝗧𝗧𝗜𝗡𝗚𝗦 𝗣𝗔𝗡𝗘𝗟*\n"
         f"{'─'*14}\n\n"
         f"📌 *Quick Status*\n"
         f"  🛡️ Filters: {_filters_status_line(chat_id)}\n"
@@ -6093,7 +6093,7 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
         preview = ", ".join(words[:15]) if words else "_(empty)_"
         await _cfg_edit(
             query, ch.id,
-            f"*⛔ GROUP BLACKLIST*\n{'─'*14}\n\n"
+            f"*⛔ 𝗚𝗥𝗢𝗨𝗣 𝗕𝗟𝗔𝗖𝗞𝗟𝗜𝗦𝗧*\n{'─'*14}\n\n"
             f"Words: {preview}\n\n"
             f"_You can also disable the owner's global blacklist words for this group._",
             [
@@ -6154,7 +6154,7 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
         preview = ", ".join(words[:15]) if words else "_(empty)_"
         await _cfg_edit(
             query, ch.id,
-            f"*✅ GROUP WHITELIST*\n{'─'*14}\n\n"
+            f"*✅ 𝗚𝗥𝗢𝗨𝗣 𝗪𝗛𝗜𝗧𝗘𝗟𝗜𝗦𝗧*\n{'─'*14}\n\n"
             f"Words: {preview}\n\n"
             f"_You can also disable the owner's global whitelist words for this group._",
             [
