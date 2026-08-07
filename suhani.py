@@ -2095,12 +2095,12 @@ async def send_captcha(ctx, chat_id, user_id, user_display):
         f"🔐 *VERIFICATION REQUIRED*\n"
         f"{'─' * 30}\n\n"
         f"👤 Welcome, {user_display}!\n\n"
-        f"🧮 Solve this to join the chat:\n"
+        f"🧮 Solve this to unlock the chat:\n"
         f"┌─────────────────┐\n"
         f"│  `{question}`       │\n"
         f"└─────────────────┘\n\n"
-        f"⏱ You have **60 seconds** to answer!\n"
-        f"❌ Wrong answer = kick!",
+        f"⏱ You have *60 seconds* to answer.\n"
+        f"⚠️ A wrong answer means removal from the group.",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
@@ -2127,8 +2127,8 @@ async def captcha_timeout(ctx, chat_id, user_id, msg_id, expire):
             await ctx.bot.delete_message(chat_id, msg_id)
             msg = await ctx.bot.send_message(
                 chat_id,
-                f"⛔ *Captcha Failed*\n\n"
-                f"User `{user_id}` was kicked for not completing verification!",
+                f"⛔ *Verification Failed*\n\n"
+                f"User `{user_id}` was removed for not completing verification in time.",
                 parse_mode='Markdown'
             )
             asyncio.create_task(delete_after(ctx, chat_id, msg.message_id, 10))
@@ -2149,12 +2149,12 @@ async def captcha_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user_id = int(user_id_s)
 
     if query.from_user.id != user_id:
-        await query.answer("❌ This captcha is not for you!", show_alert=True)
+        await query.answer("🔒 This verification isn't for you.", show_alert=True)
         return
 
     pending = CAPTCHA_PENDING.get(chat_id, {}).get(user_id)
     if not pending:
-        await query.answer("⏰ Captcha expired!", show_alert=True)
+        await query.answer("⏰ This verification has expired.", show_alert=True)
         return
 
     if chosen == pending["answer"]:
@@ -2163,14 +2163,14 @@ async def captcha_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.message.delete()
         msg = await ctx.bot.send_message(
             chat_id,
-            f"✅ *Verification Passed!*\n\n"
-            f"Welcome to the group! You can now chat freely. 🎉",
+            f"✅ *Verification Passed*\n\n"
+            f"Welcome to the group — you're all set. 🎉",
             parse_mode='Markdown'
         )
         asyncio.create_task(delete_after(ctx, chat_id, msg.message_id, 15))
-        await query.answer("✅ Correct! Welcome!")
+        await query.answer("✅ Correct — welcome!")
     else:
-        await query.answer("❌ Wrong answer! Try again.", show_alert=True)
+        await query.answer("❌ Wrong answer — try again.", show_alert=True)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -2271,7 +2271,7 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
         # Only admins / owner can see this panel
         ch_id = update.effective_chat.id if update.effective_chat else 0
         if query.from_user.id != OWNER_ID and not await is_adm(ctx, ch_id, query.from_user.id):
-            await query.answer("❌ Admins only!", show_alert=True)
+            await query.answer("🔒 Admins only.", show_alert=True)
             return
         text = (
             f"*👮 ADMIN COMMANDS*\n"
@@ -2313,23 +2313,23 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             f"{'─'*24}\n\n"
             f"🤖 External bot usernames\n"
             f"👤 External @mentions\n"
-            f"   ✅ _@admin @owner @request: exempt_\n"
-            f"   ✅ _Whitelisted & members: exempt_\n"
-            f"🔗 All Links & URLs\n"
-            f"🕵️ Hidden hyperlinks (text_link entities)\n"
+            f"   ✅ _@admin, @owner, @request: exempt_\n"
+            f"   ✅ _Whitelisted words & members: exempt_\n"
+            f"🔗 All links & URLs\n"
+            f"🕵️ Hidden hyperlinks (text-link entities)\n"
             f"✍️ Stylish / Unicode fancy fonts\n"
             f"↩️ Forwarded messages\n"
-            f"   ✅ _Linked channel forwards: allowed_\n"
+            f"   ✅ _Linked-channel forwards allowed_\n"
             f"🔞 Adult emojis (2+ triggers action)\n"
-            f"🚫 Bad words — Hindi + English built-in\n"
+            f"🚫 Profanity filter — built-in word list\n"
             f"⛔ Custom blacklist words\n"
-            f"🌐 Global blacklist (owner sets)\n"
-            f"🌊 Anti-Flood system\n"
+            f"🌐 Global blacklist (owner-managed)\n"
+            f"🌊 Anti-flood system\n"
             f"🎭 Captcha for new members\n"
             f"🗑️ Sticker/GIF auto-delete\n"
             f"⏱️ Message auto-delete timer\n\n"
             f"{'─'*32}\n"
-            f"_All protections are automatic!_"
+            f"_Every protection runs automatically._"
         )
         await query.answer()
         await query.edit_message_text(
@@ -2345,7 +2345,7 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
     elif data == "menu_settings":
         ch_id = update.effective_chat.id if update.effective_chat else 0
         if query.from_user.id != OWNER_ID and not await is_adm(ctx, ch_id, query.from_user.id):
-            await query.answer("❌ Admins only!", show_alert=True)
+            await query.answer("🔒 Admins only.", show_alert=True)
             return
         await query.answer()
         _remember_menu_owner(ch_id, query.message.message_id, query.from_user.id)
@@ -2357,18 +2357,18 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             f"*⚠️ WARNING SYSTEM*\n"
 
             f"{'─'*24}\n\n"
-            f"🟡 *W1* → Muted 35 seconds\n"
-            f"   ⏱ _Expires in 6 hours_\n\n"
-            f"🟠 *W2* → Muted 60 seconds\n"
-            f"   ⏱ _Expires in 16 hours_\n\n"
-            f"🔴 *W3* → Muted 120 seconds\n"
-            f"   ⏱ _Expires in 27 hours_\n\n"
-            f"💀 *W4* → 1 WEEK BAN\n"
-            f"   🌐 _Applied in ALL groups!_\n"
-            f"   🔐 _Admin must manually unmute_\n\n"
+            f"🟡 *W1* → 35 second mute\n"
+            f"   ⏱ _Expires after 6 hours_\n\n"
+            f"🟠 *W2* → 60 second mute\n"
+            f"   ⏱ _Expires after 16 hours_\n\n"
+            f"🔴 *W3* → 120 second mute\n"
+            f"   ⏱ _Expires after 27 hours_\n\n"
+            f"💀 *W4* → 1 week mute\n"
+            f"   🌐 _Applied across every group_\n"
+            f"   🔐 _Only an admin can lift it_\n\n"
             f"{'─'*32}\n"
-            f"💡 *Tip:* Reply *Thank You* to remove 1 warning!\n"
-            f"_Violations auto-trigger warnings_"
+            f"💡 *Tip:* Reply with “thank you” to clear one warning.\n"
+            f"_Violations trigger warnings automatically._"
         )
         await query.answer()
         await query.edit_message_text(
@@ -2398,9 +2398,9 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             f"📨 Msgs Scanned:      `{s.get('scanned', 0)}`\n"
             f"🗓️ Global Mutes:      `{len(gmutes)}`\n\n"
             f"{'─'*32}\n"
-            f"🛡️ Status:  {ICON_ON} *Active & Running*\n"
-            f"🗄️ Database: {ICON_ON} *MongoDB Connected*\n"
-            f"🤖 AI Engine: {'🟢 Active' if AI_API_KEY else '🔴 Not Configured'}"
+            f"🛡️ Status:  {ICON_ON} *Online & running*\n"
+            f"🗄️ Database: {ICON_ON} *Connected*\n"
+            f"🤖 AI Engine: {'🟢 Active' if AI_API_KEY else '🔴 Not configured'}"
         )
         await query.answer()
         await query.edit_message_text(
@@ -2493,14 +2493,13 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             f"{'─'*32}\n"
             f"*What AI Does:*\n"
             f"  🚨 Detects promo/spam content\n"
-            f"  🎌 Knows anime names (search assist)\n"
-            f"  💬 Replies in Hinglish when needed\n"
-            f"  📋 Logs missing anime requests\n\n"
+            f"  💬 Answers common member questions\n"
+            f"  📋 Logs unanswered requests\n\n"
             f"*Owner Commands:*\n"
             f"  `/aiapprove` — Approve group\n"
             f"  `/airevoke` — Revoke AI\n"
             f"  `/aigroups` — List approved\n"
-            f"  `/missinganime` — Missing requests\n\n"
+            f"  `/missinganime` — Unanswered requests\n\n"
             f"*Admin Command:*\n"
             f"  `/aimod on|off` — Toggle AI\n\n"
             f"{'─'*32}\n"
@@ -2595,7 +2594,7 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
                     await query.answer("✅ User unbanned!", show_alert=True)
                     await query.message.edit_reply_markup(reply_markup=None)
                 else:
-                    await query.answer("❌ Admins only!", show_alert=True)
+                    await query.answer("🔒 Admins only.", show_alert=True)
             except:
                 await query.answer("❌ Error!", show_alert=True)
         return
@@ -2612,7 +2611,7 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
                     await query.answer("✅ User unmuted!", show_alert=True)
                     await query.message.edit_reply_markup(reply_markup=None)
                 else:
-                    await query.answer("❌ Admins only!", show_alert=True)
+                    await query.answer("🔒 Admins only.", show_alert=True)
             except:
                 await query.answer("❌ Error!", show_alert=True)
         return
@@ -2626,7 +2625,7 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
                 pass
             await _delete_panel_trigger(ctx, ch_id, query.message.message_id)
         else:
-            await query.answer("❌ Admins only!", show_alert=True)
+            await query.answer("🔒 Admins only.", show_alert=True)
         return
 
     elif data == "close_menu":
@@ -2654,11 +2653,11 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if ch.type != "private":
         is_admin_here = (u.id == OWNER_ID) or await is_adm(ctx, ch.id, u.id)
         start_text = (
-            f"🛡️ *Guardian Bot* is active & protecting this group!\n"
-            f"_Use /help for all commands._"
+            f"🛡️ *Guardian* is online and protecting this group.\n"
+            f"_Type /help to see all commands._"
         )
         if is_admin_here:
-            start_text += f"\n⚙️ _Admins: use /settings to open the control panel!_"
+            start_text += f"\n⚙️ _Admins — open /settings for the control panel._"
         buttons = [
             [
                 InlineKeyboardButton("📋 Commands", callback_data="menu_main"),
@@ -2684,31 +2683,31 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # DM — Owner panel
     if u.id == OWNER_ID:
         text = (
-            f"👑 *𝗢𝗪𝗡𝗘𝗥 𝗣𝗔𝗡𝗘𝗟*\n"
-            f"_v10.0 • MongoDB • AI-Powered_\n"
+            f"👑 *𝗢𝗪𝗡𝗘𝗥 𝗖𝗢𝗡𝗧𝗥𝗢𝗟 𝗣𝗔𝗡𝗘𝗟*\n"
+            f"_v10.0 · MongoDB · AI-Powered_\n"
             f"{'─'*24}\n\n"
-            f"🌐 *GLOBAL CONTROLS*\n\n"
-            f"  📢 `/broadcast <msg>` — All groups\n"
+            f"🌐 *GLOBAL*\n\n"
+            f"  📢 `/broadcast <msg>` — Message every group\n"
             f"  👥 `/groups` — Active group count\n"
-            f"  📊 `/stats` — Full bot stats\n"
-            f"  🗓️ `/globalmutes` — Global mute list\n"
-            f"  🌐 `/autodelete <min>` — Global default\n\n"
+            f"  📊 `/stats` — Full bot statistics\n"
+            f"  🗓️ `/globalmutes` — View global mutes\n"
+            f"  🌐 `/autodelete <min>` — Set global default\n\n"
             f"{'─'*38}\n"
             f"⚡ *MODERATION*\n\n"
-            f"  💀 `/fban <id> [reason]` — Global ban\n"
-            f"  ✅ `/gunban <id>` — Global unban\n"
-            f"  🧹 `/gclearwarn <id>` — Clear all warns\n"
-            f"  ⚡ `/power <id>` — Grant fban power\n"
-            f"  🔻 `/unpower <id>` — Revoke power\n\n"
+            f"  💀 `/fban <id> [reason]` — Ban across all groups\n"
+            f"  ✅ `/gunban <id>` — Reverse a global ban\n"
+            f"  🧹 `/gclearwarn <id>` — Clear all warnings\n"
+            f"  ⚡ `/power <id>` — Grant ban authority\n"
+            f"  🔻 `/unpower <id>` — Revoke ban authority\n\n"
             f"{'─'*38}\n"
-            f"🤖 *AI CONTROLS*\n\n"
-            f"  ✅ `/aiapprove <id>` — Approve group\n"
-            f"  🔴 `/airevoke <id>` — Revoke AI\n"
-            f"  📋 `/aigroups` — AI approved list\n"
-            f"  🎌 `/missinganime` — Missing requests\n\n"
+            f"🤖 *AI ASSISTANT*\n\n"
+            f"  ✅ `/aiapprove <id>` — Enable for a group\n"
+            f"  🔴 `/airevoke <id>` — Disable for a group\n"
+            f"  📋 `/aigroups` — List enabled groups\n"
+            f"  📝 `/missinganime` — Unanswered requests\n\n"
             f"{'─'*38}\n"
-            f"🌐 `/gblacklist` • `/gwhitelist` — Global word lists\n"
-            f"🤖 `/adexempt` — Autodelete exemptions\n"
+            f"🌐 `/gblacklist` · `/gwhitelist` — Global word lists\n"
+            f"🤖 `/adexempt` — Auto-delete exemptions\n"
         )
         await update.message.reply_text(
             text,
@@ -2724,23 +2723,23 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # DM — Regular user
     text = (
-                f"🛡️ *𝗚𝗨𝗔𝗥𝗗𝗜𝗔𝗡 — 𝗚𝗿𝗼𝘂𝗽 𝗣𝗿𝗼𝘁𝗲𝗰𝘁𝗶𝗼𝗻 & 𝗛𝗲𝗹𝗽 𝗕𝗼𝘁*\n"
-        f"_Group Protection Bot_\n"
+                f"🛡️ *𝗚𝗨𝗔𝗥𝗗𝗜𝗔𝗡 — 𝗚𝗿𝗼𝘂𝗽 𝗣𝗿𝗼𝘁𝗲𝗰𝘁𝗶𝗼𝗻 𝗕𝗼𝘁*\n"
+        f"_Security · Moderation · Automation_\n"
         f"{'─'*24}\n\n"
-        f"👋 *Hey {md_esc(u.first_name or 'there')}!*\n\n"
-        f"I protect groups and keep the anime community\n"
-        f"safe and spam-free! 🔥\n\n"
+        f"👋 *Hi {md_esc(u.first_name or 'there')}!*\n\n"
+        f"I keep groups safe, clean, and spam-free —\n"
+        f"around the clock, with zero effort from admins. 🔥\n\n"
         f"{'─'*34}\n"
         f"📱 *YOUR COMMANDS*\n\n"
         f"  📜 `/rules` — View group rules\n"
         f"  ⚠️ `/warnings` — Check your warnings\n"
-        f"  ⭐ `/rep` — Guardian Profile Card\n"
-        f"  🏆 `/repboard` — Reputation Ranking\n"
+        f"  ⭐ `/rep` — Your profile card\n"
+        f"  🏆 `/repboard` — Reputation ranking\n"
         f"  🆔 `/id` — Your Telegram ID\n\n"
         f"{'─'*34}\n"
         f"💎 *REPUTATION*\n"
-        f"_Thank You → +{REP_PER_THANK} Rep | Clear a warning → {REP_PER_WARN_REMOVE} Rep_\n\n"
-        f"_Add me to your group & make me admin!_"
+        f"_Say thanks → +{REP_PER_THANK} rep · Clear a warning → {REP_PER_WARN_REMOVE} rep_\n\n"
+        f"_Add me to your group and make me admin to get started._"
     )
     await update.message.reply_text(
         text,
@@ -2767,17 +2766,17 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # ── User-only help (non-admins) ──────────────────────────
     if not caller_is_admin:
         text = (
-            f"*👤 YOUR COMMANDS & INFO*\n"
+            f"*👤 YOUR COMMANDS*\n"
 
             f"{'─'*24}\n\n"
             f"📜 `/rules` — View group rules\n"
             f"⚠️ `/warnings` — Check your warnings\n"
-            f"⭐ `/rep` — Guardian Profile Card\n"
-            f"🏆 `/repboard` — Reputation Leaderboard\n"
+            f"⭐ `/rep` — Your profile card\n"
+            f"🏆 `/repboard` — Reputation leaderboard\n"
             f"🆔 `/id` — Your Telegram ID\n\n"
             f"{'─'*32}\n"
-            f"💡 _Thank You → +{REP_PER_THANK} Rep | Clear a warning → {REP_PER_WARN_REMOVE} Rep_\n"
-            f"_Violations auto-detected!_"
+            f"💡 _Say thanks → +{REP_PER_THANK} rep · Clear a warning → {REP_PER_WARN_REMOVE} rep_\n"
+            f"_Violations are detected automatically._"
         )
         sent = await update.message.reply_text(
             text,
@@ -2799,34 +2798,34 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # ── Admin / Owner full help ──────────────────────────────
     admin_text = (
-        f"*👮 ADMIN COMMANDS PANEL*\n"
+        f"*👮 ADMIN COMMAND PANEL*\n"
 
         f"{'─'*24}\n\n"
-        f"🔇 `/mute [sec]` — Mute user _(reply)_\n"
-        f"🔊 `/unmute` — Unmute user _(reply)_\n"
-        f"🔨 `/ban [reason]` — Ban user _(reply)_\n"
-        f"🔓 `/unban <id>` — Unban user\n"
-        f"⚠️ `/warn [reason]` — Warn user _(reply)_\n"
-        f"♻️ `/resetwarnings` — Reset warnings _(reply)_\n"
-        f"🗑️ `/del` — Delete message _(reply)_\n"
-        f"🧹 `/purge` — Bulk delete from reply\n"
-        f"🧪 `/testmute` — Test 35s mute _(reply)_\n"
+        f"🔇 `/mute [sec]` — Mute a user _(reply)_\n"
+        f"🔊 `/unmute` — Unmute a user _(reply)_\n"
+        f"🔨 `/ban [reason]` — Ban a user _(reply)_\n"
+        f"🔓 `/unban <id>` — Unban a user\n"
+        f"⚠️ `/warn [reason]` — Warn a user _(reply)_\n"
+        f"♻️ `/resetwarnings` — Clear warnings _(reply)_\n"
+        f"🗑️ `/del` — Delete a message _(reply)_\n"
+        f"🧹 `/purge` — Bulk-delete from a reply\n"
+        f"🧪 `/testmute` — Test a 35s mute _(reply)_\n"
         f"👑 `/immortal <id>` — Grant immunity\n"
         f"💀 `/unimmortal <id>` — Remove immunity\n"
         f"📋 `/immortals` — List immune users\n\n"
         f"{'─'*34}\n"
         f"⚙️ *SETTINGS*\n\n"
-        f"🎛️ `/settings` — Open button-based Settings Panel!\n"
-        f"📜 `/setrules <text>` — Set rules\n"
+        f"🎛️ `/settings` — Open the settings panel\n"
+        f"📜 `/setrules <text>` — Set group rules\n"
         f"🔗 `/setlinked` — Set linked channel\n"
         f"🎭 `/captcha on|off` — Toggle captcha\n"
-        f"🗑️ `/sticker_delete <min>` — Sticker auto-del\n"
-        f"⏱️ `/autodelete <min>` — Auto-delete msgs\n"
-        f"⛔ `/addblacklist <word>` — Ban a word\n"
-        f"✅ `/addwhitelist <word>` — Whitelist word\n"
-        f"📋 `/blacklist` • `/whitelist` — View lists\n"
-        f"📚 `/addteacher` — Mark user as teacher\n"
-        f"❌ `/removeteacher` — Remove teacher\n"
+        f"🗑️ `/sticker_delete <min>` — Sticker auto-delete\n"
+        f"⏱️ `/autodelete <min>` — Message auto-delete\n"
+        f"⛔ `/addblacklist <word>` — Block a word\n"
+        f"✅ `/addwhitelist <word>` — Allow a word\n"
+        f"📋 `/blacklist` · `/whitelist` — View word lists\n"
+        f"📚 `/addteacher` — Grant teacher role\n"
+        f"❌ `/removeteacher` — Remove teacher role\n"
         f"📋 `/teachers` — List all teachers\n"
     )
 
@@ -2834,22 +2833,22 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         admin_text += (
             f"\n{'─'*34}\n"
             f"👑 *OWNER ONLY*\n\n"
-            f"🌐 `/autodelete <min>` _(DM)_ — Global default\n"
-            f"💀 `/fban <id>` — Global ban all groups\n"
-            f"✅ `/gunban <id>` — Global unban\n"
-            f"🧹 `/gclearwarn <id>` — Clear all warns\n"
-            f"⚡ `/power <id>` • `/unpower <id>` — Fban perms\n"
-            f"📢 `/broadcast <msg>` — Message all groups\n"
-            f"👥 `/groups` • `/stats` — Bot stats\n"
-            f"🌐 `/gblacklist` • `/gwhitelist` — Global lists\n"
-            f"🤖 `/adexempt <id>` — Autodelete exempt\n"
-            f"🤖 `/aiapprove` • `/airevoke` • `/aigroups`\n"
-            f"🎌 `/missinganime` — Missing anime requests\n"
+            f"🌐 `/autodelete <min>` _(DM)_ — Set global default\n"
+            f"💀 `/fban <id>` — Ban across all groups\n"
+            f"✅ `/gunban <id>` — Reverse a global ban\n"
+            f"🧹 `/gclearwarn <id>` — Clear all warnings\n"
+            f"⚡ `/power <id>` · `/unpower <id>` — Ban authority\n"
+            f"📢 `/broadcast <msg>` — Message every group\n"
+            f"👥 `/groups` · `/stats` — Bot statistics\n"
+            f"🌐 `/gblacklist` · `/gwhitelist` — Global word lists\n"
+            f"🤖 `/adexempt <id>` — Auto-delete exemption\n"
+            f"🤖 `/aiapprove` · `/airevoke` · `/aigroups`\n"
+            f"📝 `/missinganime` — Unanswered requests\n"
         )
 
     admin_text += (
         f"\n{'─'*34}\n"
-        f"⚠️ *Warn Scale:* W1→35s | W2→60s | W3→120s | W4→1wk 🌐"
+        f"⚠️ *Warning scale:* W1→35s · W2→60s · W3→120s · W4→1 week 🌐"
     )
 
     sent = await update.message.reply_text(
@@ -2882,29 +2881,29 @@ async def rule_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{'─'*30}\n\n"
             f"{custom}\n\n"
             f"{'─'*30}\n"
-            f"_Follow the rules to avoid punishment._"
+            f"_Please follow the rules to avoid penalties._"
         )
     else:
         text = (
             f"📜 *GROUP RULES*\n"
             f"{'─'*30}\n\n"
-            f"🚫 *NOT ALLOWED:*\n\n"
+            f"🚫 *NOT ALLOWED*\n\n"
             f"  1️⃣  🤖 External bot usernames\n"
             f"  2️⃣  🔗 Links & URLs\n"
             f"  3️⃣  ↩️ Forwarded messages\n"
-            f"       ✅ _Linked channel: allowed_\n"
+            f"       ✅ _Linked channel is exempt_\n"
             f"  4️⃣  🔞 Adult emojis (2+)\n"
             f"  5️⃣  🗣️ Abusive language\n"
             f"  6️⃣  ⛔ Blacklisted words\n"
-            f"  7️⃣  🌊 Spamming / Flooding\n\n"
+            f"  7️⃣  🌊 Spamming or flooding\n\n"
             f"{'─'*30}\n\n"
-            f"⚠️ *PUNISHMENTS:*\n"
+            f"⚠️ *PENALTIES*\n"
             f"  🟡 1st → 35 sec mute\n"
             f"  🟠 2nd → 60 sec mute\n"
             f"  🔴 3rd → 120 sec mute\n"
-            f"  💀 4th → 1 WEEK (ALL groups!)\n\n"
+            f"  💀 4th → 1 week, in every group\n\n"
             f"{'─'*30}\n"
-            f"✅ _Respect the rules & enjoy!_"
+            f"✅ _Follow the rules and enjoy your stay!_"
         )
 
     sent = await update.message.reply_text(
@@ -2922,9 +2921,9 @@ async def rule_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def setrules_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
-        return await update.message.reply_text("❌ Use in group!")
+        return await update.message.reply_text("⚠️ This command only works in a group.")
     if not await sender_is_admin(ctx, update):
-        return await update.message.reply_text("❌ Admins only!")
+        return await update.message.reply_text("🔒 Admins only.")
     if not ctx.args:
         return await update.message.reply_text(
             "❌ Usage: `/setrules <your rules text>`",
@@ -2962,9 +2961,9 @@ async def immortal_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     user = update.effective_user
     if ch.type == "private":
-        return await update.message.reply_text("❌ Use in group!")
+        return await update.message.reply_text("⚠️ This command only works in a group.")
     if not await is_adm(ctx, ch.id, user.id) and user.id != OWNER_ID:
-        return await update.message.reply_text("❌ Admins only!")
+        return await update.message.reply_text("🔒 Admins only.")
 
     target_id = None
     target_name = None
@@ -2974,7 +2973,7 @@ async def immortal_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             target_id = int(ctx.args[0])
         except ValueError:
             return await update.message.reply_text(
-                "❌ Invalid user ID!\nUsage: `/immortal 1234567890`",
+                "⚠️ That doesn't look like a valid user ID.\nUsage: `/immortal 1234567890`",
                 parse_mode='Markdown'
             )
     elif update.message.reply_to_message:
@@ -3005,16 +3004,16 @@ async def unimmortal_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     user = update.effective_user
     if ch.type == "private":
-        return await update.message.reply_text("❌ Use in group!")
+        return await update.message.reply_text("⚠️ This command only works in a group.")
     if not await is_adm(ctx, ch.id, user.id) and user.id != OWNER_ID:
-        return await update.message.reply_text("❌ Admins only!")
+        return await update.message.reply_text("🔒 Admins only.")
 
     target_id = None
     if ctx.args:
         try:
             target_id = int(ctx.args[0])
         except ValueError:
-            return await update.message.reply_text("❌ Invalid user ID!")
+            return await update.message.reply_text("⚠️ That doesn't look like a valid user ID.")
     elif update.message.reply_to_message:
         target_id = update.message.reply_to_message.from_user.id
     else:
@@ -3035,9 +3034,9 @@ async def unimmortal_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def immortals_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
-        return await update.message.reply_text("❌ Use in group!")
+        return await update.message.reply_text("⚠️ This command only works in a group.")
     if not await sender_is_admin(ctx, update):
-        return await update.message.reply_text("❌ Admins only!")
+        return await update.message.reply_text("🔒 Admins only.")
 
     immortals = db.get_immortals(ch.id)
     if not immortals:
@@ -3057,9 +3056,9 @@ async def immortals_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def addblacklist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
-        return await update.message.reply_text("❌ Use in group!")
+        return await update.message.reply_text("⚠️ This command only works in a group.")
     if not await sender_is_admin(ctx, update):
-        return await update.message.reply_text("❌ Admins only!")
+        return await update.message.reply_text("🔒 Admins only.")
     if not ctx.args:
         return await update.message.reply_text(
             "❌ Usage: `/addblacklist <word>`",
@@ -3078,9 +3077,9 @@ async def addblacklist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def removeblacklist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
-        return await update.message.reply_text("❌ Use in group!")
+        return await update.message.reply_text("⚠️ This command only works in a group.")
     if not await sender_is_admin(ctx, update):
-        return await update.message.reply_text("❌ Admins only!")
+        return await update.message.reply_text("🔒 Admins only.")
     if not ctx.args:
         return await update.message.reply_text(
             "❌ Usage: `/removeblacklist <word>`",
@@ -3098,9 +3097,9 @@ async def removeblacklist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def blacklist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
-        return await update.message.reply_text("❌ Use in group!")
+        return await update.message.reply_text("⚠️ This command only works in a group.")
     if not await sender_is_admin(ctx, update):
-        return await update.message.reply_text("❌ Admins only!")
+        return await update.message.reply_text("🔒 Admins only.")
 
     words = db.get_blacklist(ch.id)
     if not words:
@@ -3120,9 +3119,9 @@ async def blacklist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def addwhitelist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
-        return await update.message.reply_text("❌ Use in group!")
+        return await update.message.reply_text("⚠️ This command only works in a group.")
     if not await sender_is_admin(ctx, update):
-        return await update.message.reply_text("❌ Admins only!")
+        return await update.message.reply_text("🔒 Admins only.")
     if not ctx.args:
         return await update.message.reply_text(
             "❌ Usage: `/addwhitelist <word>`",
@@ -3141,9 +3140,9 @@ async def addwhitelist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def removewhitelist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
-        return await update.message.reply_text("❌ Use in group!")
+        return await update.message.reply_text("⚠️ This command only works in a group.")
     if not await sender_is_admin(ctx, update):
-        return await update.message.reply_text("❌ Admins only!")
+        return await update.message.reply_text("🔒 Admins only.")
     if not ctx.args:
         return await update.message.reply_text(
             "❌ Usage: `/removewhitelist <word>`",
@@ -3161,9 +3160,9 @@ async def removewhitelist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def whitelist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
-        return await update.message.reply_text("❌ Use in group!")
+        return await update.message.reply_text("⚠️ This command only works in a group.")
     if not await sender_is_admin(ctx, update):
-        return await update.message.reply_text("❌ Admins only!")
+        return await update.message.reply_text("🔒 Admins only.")
 
     words = db.get_whitelist(ch.id)
     if not words:
@@ -3183,9 +3182,9 @@ async def whitelist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def sticker_delete_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
-        return await update.message.reply_text("❌ Use in group!")
+        return await update.message.reply_text("⚠️ This command only works in a group.")
     if not await sender_is_admin(ctx, update):
-        return await update.message.reply_text("❌ Admins only!")
+        return await update.message.reply_text("🔒 Admins only.")
 
     if not ctx.args:
         g = db.get_group(ch.id)
@@ -3272,7 +3271,7 @@ async def autodelete_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # ── Group use — Group admin, sets per-group override ────
     if not await sender_is_admin(ctx, update):
-        return await update.message.reply_text("❌ Admins only!")
+        return await update.message.reply_text("🔒 Admins only.")
 
     if not ctx.args:
         per_group = db.get_group(ch.id).get("autodelete_min")
@@ -3337,9 +3336,9 @@ async def autodelete_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def captcha_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
-        return await update.message.reply_text("❌ Use in group!")
+        return await update.message.reply_text("⚠️ This command only works in a group.")
     if not await sender_is_admin(ctx, update):
-        return await update.message.reply_text("❌ Admins only!")
+        return await update.message.reply_text("🔒 Admins only.")
 
     if not ctx.args or ctx.args[0].lower() not in ('on', 'off'):
         g = db.get_group(ch.id)
@@ -3367,9 +3366,9 @@ async def captcha_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def setlinked_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
-        return await update.message.reply_text("❌ Use in group!")
+        return await update.message.reply_text("⚠️ This command only works in a group.")
     if not await sender_is_admin(ctx, update):
-        return await update.message.reply_text("❌ Admins only!")
+        return await update.message.reply_text("🔒 Admins only.")
 
     try:
         chat = await ctx.bot.get_chat(ch.id)
@@ -3422,10 +3421,10 @@ async def testmute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if ch.type == "private": return
     if not await sender_is_admin(ctx, update): return
     if not update.message.reply_to_message:
-        return await update.message.reply_text("❌ Reply to a user!")
+        return await update.message.reply_text("↩️ Reply to a user first.")
     tgt = update.message.reply_to_message.from_user
     if await is_adm(ctx, ch.id, tgt.id):
-        return await update.message.reply_text("❌ Can't mute an admin!")
+        return await update.message.reply_text("🔒 Admins can't be muted.")
     if await do_mute(ctx, ch.id, tgt.id, 35):
         await update.message.reply_text(
             f"🧪 *Test Mute Applied*\n\n"
@@ -3433,7 +3432,7 @@ async def testmute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown'
         )
     else:
-        await update.message.reply_text("❌ Failed! Make sure bot has admin rights.")
+        await update.message.reply_text("⚠️ Couldn't complete that — check the bot has admin rights.")
 
 
 # ─── /mute ──────────────────────────────────────────────────
@@ -3443,12 +3442,12 @@ async def mute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await sender_is_admin(ctx, update): return
     if not update.message.reply_to_message:
         return await update.message.reply_text(
-            "❌ Reply to a user!\nUsage: `/mute 60`",
+            "↩️ Reply to a user first.\nUsage: `/mute 60`",
             parse_mode='Markdown'
         )
     tgt = update.message.reply_to_message.from_user
     if await is_adm(ctx, ch.id, tgt.id):
-        return await update.message.reply_text("❌ Can't mute an admin!")
+        return await update.message.reply_text("🔒 Admins can't be muted.")
     sec = 35
     if ctx.args:
         try:
@@ -3457,7 +3456,7 @@ async def mute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             pass
     if await do_mute(ctx, ch.id, tgt.id, sec):
         await update.message.reply_text(
-            f"🔇 *Muted!*\n\n"
+            f"🔇 *Muted*\n\n"
             f"👤 {user_name(tgt)}\n"
             f"⏱ Duration: *{sec} seconds*",
             parse_mode='Markdown',
@@ -3478,7 +3477,7 @@ async def unmute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if await do_unmute(ctx, ch.id, tgt.id):
         db.reset_warnings(ch.id, tgt.id)
         await update.message.reply_text(
-            f"🔊 *Unmuted!*\n\n👤 {user_name(tgt)} can now send messages.",
+            f"🔊 *Unmuted*\n\n👤 {user_name(tgt)} can send messages again.",
             parse_mode='Markdown'
         )
 
@@ -3489,14 +3488,14 @@ async def ban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if ch.type == "private": return
     if not await sender_is_admin(ctx, update): return
     if not update.message.reply_to_message:
-        return await update.message.reply_text("❌ Reply to a user to ban!")
+        return await update.message.reply_text("↩️ Reply to a user to ban them.")
     tgt = update.message.reply_to_message.from_user
     if await is_adm(ctx, ch.id, tgt.id):
-        return await update.message.reply_text("❌ Can't ban an admin!")
+        return await update.message.reply_text("🔒 Admins can't be banned.")
     reason = ' '.join(ctx.args) if ctx.args else "No reason provided"
     if await do_ban(ctx, ch.id, tgt.id):
         await update.message.reply_text(
-            f"🔨 *User Banned!*\n"
+            f"🔨 *User Banned*\n"
             f"{'─'*25}\n\n"
             f"👤 {user_name(tgt)}\n"
             f"📋 Reason: _{reason}_",
@@ -3504,7 +3503,7 @@ async def ban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             reply_markup=kb_unban_button(ch.id, tgt.id)
         )
     else:
-        await update.message.reply_text("❌ Failed to ban. Make bot an admin!")
+        await update.message.reply_text("⚠️ Couldn't ban — make sure the bot has admin rights.")
 
 
 # ─── /unban ─────────────────────────────────────────────────
@@ -3518,16 +3517,16 @@ async def unban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             target_id = int(ctx.args[0])
         except:
             return await update.message.reply_text(
-                "❌ Usage: `/unban <user_id>`",
+                "ℹ️ Usage: `/unban <user_id>`",
                 parse_mode='Markdown'
             )
     elif update.message.reply_to_message:
         target_id = update.message.reply_to_message.from_user.id
     else:
-        return await update.message.reply_text("❌ Reply to user or provide user ID!")
+        return await update.message.reply_text("↩️ Reply to a user or provide their user ID.")
     if await do_unban(ctx, ch.id, target_id):
         await update.message.reply_text(
-            f"✅ `{target_id}` has been *unbanned!*",
+            f"✅ `{target_id}` has been *unbanned*.",
             parse_mode='Markdown'
         )
 
@@ -3555,8 +3554,7 @@ async def warn_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"👤 {user_name(tgt)}\n"
         f"📋 Reason: _{reason}_\n\n"
         f"Progress: {bars} `{cnt}/4`\n\n"
-        f"{WARN_MSG[cnt]}",
-        parse_mode='Markdown',
+        f"{WARN_MSG[cnt]}",        parse_mode='Markdown',
         reply_markup=kb_warn_actions(ch.id, tgt.id)
     )
     asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 90))
@@ -3572,11 +3570,11 @@ async def warnings_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     else:
         tgt = update.effective_user
     if not tgt:
-        return await update.message.reply_text("❌ Could not identify user (anonymous/channel reply).")
+        return await update.message.reply_text("⚠️ Couldn't identify that user (anonymous or channel reply).")
     if db.is_gmuted(tgt.id):
         msg = await update.message.reply_text(
             f"👤 {user_name(tgt)}\n\n"
-            f"💀 *GLOBALLY MUTED* — 1 week ban active.",
+            f"💀 *GLOBALLY MUTED* — 1-week mute active.",
             parse_mode='Markdown'
         )
         asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 600))
@@ -3603,7 +3601,7 @@ async def reset_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     tgt = update.message.reply_to_message.from_user
     db.reset_warnings(ch.id, tgt.id)
     await update.message.reply_text(
-        f"✅ *Warnings reset!*\n\n👤 {user_name(tgt)} now has 0 warnings.",
+        f"✅ *Warnings reset*\n\n👤 {user_name(tgt)} now has 0 warnings.",
         parse_mode='Markdown'
     )
 
@@ -3625,9 +3623,9 @@ async def purge_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private": return
     if not await sender_is_admin(ctx, update):
-        return await update.message.reply_text("❌ Admins only!")
+        return await update.message.reply_text("🔒 Admins only.")
     if not update.message.reply_to_message:
-        return await update.message.reply_text("❌ Reply to the starting message!")
+        return await update.message.reply_text("↩️ Reply to the message you want to start from.")
 
     from_msg_id = update.message.reply_to_message.message_id
     to_msg_id   = update.message.message_id
@@ -3647,7 +3645,7 @@ async def purge_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     msg = await ctx.bot.send_message(
         ch.id,
-        f"🧹 *Purge Complete!*\n\n"
+        f"🧹 *Purge Complete*\n\n"
         f"🗑️ Deleted: `{deleted}` messages\n"
         f"⚠️ Skipped: `{failed}` messages",
         parse_mode='Markdown'
@@ -3704,7 +3702,7 @@ async def broadcast_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except:
             f += 1
 
-    summary = f"📢 *Broadcast Complete!*\n\n✅ Sent: `{s}`\n❌ Failed: `{f}`"
+    summary = f"📢 *Broadcast Complete*\n\n✅ Sent: `{s}`\n❌ Failed: `{f}`"
     if delete_minutes:
         summary += f"\n🗑️ Auto-delete in: `{delete_minutes} min` (in every group it was sent to)"
     await update.message.reply_text(summary, parse_mode='Markdown')
@@ -3821,7 +3819,7 @@ async def groups_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text("👥 No groups found.")
 
     status_msg = await update.message.reply_text(
-        f"⏳ Fetching details for {len(group_ids)} groups..."
+        f"⏳ Fetching details for {len(group_ids)} groups…"
     )
 
     me = await ctx.bot.get_me()
@@ -3869,11 +3867,11 @@ async def groups_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def groups_page_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if update.effective_user.id != OWNER_ID:
-        return await query.answer("❌ Not for you.", show_alert=True)
+        return await query.answer("🔒 Not for you.", show_alert=True)
 
     rows = _groups_list_cache.get(update.effective_user.id)
     if not rows:
-        return await query.answer("⚠️ List expired — please run /groups again.", show_alert=True)
+        return await query.answer("⚠️ List expired — run /groups again.", show_alert=True)
 
     page = int(query.data.split("_", 1)[1])
     text, markup = _build_groups_page(rows, page)
@@ -3892,9 +3890,9 @@ async def regroup_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.args:
         return await update.message.reply_text(
             "⚙️ <b>Usage:</b>\n<code>/regroup -1001234567890 -1009876543210</code>\n\n"
-            "Ek ya ek se zyada group chat_id de do (space se separate karke) — "
-            "bot check karega ki wahan abhi admin hai ya nahi, aur admin hone par "
-            "usse wapas database mein add kar dega.",
+            "Give one or more group chat IDs (space-separated) — "
+            "the bot will check whether it's still an admin there, and "
+            "re-add it to the database if so.",
             parse_mode='HTML'
         )
 
@@ -3922,8 +3920,6 @@ async def regroup_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if failed:
         lines.append("❌ <b>Could not add:</b>\n" + "\n".join(f"• {f}" for f in failed))
     await update.message.reply_text("\n\n".join(lines) or "Nothing to do.", parse_mode='HTML')
-
-
 
 
 GLOBAL_REP_ID = 0  # owner DM se diya gaya reputation isi "virtual group" mein store hota hai
@@ -3984,7 +3980,7 @@ async def reputation_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     db.add_reputation(chat_id, target_id, amount, name, force_convertible=True)
     new_rep = db.get_reputation(chat_id, target_id)
-    action = "diye gaye" if amount >= 0 else "kaate gaye"
+    action = "credited" if amount >= 0 else "deducted"
     is_global = chat_id == GLOBAL_REP_ID
     scope = "🌐 *Global* (given via DM)" if is_global else "in this group"
     await update.message.reply_text(
@@ -3992,7 +3988,7 @@ async def reputation_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"{'─'*28}\n"
         f"👤 User: `{target_id}`\n"
         f"📈 `{abs(amount)}` points {action} {scope}\n"
-        f"📊 Naya balance: `{new_rep}` rep",
+        f"📊 New balance: `{new_rep}` rep",
         parse_mode='Markdown'
     )
 
@@ -4009,23 +4005,23 @@ async def globalmutes_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def unglobalmute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     if not ctx.args:
-        return await update.message.reply_text("❌ /unglobalmute <id>")
+        return await update.message.reply_text("ℹ️ Usage: `/unglobalmute <id>`", parse_mode='Markdown')
     try:
         uid = int(ctx.args[0])
         db.remove_gmute(uid)
         await update.message.reply_text(
-            f"✅ `{uid}` removed from global mute!",
+            f"✅ `{uid}` removed from global mute.",
             parse_mode='Markdown'
         )
     except:
-        await update.message.reply_text("❌ Invalid ID!")
+        await update.message.reply_text("⚠️ That doesn't look like a valid ID.")
 
 
 # ─── /gblacklist ────────────────────────────────────────────
 async def gblacklist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Owner only — add/remove/list global blacklist words (apply to ALL groups)"""
     if update.effective_user.id != OWNER_ID:
-        return await update.message.reply_text("❌ Owner only command!")
+        return await update.message.reply_text("🔒 Owner access only.")
 
     if not ctx.args:
         # Show list
@@ -4073,7 +4069,7 @@ async def gblacklist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if action == "add":
         db.add_gblacklist(word)
         await update.message.reply_text(
-            f"✅ *Global Blacklist* — Added!\n\n"
+            f"✅ *Added to Global Blacklist*\n\n"
             f"🚫 `{word}`\n\n"
             f"_This word is now blocked in ALL your groups._",
             parse_mode='Markdown'
@@ -4082,14 +4078,14 @@ async def gblacklist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif action == "remove":
         db.remove_gblacklist(word)
         await update.message.reply_text(
-            f"✅ *Global Blacklist* — Removed!\n\n"
+            f"✅ *Removed from Global Blacklist*\n\n"
             f"🗑️ `{word}`",
             parse_mode='Markdown'
         )
 
     else:
         await update.message.reply_text(
-            "❌ Unknown action!\n\n"
+            "⚠️ Unknown action.\n\n"
             "Usage:\n"
             "`/gblacklist add <word>`\n"
             "`/gblacklist remove <word>`\n"
@@ -4102,7 +4098,7 @@ async def gblacklist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def gwhitelist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Owner only — global whitelist, exempt from gblacklist in ALL groups"""
     if update.effective_user.id != OWNER_ID:
-        return await update.message.reply_text("❌ Owner only command!")
+        return await update.message.reply_text("🔒 Owner access only.")
 
     if not ctx.args:
         words = db.get_gwhitelist()
@@ -4149,7 +4145,7 @@ async def gwhitelist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if action == "add":
         db.add_gwhitelist(word)
         await update.message.reply_text(
-            f"✅ *Global Whitelist* — Added!\n\n"
+            f"✅ *Added to Global Whitelist*\n\n"
             f"✔️ `{word}`\n\n"
             f"_This word is now allowed in ALL groups._",
             parse_mode='Markdown'
@@ -4157,13 +4153,13 @@ async def gwhitelist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif action == "remove":
         db.remove_gwhitelist(word)
         await update.message.reply_text(
-            f"✅ *Global Whitelist* — Removed!\n\n"
+            f"✅ *Removed from Global Whitelist*\n\n"
             f"🗑️ `{word}`",
             parse_mode='Markdown'
         )
     else:
         await update.message.reply_text(
-            "❌ Unknown action!\n\n"
+            "⚠️ Unknown action.\n\n"
             "Usage:\n"
             "`/gwhitelist add <word>`\n"
             "`/gwhitelist remove <word>`\n"
@@ -4176,7 +4172,7 @@ async def gwhitelist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def power_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Owner only — grant a user fban/gunban power."""
     if update.effective_user.id != OWNER_ID:
-        return await update.message.reply_text("❌ Owner only command!")
+        return await update.message.reply_text("🔒 Owner access only.")
 
     target_id = None
     if ctx.args:
@@ -4197,7 +4193,7 @@ async def power_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     db.add_powered(target_id)
     await update.message.reply_text(
-        f"⚡ *Power Granted!*\n"
+        f"⚡ *Power Granted*\n"
         f"{'─'*25}\n\n"
         f"🆔 User `{target_id}` can now use `/fban` and `/gunban`.\n\n"
         f"Use `/unpower {target_id}` to revoke.",
@@ -4209,7 +4205,7 @@ async def power_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def unpower_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Owner only — revoke fban power from a user."""
     if update.effective_user.id != OWNER_ID:
-        return await update.message.reply_text("❌ Owner only command!")
+        return await update.message.reply_text("🔒 Owner access only.")
 
     target_id = None
     if ctx.args:
@@ -4281,7 +4277,7 @@ async def fban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # Bot / owner cannot be fbanned
     if target_id == ctx.bot.id or target_id == OWNER_ID:
-        return await update.message.reply_text("❌ Cannot fban this user!")
+        return await update.message.reply_text("⚠️ This user can't be banned.")
 
     reason = ' '.join(ctx.args[reason_start:]) if ctx.args and reason_start < len(ctx.args) else "No reason provided"
 
@@ -4314,7 +4310,7 @@ async def fban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # Confirm silently to the caller only (no group notification)
     confirm_text = (
-        f"💀 *FBan Executed!*\n"
+        f"💀 *Global Ban Executed*\n"
         f"{'─'*28}\n\n"
         f"👤 User: `{target_id}`"
         f"{f'  ({target_name})' if target_name else ''}\n"
@@ -4373,7 +4369,7 @@ async def gunban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await asyncio.sleep(0.05)
 
     await update.message.reply_text(
-        f"✅ *Global Unban Done!*\n"
+        f"✅ *Global Unban Complete*\n"
         f"{'─'*25}\n\n"
         f"👤 User `{target_id}` unbanned from `{unbanned_count}` groups.\n"
         f"_No notifications were sent to any group._",
@@ -4390,7 +4386,7 @@ async def gclearwarn_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
     caller = update.effective_user.id
     if caller != OWNER_ID and not db.is_powered(caller):
-        return await update.message.reply_text("❌ Only the owner or a powered user can use this command!")
+        return await update.message.reply_text("🔒 Owner or authorized users only.")
 
     target_id = None
     target_name = None
@@ -4423,7 +4419,7 @@ async def gclearwarn_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     deleted = db.global_clear_warnings(target_id)
 
     await update.message.reply_text(
-        f"🧹 *Global Warnings Cleared!*\n"
+        f"🧹 *Global Warnings Cleared*\n"
         f"{'─'*28}\n\n"
         f"👤 User: {target_name or f'`{target_id}`'}\n"
         f"🗑️ Removed: `{deleted}` warning record(s) across all groups\n\n"
@@ -4438,9 +4434,9 @@ async def aimod_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Admin — toggle AI moderation on/off for this group (only if owner approved)."""
     ch = update.effective_chat
     if ch.type == "private":
-        return await update.message.reply_text("❌ Use in group!")
+        return await update.message.reply_text("⚠️ This command only works in a group.")
     if not await sender_is_admin(ctx, update):
-        return await update.message.reply_text("❌ Admins only!")
+        return await update.message.reply_text("🔒 Admins only.")
 
     if not AI_API_KEY:
         return await update.message.reply_text(
@@ -4474,7 +4470,7 @@ async def aimod_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     db.update_group(ch.id, {"aimod": val})
     state = "🟢 *enabled*" if val else "🔴 *disabled*"
     await update.message.reply_text(
-        f"🤖 AI Moderation {state}!\n\n"
+        f"🤖 AI Moderation {state}.\n\n"
         f"{'_AI will now detect promotions & spam automatically._' if val else '_AI checks are off for this group._'}",
         parse_mode='Markdown'
     )
@@ -4499,19 +4495,19 @@ async def missinganime_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             name = ' '.join(args[1:])
             db.clear_missing_anime(name)
             return await update.message.reply_text(
-                f"✅ `{name}` removed from the missing list!",
+                f"✅ `{name}` removed from the list.",
                 parse_mode='Markdown'
             )
         else:
             db.clear_missing_anime()
-            return await update.message.reply_text("✅ Entire missing anime list has been cleared!")
+            return await update.message.reply_text("✅ Request list cleared.")
 
     # Show list
     missing = db.get_missing_anime_list(30)
     if not missing:
         return await update.message.reply_text(
-            "📋 *Missing Anime List is empty!*\n\n"
-            "_No anime has been reported missing yet._",
+            "📋 *No unanswered requests.*\n\n"
+            "_Nothing has been logged yet._",
             parse_mode='Markdown'
         )
 
@@ -4519,15 +4515,15 @@ async def missinganime_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     for i, doc in enumerate(missing, 1):
         name = doc.get("display_name", doc["_id"])
         count = doc.get("count", 1)
-        lines.append(f"  {i}. `{name}` — {count}x request")
+        lines.append(f"  {i}. `{name}` — {count}x")
 
     text = (
-        f"📋 *Missing Anime Requests*\n"
+        f"📋 *Unanswered Requests*\n"
         f"{'─'*30}\n\n"
         + "\n".join(lines) +
         f"\n\n{'─'*30}\n"
-        f"_Total: {len(missing)} anime_\n"
-        f"Use `/missinganime clear` to reset list."
+        f"_Total: {len(missing)} entries_\n"
+        f"Use `/missinganime clear` to reset the list."
     )
     await update.message.reply_text(text, parse_mode='Markdown')
 
@@ -4581,7 +4577,7 @@ async def aiapprove_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"  • AI Approved: ✅\n"
             f"  • AI Status: 🟢 ON\n\n"
             f"_Group admins can control this with `/aimod on/off`._\n"
-            f"_Revoke karna ho toh: `/airevoke {target_chat_id}`_",
+            f"_To revoke: `/airevoke {target_chat_id}`_",
             parse_mode='Markdown'
         )
     except Exception as e:
@@ -4633,8 +4629,8 @@ async def airevoke_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"For group `{target_chat_id}`:\n"
             f"  • AI Approved: ❌\n"
             f"  • AI Status: 🔴 OFF\n\n"
-            f"_AI won't work there._\n"
-            f"_Wapas enable karna ho: `/aiapprove {target_chat_id}`_",
+            f"_AI moderation is now inactive there._\n"
+            f"_To re-enable: `/aiapprove {target_chat_id}`_",
             parse_mode='Markdown'
         )
     except Exception as e:
@@ -4677,9 +4673,9 @@ async def addteacher_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Admin only — mark a user as teacher (special promo handling)."""
     ch = update.effective_chat
     if ch.type == "private":
-        return await update.message.reply_text("❌ Use in group!")
+        return await update.message.reply_text("⚠️ This command only works in a group.")
     if not await sender_is_admin(ctx, update):
-        return await update.message.reply_text("❌ Admins only!")
+        return await update.message.reply_text("🔒 Admins only.")
 
     target_id = None
     target_name = None
@@ -4709,7 +4705,7 @@ async def addteacher_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     db.add_teacher(ch.id, target_id)
     await update.message.reply_text(
-        f"📚 *Teacher Added!*\n"
+        f"📚 *Teacher Added*\n"
         f"{'─'*28}\n\n"
         f"👤 User: `{target_id}`{f'  ({target_name})' if target_name else ''}\n\n"
         f"🛡️ *Special handling:*\n"
@@ -4726,9 +4722,9 @@ async def addteacher_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def removeteacher_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
-        return await update.message.reply_text("❌ Use in group!")
+        return await update.message.reply_text("⚠️ This command only works in a group.")
     if not await sender_is_admin(ctx, update):
-        return await update.message.reply_text("❌ Admins only!")
+        return await update.message.reply_text("🔒 Admins only.")
 
     target_id = None
     if update.message.reply_to_message:
@@ -4737,10 +4733,10 @@ async def removeteacher_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         try:
             target_id = int(ctx.args[0])
         except ValueError:
-            return await update.message.reply_text("❌ Invalid ID!")
+            return await update.message.reply_text("⚠️ That doesn't look like a valid ID.")
     else:
         return await update.message.reply_text(
-            "❌ Usage: `/removeteacher <id>`", parse_mode='Markdown'
+            "ℹ️ Usage: `/removeteacher <id>`", parse_mode='Markdown'
         )
 
     db.remove_teacher(ch.id, target_id)
@@ -4756,9 +4752,9 @@ async def removeteacher_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def teachers_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
-        return await update.message.reply_text("❌ Use in group!")
+        return await update.message.reply_text("⚠️ This command only works in a group.")
     if not await sender_is_admin(ctx, update):
-        return await update.message.reply_text("❌ Admins only!")
+        return await update.message.reply_text("🔒 Admins only.")
 
     teachers = db.get_teachers(ch.id)
     if not teachers:
@@ -4774,7 +4770,7 @@ async def teachers_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         lines.append(f"  • `{tid}` — promo violations: `{cnt}`")
 
     await update.message.reply_text(
-        f"📚 *TEACHERS LIST*\n"
+        f"📚 *TEACHERS*\n"
         f"{'─'*28}\n\n"
         + "\n".join(lines) +
         f"\n\n_Total: {len(teachers)} teacher(s)_",
@@ -4789,7 +4785,7 @@ async def adexempt_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
            /adexempt list
     """
     if update.effective_user.id != OWNER_ID:
-        return await update.message.reply_text("❌ Owner only command!")
+        return await update.message.reply_text("🔒 Owner access only.")
 
     if not ctx.args or ctx.args[0].lower() == "list":
         exempts = db.get_all_ad_exempt()
@@ -4831,11 +4827,11 @@ async def adexempt_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 )
 
     if not target_id:
-        return await update.message.reply_text("❌ Could not resolve ID!")
+        return await update.message.reply_text("⚠️ Couldn't resolve that ID.")
 
     db.add_ad_exempt(target_id)
     await update.message.reply_text(
-        f"✅ *Autodelete Exempt Added!*\n\n"
+        f"✅ *Exemption Added*\n\n"
         f"🤖 ID `{target_id}` — messages will *never* be auto-deleted.\n"
         f"Use `/unadexempt {target_id}` to remove.",
         parse_mode='Markdown'
@@ -4846,7 +4842,7 @@ async def adexempt_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def unadexempt_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Owner only — remove autodelete exemption."""
     if update.effective_user.id != OWNER_ID:
-        return await update.message.reply_text("❌ Owner only command!")
+        return await update.message.reply_text("🔒 Owner access only.")
 
     target_id = None
 
@@ -4892,8 +4888,8 @@ async def stats_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"📨  Messages Scanned:   `{s.get('scanned', 0)}`\n"
         f"🗓️  Global Mutes:       `{len(gmutes)}`\n\n"
         f"{'─'*30}\n"
-        f"🛡️ Status:  {ICON_ON} *Active*\n"
-        f"🗄️ Database: {ICON_ON} *MongoDB Connected*"
+        f"🛡️ Status:  {ICON_ON} *Online*\n"
+        f"🗄️ Database: {ICON_ON} *Connected*"
     )
     await update.message.reply_text(text, parse_mode='Markdown')
 
@@ -4908,7 +4904,7 @@ async def rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     else:
         tgt = update.effective_user
     if not tgt:
-        return await update.message.reply_text("❌ Could not identify the user!")
+        return await update.message.reply_text("⚠️ Couldn't identify that user.")
 
     # ── Data fetch ───────────────────────────────────────────
     group_rep   = db.get_reputation(ch.id, tgt.id) if ch.type != "private" else 0
@@ -4954,10 +4950,10 @@ async def rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"  🌐 Total Rep:  `{total_rep}` pts  •  Global `{rank_global_txt}`\n\n"
         f"{'─'*28}\n"
         f"📖 *HOW IT WORKS*\n"
-        f"  • Reply *Thank You* to someone → +{REP_PER_THANK} Rep\n"
+        f"  • Reply “thank you” to someone → +{REP_PER_THANK} rep\n"
         f"  • Max 3 times per day (per person)\n"
-        f"  • Clear 1 warning = {REP_PER_WARN_REMOVE} rep (auto-deduct)\n\n"
-        f"_/repboard — Group + Global reputation ranking_"
+        f"  • Clearing 1 warning costs {REP_PER_WARN_REMOVE} rep\n\n"
+        f"_/repboard — group + global reputation ranking_"
     )
 
     # ── Keyboard ──────────────────────────────────────────────
@@ -4976,7 +4972,7 @@ async def repboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private":
         return await update.message.reply_text(
-            "❌ Use this in a group!",
+            "⚠️ This command only works in a group.",
             parse_mode='Markdown'
         )
 
@@ -4990,7 +4986,7 @@ async def repboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     def build_board_lines(entries, key_pts="points", key_id="user_id"):
         if not entries:
-            return ["  📉 _No data found!_"]
+            return ["  📉 _No data yet._"]
         lines = []
         for i, doc in enumerate(entries):
             medal = medals[i] if i < 3 else (rank_emojis[i-3] if i-3 < len(rank_emojis) else f"`{i+1}.`")
@@ -5015,8 +5011,8 @@ async def repboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"{'┄'*34}\n"
         + "\n".join(global_lines) +
         f"\n\n{'─'*34}\n"
-        f"💡 _Thank You = +{REP_PER_THANK} rep  •  Clear 1 warning = {REP_PER_WARN_REMOVE} rep_\n"
-        f"_Reply *Thank You* to give rep  •  Max 3/day per person_"
+        f"💡 _Saying thanks = +{REP_PER_THANK} rep · clearing 1 warning = {REP_PER_WARN_REMOVE} rep_\n"
+        f"_Reply “thank you” to give rep — max 3/day per person_"
     )
 
     kb = InlineKeyboardMarkup([
@@ -5093,7 +5089,7 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"📊 *REPUTATION*\n"
                 f"  🏠 Group Rep:  `{group_rep}` pts\n"
                 f"  🌐 Total Rep:  `{total_rep}` pts\n\n"
-                f"_Reply 'Thank You' to earn rep • Clear a warning for {REP_PER_WARN_REMOVE} rep_"
+                f"_Reply “thank you” to earn rep · clearing a warning costs {REP_PER_WARN_REMOVE} rep_"
             )
             kb_rows = [
                 [
@@ -5296,8 +5292,8 @@ async def _delayed_ai_check(ctx, msg, ch, usr, txt_for_ai, is_reply_to_bot, g_se
             group_name = getattr(ch, 'title', str(ch.id))
             await ctx.bot.send_message(
                 OWNER_ID,
-                f"📋 *Missing Anime Request!*\n{'─'*28}\n\n"
-                f"🎌 Anime: `{anime_name}`\n"
+                f"📋 *Unanswered Request*\n{'─'*28}\n\n"
+                f"🔎 Item: `{anime_name}`\n"
                 f"👤 User: {user_name(usr)}\n"
                 f"💬 Group: {group_name} (`{ch.id}`)\n\n"
                 f"_User searched for it but it wasn't available._",
@@ -5526,7 +5522,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     anime_name = txt_for_ai.strip()
                     ai_result = {
                         "action": "REPLY",
-                        "reply": f"Hey {user_name(usr)}, typing *{anime_name}* over and over won't help 😄 If this anime is available, it'll already be known in the group!"
+                        "reply": f"Hi {user_name(usr)}, sending *{anime_name}* repeatedly won't speed things up 😄 If it's available, it'll show up here shortly!"
                     }
                 else:
                     # Provider bot ka update process hone ke liye background task mein bhejo
@@ -5561,9 +5557,9 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             group_name = getattr(ch, 'title', str(ch.id))
             await ctx.bot.send_message(
                 OWNER_ID,
-                f"📋 *Missing Anime Request!*\n"
+                f"📋 *Unanswered Request*\n"
                 f"{'─'*28}\n\n"
-                f"🎌 Anime: `{anime_name}`\n"
+                f"🔎 Item: `{anime_name}`\n"
                 f"👤 User: {user_name(usr)}\n"
                 f"💬 Group: {group_name} (`{ch.id}`)\n\n"
                 f"_User searched for it but it wasn't available._",
@@ -5587,10 +5583,10 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             if promo_count == 1:
                 notice = await ctx.bot.send_message(
                     ch.id,
-                    f"📚 Hey {user_name(usr)},\n\n"
-                    f"You're a teacher, so you get some respect here 🙏\n"
-                    f"But *promotional content* is not allowed in this group.\n\n"
-                    f"⚠️ Please don't do this again — next time you'll be muted!",
+                    f"📚 Hi {user_name(usr)},\n\n"
+                    f"As a teacher here, you get a courtesy notice instead of a mute 🙏\n"
+                    f"But *promotional content* still isn't allowed in this group.\n\n"
+                    f"⚠️ Please don't repeat this — next time you'll be muted.",
                     parse_mode='Markdown'
                 )
                 asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 90))
@@ -5605,9 +5601,9 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 notice = await ctx.bot.send_message(
                     ch.id,
                     f"📚 {user_name(usr)},\n\n"
-                    f"Broke the promotion rule again! 😤\n"
+                    f"The promotion rule was broken again.\n"
                     f"🔇 Muted for *{mute_min} minutes*.\n\n"
-                    f"_(This is repeat offense #{promo_count - 1} — mute duration keeps increasing!)_",
+                    f"_(Repeat offense #{promo_count - 1} — mute duration increases each time.)_",
                     parse_mode='Markdown'
                 )
                 asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 90))
@@ -5623,7 +5619,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await do_mute(ctx, ch.id, usr.id, _wd[cnt])
         viol_txt = VIOLATION_MSG.get(violation, "Rule violation!")
         if violation == "blacklist" and matched_word:
-            viol_txt = f"⛔ Blacklisted word use kiya: `{matched_word}` — agli baar mat karna!"
+            viol_txt = f"⛔ Blacklisted word used: `{matched_word}` — please don't repeat this."
         bars = "🟥" * cnt + "⬜" * (4 - cnt)
         mute_sec = _wd[cnt]
         mute_str = f"{mute_sec}s" if mute_sec < 3600 else "1 week"
@@ -5656,7 +5652,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, warn_delete_delay))
         return
 
-    # ── AI REPLY — question/help/anime/confusion ──
+    # ── AI REPLY — question/help/confusion ──
     if ai_result["action"] == "REPLY" and ai_result.get("reply"):
         try:
             reply_msg = await msg.reply_text(
@@ -5690,26 +5686,26 @@ async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             except:
                 pass
             bot_added_text = (
-                                f"🛡️ *𝗚𝗨𝗔𝗥𝗗𝗜𝗔𝗡 𝗔𝗖𝗧𝗜𝗩𝗔𝗧𝗘𝗗!*\n"
-                f"_v10.0 • AI-Powered Guard_\n"
+                                f"🛡️ *𝗚𝗨𝗔𝗥𝗗𝗜𝗔𝗡 𝗜𝗦 𝗡𝗢𝗪 𝗔𝗖𝗧𝗜𝗩𝗘*\n"
+                f"_v10.0 · AI-Powered Protection_\n"
                 f"{'─'*24}\n\n"
-                f"⚡ *Protection is now ACTIVE!*\n\n"
+                f"⚡ *This group is now protected.*\n\n"
                 f"{'─'*36}\n"
-                f"📋 *Give me these admin rights:*\n"
+                f"📋 *Please grant these admin rights:*\n"
                 f"  ✅ Delete Messages\n"
                 f"  ✅ Restrict Members\n"
                 f"  ✅ Ban Members\n\n"
                 f"{'─'*36}\n"
-                f"🛡️ *Auto-Protection Enabled:*\n"
+                f"🛡️ *Active by default:*\n"
                 f"  🤖 External bots & @mentions\n"
                 f"  🔗 Links & URLs\n"
                 f"  ↩️ Forwarded messages\n"
                 f"  🔞 Adult content\n"
-                f"  ⛔ Blacklist words\n"
-                f"  🌊 Anti-Flood\n"
+                f"  ⛔ Blacklisted words\n"
+                f"  🌊 Anti-flood\n"
                 f"  🎭 Captcha _(optional)_\n"
                 f"  ⏱️ Auto-delete _(optional)_\n\n"
-                f"_Use /help to see all commands!_"
+                f"_Type /help to see every command._"
             )
             added_msg_id = await send_colored_message(
                 update.effective_chat.id, bot_added_text, ckb_bot_added()
@@ -5733,7 +5729,7 @@ async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                         await do_ban(ctx, update.effective_chat.id, member.id)
                         await ctx.bot.unban_chat_member(update.effective_chat.id, member.id)  # ban→unban = clean kick
                         notice = await update.message.reply_text(
-                            f"🛑 *Spambot removed!*\n👤 {user_name(member)} was kicked _(nobots filter)_.",
+                            f"🛑 *Spam bot removed*\n👤 {user_name(member)} was kicked _(bot filter)_.",
                             parse_mode='Markdown'
                         )
                         asyncio.create_task(delete_after(ctx, update.effective_chat.id, notice.message_id, 20))
@@ -5751,15 +5747,15 @@ async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             else:
                 custom_welcome = g.get("welcome_text")
                 welcome_text = custom_welcome.replace("{name}", user_name(member, escape=False)) if custom_welcome else (
-                    f"*👋 WELCOME!*\n"
+                    f"*👋 WELCOME*\n"
 
                     f"{'─'*24}\n\n"
-                    f"Hey {user_name(member)}, glad to have you here! 🎉\n\n"
+                    f"Hi {user_name(member)}, glad to have you here! 🎉\n\n"
                     f"{'─'*30}\n"
                     f"📜 Please read the group rules\n"
-                    f"⚠️ Violations are auto-detected\n"
-                    f"⭐ Earn rep by being helpful!\n\n"
-                    f"_Enjoy the community!_ 🔥"
+                    f"⚠️ Violations are detected automatically\n"
+                    f"⭐ Earn reputation by being helpful\n\n"
+                    f"_Enjoy your stay!_"
                 )
                 welcome_msg_id = await send_colored_message(
                     update.effective_chat.id, welcome_text, ckb_join_welcome()
@@ -5873,17 +5869,17 @@ def _settings_overview_text(chat_id):
         f"  🎭 Captcha: {ICON_ON + ' On' if captcha_on else ICON_OFF + ' Off'}\n"
         f"  ⛔ Blacklist words: {bl_count}  •  ✅ Whitelist: {wl_count}\n"
         f"{'─'*24}\n\n"
-        f"Tap a button below to view or change that setting 👇\n"
-        f"_Only Admins/Owner can use this panel — it auto-closes when idle._"
+        f"Tap a button below to view or change a setting 👇\n"
+        f"_Admins and the owner only — this panel closes automatically when idle._"
     )
 
 async def settings_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     u = update.effective_user
     if ch.type == "private":
-        return await update.message.reply_text("❌ This command only works in groups!")
+        return await update.message.reply_text("⚠️ This command only works in a group.")
     if not await _cfg_is_authorized(ctx, ch.id, u.id):
-        return await update.message.reply_text("❌ This panel can only be used by group Admins/Owner!")
+        return await update.message.reply_text("🔒 This panel is for group admins and the owner only.")
     text = _settings_overview_text(ch.id)
     rows = kb_settings_main(ch.id)
     msg_id = await send_colored_message(ch.id, text, rows, parse_mode='Markdown')
@@ -5941,7 +5937,7 @@ async def cfg_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data: str
     if not _is_menu_owner(ch.id, query.message.message_id, u.id):
         try:
             await ctx.bot.send_message(
-                ch.id, "❌ This panel was opened by someone else — run your own /settings!",
+                ch.id, "🔒 This panel belongs to someone else — run your own /settings.",
                 reply_to_message_id=query.message.message_id
             )
         except Exception:
@@ -5951,7 +5947,7 @@ async def cfg_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data: str
     if not await _cfg_is_authorized(ctx, ch.id, u.id):
         try:
             await ctx.bot.send_message(
-                ch.id, "❌ Admins/Owner only!", reply_to_message_id=query.message.message_id
+                ch.id, "🔒 Admins and the owner only.", reply_to_message_id=query.message.message_id
             )
         except Exception:
             pass
@@ -6096,7 +6092,7 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
     # ── Blacklist ──
     if data == "cfg_bl":
         words = db.get_blacklist(ch.id)
-        preview = ", ".join(words[:15]) if words else "_(khaali)_"
+        preview = ", ".join(words[:15]) if words else "_(empty)_"
         await _cfg_edit(
             query, ch.id,
             f"*⛔ GROUP BLACKLIST*\n{'─'*24}\n\n"
@@ -6157,7 +6153,7 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
     # ── Whitelist ──
     if data == "cfg_wl":
         words = db.get_whitelist(ch.id)
-        preview = ", ".join(words[:15]) if words else "_(khaali)_"
+        preview = ", ".join(words[:15]) if words else "_(empty)_"
         await _cfg_edit(
             query, ch.id,
             f"*✅ GROUP WHITELIST*\n{'─'*24}\n\n"
@@ -6300,49 +6296,49 @@ async def handle_settings_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE, 
     reply = None
     if action == "rules":
         db.set_rules(ch_id, text)
-        reply = "✅ *Rules update ho gaye!*"
+        reply = "✅ *Rules updated.*"
     elif action == "stkdel_min":
         n = _int_or_none(text)
         if n is None or n <= 0:
-            reply = "❌ Send a valid number (e.g. `5`)."
+            reply = "⚠️ Send a valid number (e.g. `5`)."
         else:
             db.update_group(ch_id, {"sticker_delete_min": n})
-            reply = f"✅ *Sticker auto-delete set to {n} min!*"
+            reply = f"✅ *Sticker auto-delete set to {n} min.*"
     elif action == "autodel_min":
         n = _int_or_none(text)
         if n is None or n <= 0:
-            reply = "❌ Send a valid number (e.g. `10`)."
+            reply = "⚠️ Send a valid number (e.g. `10`)."
         else:
             db.update_group(ch_id, {"autodelete_min": n})
-            reply = f"✅ *Auto-delete set to {n} min!*"
+            reply = f"✅ *Auto-delete set to {n} min.*"
     elif action == "warndur":
         n = _int_or_none(text)
         stage = pending.get("extra")
         if n is None or n <= 0:
-            reply = "❌ Send a valid number of seconds (e.g. `60`)."
+            reply = "⚠️ Send a valid number of seconds (e.g. `60`)."
         else:
             db.set_warn_duration(ch_id, stage, n)
-            reply = f"✅ *W{stage} duration set to {_sec_human(n)}!*"
+            reply = f"✅ *W{stage} duration set to {_sec_human(n)}.*"
     elif action == "bl_add":
         if text:
             db.add_blacklist(ch_id, text.split()[0])
-            reply = f"✅ *'{text.split()[0]}' added to the blacklist!*"
+            reply = f"✅ *'{text.split()[0]}' added to the blacklist.*"
     elif action == "bl_rem":
         if text:
             db.remove_blacklist(ch_id, text.split()[0])
-            reply = f"✅ *'{text.split()[0]}' removed from the blacklist!*"
+            reply = f"✅ *'{text.split()[0]}' removed from the blacklist.*"
     elif action == "wl_add":
         if text:
             db.add_whitelist(ch_id, text.split()[0])
-            reply = f"✅ *'{text.split()[0]}' added to the whitelist!*"
+            reply = f"✅ *'{text.split()[0]}' added to the whitelist.*"
     elif action == "wl_rem":
         if text:
             db.remove_whitelist(ch_id, text.split()[0])
-            reply = f"✅ *'{text.split()[0]}' removed from the whitelist!*"
+            reply = f"✅ *'{text.split()[0]}' removed from the whitelist.*"
 
     SETTINGS_PENDING.pop(key, None)
     if reply is None:
-        reply = "❌ Something went wrong, try /settings again."
+        reply = "⚠️ Something went wrong — try /settings again."
 
     panel_msg_id = pending.get("panel_msg_id")
     back_rows = [[{"text": "◀️ Back to Settings", "callback_data": "cfg_main", "style": "primary"}]]
@@ -6388,7 +6384,7 @@ web_app = Flask(__name__)
 
 @web_app.route('/')
 def home():
-    return "🛡️ Guardian Bot v9.0 — Active!"
+    return "🛡️ Guardian Bot — Online"
 
 @web_app.route('/health')
 def health():
