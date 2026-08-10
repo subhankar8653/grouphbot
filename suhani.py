@@ -37,7 +37,6 @@ import aiohttp
 BOT_TOKEN        = os.environ.get("BOT_TOKEN", "")
 OWNER_ID         = int(os.environ.get("OWNER_ID", "0"))
 MONGO_URL        = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
-AI_API_KEY       = os.environ.get("AI_API_KEY", "")   # optional — AI moderation
 
 if not BOT_TOKEN:
     raise ValueError("❌ BOT_TOKEN environment variable not set!")
@@ -119,7 +118,6 @@ VIOLATION_MSG = {
     "flood":        "🌊 Slow down — anti-flood triggered.",
     "stylish_font": "✍️ Stylish or fancy fonts aren't allowed here.",
     "hidden_link":  "🔗 Hidden links in text aren't allowed here.",
-    "ai_promo":     "🤖 AI flagged this as promotional or spam content.",
     "location":     "📍 Sharing location isn't allowed here.",
     "contact":      "📇 Sharing contacts isn't allowed here.",
     "hashtag":      "#️⃣ Hashtags aren't allowed here.",
@@ -141,7 +139,7 @@ OWN_COMMANDS = {
     "blacklist","addwhitelist","removewhitelist","whitelist","sticker_delete","autodelete",
     "captcha","broadcast","groups","regroup","globalmutes","unglobalmute","gblacklist","gwhitelist",
     "stats","power","unpower","fban","gunban","gclearwarn","adexempt",
-    "unadexempt","aimod","aiapprove","airevoke","aigroups","missinganime","addteacher",
+    "unadexempt","premium","addteacher",
     "removeteacher","teachers","settings",
 }
 
@@ -312,210 +310,32 @@ MAX_CACHE = 100
 
 CAPTCHA_PENDING = {}
 
-
 # ═══════════════════════════════════════════════════════════
-#  AI ENGINE — Groq (llama-3.1-8b-instant)
+#  PREMIUM — Bio Guard & Edit Guard state
 # ═══════════════════════════════════════════════════════════
+BIO_CHECK_CACHE: dict[int, float] = {}          # user_id -> last bio-checked timestamp
+BIO_RECHECK_SEC = 1800                          # re-check a clean bio every 30 min
+SHADOW_MSG_COUNT: dict[tuple, int] = {}         # (chat_id,user_id) -> msgs since last notice
+SHADOW_FLOOD: dict[tuple, list] = {}            # (chat_id,user_id) -> [timestamps]
+SHADOW_FLOOD_LIMIT  = 10
+SHADOW_FLOOD_WINDOW = 60
 
-AI_COOLDOWN: dict[int, float] = {}
-AI_COOLDOWN_SEC = 45   # per-user cooldown seconds
+def bio_violation(bio: str, chat_id: int):
+    """Check a bio string for a link or a blacklisted word.
+    Returns (kind, matched_word_or_none) — kind is 'link', 'blacklist', or None."""
+    if not bio:
+        return None, None
+    if check_link(bio):
+        return "link", None
+    words = list(set((db.get_blacklist(chat_id) or []) + (db.get_gblacklist() or [])))
+    if words:
+        r = build_blacklist_re(words)
+        if r:
+            m = r.search(bio)
+            if m:
+                return "blacklist", m.group(1)
+    return None, None
 
-# Per-chat repeat tracker: {chat_id: {user_id: {text: count}}}
-REPEAT_TRACKER: dict[int, dict[int, dict[str, int]]] = {}
-
-_AI_SESSION: aiohttp.ClientSession | None = None
-
-async def get_ai_session() -> aiohttp.ClientSession:
-    global _AI_SESSION
-    if _AI_SESSION is None or _AI_SESSION.closed:
-        _AI_SESSION = aiohttp.ClientSession()
-    return _AI_SESSION
-
-# ── Popular anime names — AI check se exempt ────────────────
-ANIME_NAMES = {
-    "naruto","boruto","bleach","onepiece","one piece","dragonball","dragon ball",
-    "attackontitan","attack on titan","aot","demonslayer","demon slayer","kimetsu",
-    "mha","myheroacademia","my hero academia","jujutsukaisen","jujutsu kaisen","jjk",
-    "fullmetal","fullmetal alchemist","fma","tokyoghoul","tokyo ghoul","sao",
-    "swordartonline","sword art online","blackclover","black clover","fairytail",
-    "fairy tail","hunterxhunter","hunter x hunter","hxh","deathnote","death note",
-    "onepunchman","one punch man","opm","rezero","re zero","re:zero","overlord",
-    "noragami","vinlandSaga","vinland saga","chainsawman","chainsaw man","csm",
-    "spy x family","spyxfamily","bocchi","bocchitherocket","bocchi the rock",
-    "bluelock","blue lock","tokyorevengers","tokyo revengers","acecombat",
-    "neongenesisevangelion","evangelion","eva","cowboybebop","cowboy bebop",
-    "steinsgate","steins gate","steins;gate","gurrenlagann","gurren lagann",
-    "madoka","puellamamadoka","codegeass","code geass","kaguya","kaguyasama",
-    "shimoneta","oregairu","monogatari","haikyuu","kuroko","kuroko no basket",
-    "aonoexorcist","ao no exorcist","blueexorcist","blue exorcist","inuyasha",
-    "ranma","drslump","toriko","yu-gi-oh","yugioh","beyblade","digimon",
-    "pokemon","pokémon","sailor moon","sailormoon","cardcaptorsakura","cardcaptor",
-    "dbs","super","dragonballsuper","dragonballz","dbz","toaru","toarumajutsu",
-    "noblesse","tower of god","towerofgod","solo leveling","sololeveling","sl",
-    "omniscient reader","omniscientreader","orv","a returners magic","returner",
-    "mushokutensei","mushoku tensei","tensura","tenseishitara slime","slime",
-    "konosuba","megumin","aqua","darkness","rezero","subaru","emilia","rem","ram",
-    "shield hero","shieldhero","tatenoYusha","rising shield hero","rising of the shield hero",
-}
-
-def is_anime_message(text: str) -> bool:
-    """Return True if message is mainly just an anime name — skip AI check."""
-    clean = text.lower().strip()
-    # Short message (<=30 chars) containing a known anime name
-    if len(clean) <= 30:
-        for name in ANIME_NAMES:
-            if name in clean:
-                return True
-    return False
-
-# ── Guardian system prompt ────────────────────────────────────
-GUARDIAN_SYSTEM = """You are Guardian, a professional Telegram group protection & help bot.
-
-Your identity:
-- Name: Guardian
-- Created by: Lucky
-- Role: Group protection and moderation assistant
-- You are a dependable group protection bot, always ready to help admins and members
-- You speak in Hinglish (Hindi + English mix) naturally, in a polite, professional tone
-
-Your personality:
-- Professional, helpful, courteous
-- You help people who are confused or in trouble
-- You keep responses SHORT (2-4 lines max) — this is a chat, not an essay
-
-What you do:
-1. MODERATION: Detect if a message is promotional spam
-2. HELP: Help users who seem confused or ask questions
-3. IDENTITY: Answer questions about who you are
-
-When asked about your AI/technology — NEVER mention Groq, LLaMA, or any AI company. Say you are Guardian, made by Lucky.
-
-IMPORTANT CONTEXT about this group:
-- This is a Hindi dubbed anime group
-- Users type anime names to search/get them
-- A provider bot searches and replies with the anime if available
-- If provider bot did NOT reply → that anime is NOT available yet in Hindi dub
-- When anime is not found, ALWAYS suggest 2-3 similar anime they might like instead
-- Common typos happen — if you recognize a misspelled anime, mention the correct name
-
-Response format — you must ALWAYS respond with JSON only:
-{
-  "action": "PROMO" | "SAFE" | "REPLY" | "ANIME_NOT_FOUND",
-  "reply": "your message here (only if action is REPLY or ANIME_NOT_FOUND, else empty string)",
-  "anime_name": "exact anime name user was searching (only if action is ANIME_NOT_FOUND, else empty string)"
-}
-
-action meanings:
-- PROMO: message is promotional/spam/advertising → will be deleted + warned
-- SAFE: normal message or conversation, ignore it
-- REPLY: message needs a response (question, help needed, confusion, anime discussion)
-- ANIME_NOT_FOUND: user searched an anime but provider bot didn't find it → tell them nicely + suggest similar
-
-For ANIME_NOT_FOUND reply example:
-"Hey, 'The Brilliant Healer's New Life in the Shadows' isn't available yet 😅 We'll add it soon! Meanwhile try 'Eminence in Shadow' or 'Overlord' — same vibes! 🔥"
-
-For REPLY with typo correction example:
-"Hey, it's 'Naruto', not 'Narato' 😄 Ask the provider for it!"
-
-For REPLY, write in Hinglish, keep it short and friendly.
-For SAFE — normal conversations between users, greetings, reactions — DO NOT interfere."""
-
-async def ai_check(text: str, user_id: int, chat_id: int, username: str = "",
-                   reply_context: str = "", bypass_cooldown: bool = False) -> dict:
-    """
-    Returns dict: {"action": "PROMO"/"SAFE"/"REPLY", "reply": "..."}
-    Uses Groq API (llama-3.1-8b-instant).
-    reply_context: bot ka previous message (agar user ne reply kiya ho)
-    bypass_cooldown: True karo jab user bot ke reply pe message kare
-    """
-    if not AI_API_KEY:
-        return {"action": "SAFE", "reply": ""}
-
-    if not text or len(text.strip()) < 3:
-        return {"action": "SAFE", "reply": ""}
-
-    # Anime-only message — skip AI entirely
-    if is_anime_message(text):
-        # But still check repeat
-        return {"action": "SAFE", "reply": ""}
-
-    # Cooldown check — bypass karo agar bot ke reply pe message hai
-    now = time.time()
-    if not bypass_cooldown:
-        last = AI_COOLDOWN.get(user_id, 0)
-        if now - last < AI_COOLDOWN_SEC:
-            return {"action": "SAFE", "reply": ""}
-    AI_COOLDOWN[user_id] = now
-
-    try:
-        session = await get_ai_session()
-
-        # Context-aware message — agar bot ke reply pe hai
-        if reply_context:
-            user_content = (
-                f"[Context: User is replying to your previous message: \"{reply_context}\"]\n"
-                f"User's reply: {text[:500]}"
-            )
-        else:
-            user_content = text[:600]
-
-        payload = {
-            "model": "llama-3.1-8b-instant",
-            "max_tokens": 150,
-            "temperature": 0.3,
-            "messages": [
-                {"role": "system", "content": GUARDIAN_SYSTEM},
-                {"role": "user", "content": user_content}
-            ]
-        }
-        async with session.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {AI_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=aiohttp.ClientTimeout(total=6)
-        ) as resp:
-            if resp.status != 200:
-                return {"action": "SAFE", "reply": ""}
-            data = await resp.json()
-            raw = data["choices"][0]["message"]["content"].strip()
-            # Groq sometimes wraps JSON in ```json ... ``` markdown
-            raw = re.sub(r'^```(?:json)?\s*', '', raw)
-            raw = re.sub(r'\s*```$', '', raw)
-            raw = raw.strip()
-            # Extract first JSON object if extra text present
-            json_match = re.search(r'\{.*\}', raw, re.DOTALL)
-            if json_match:
-                raw = json_match.group(0)
-            result = json.loads(raw)
-            action = result.get("action", "SAFE").upper()
-            if action not in ("PROMO", "SAFE", "REPLY", "ANIME_NOT_FOUND"):
-                action = "SAFE"
-            return {
-                "action": action,
-                "reply": result.get("reply", ""),
-                "anime_name": result.get("anime_name", "")
-            }
-    except Exception:
-        return {"action": "SAFE", "reply": "", "anime_name": ""}
-
-# ── Repeat message tracker ───────────────────────────────────
-def track_repeat(chat_id: int, user_id: int, text: str) -> int:
-    """Returns how many times this user sent same/similar text in this chat."""
-    clean = text.lower().strip()[:60]
-    if chat_id not in REPEAT_TRACKER:
-        REPEAT_TRACKER[chat_id] = {}
-    if user_id not in REPEAT_TRACKER[chat_id]:
-        REPEAT_TRACKER[chat_id][user_id] = {}
-    tracker = REPEAT_TRACKER[chat_id][user_id]
-    tracker[clean] = tracker.get(clean, 0) + 1
-    # cleanup old keys if too many
-    if len(tracker) > 20:
-        oldest = list(tracker.keys())[0]
-        del tracker[oldest]
-    return tracker[clean]
 
 # ═══════════════════════════════════════════════════════════
 #  MONGODB DATABASE
@@ -581,8 +401,7 @@ class DB:
             "sticker_delete_min": None,
             "autodelete_min": None,
             "captcha": False,
-            "aimod": False,       # Default OFF — owner /aiapprove se enable karega
-            "ai_approved": False, # Owner approval required
+            "premium": False,       # Owner-granted paid tier
             "warn_durations": None,   # None = default MUTE_TIME use hoga
             "filters": {},            # per-group filter toggles (defaults merged at read time)
             "welcome_enabled": True,
@@ -1211,33 +1030,23 @@ class DB:
         k = f"tpromo_{chat_id}_{user_id}"
         self.users.delete_one({"_id": k})
 
-    # ── Missing Anime tracker ─────────────────────────────────
-    def log_missing_anime(self, anime_name: str, chat_id: int):
-        """Log a missing anime — increment request count."""
-        clean = anime_name.strip().lower()[:120]
-        self.db["missing_anime"].update_one(
-            {"_id": clean},
-            {
-                "$inc": {"count": 1},
-                "$set": {"display_name": anime_name.strip()},
-                "$addToSet": {"groups": chat_id},
-                "$setOnInsert": {"first_seen": time.time()}
-            },
+    # ── Premium: Shadow Blacklist (Bio Guard) ──────────────────
+    def shadow_blacklist_add(self, chat_id, user_id, reason, matched):
+        self.db["shadow_blacklist"].update_one(
+            {"_id": f"{chat_id}_{user_id}"},
+            {"$set": {
+                "chat_id": chat_id, "user_id": user_id,
+                "reason": reason, "matched": matched,
+                "added_at": time.time(),
+            }},
             upsert=True
         )
 
-    def get_missing_anime_list(self, limit=30):
-        """Get top requested missing anime sorted by count."""
-        return list(
-            self.db["missing_anime"].find().sort("count", -1).limit(limit)
-        )
+    def shadow_blacklist_get(self, chat_id, user_id):
+        return self.db["shadow_blacklist"].find_one({"_id": f"{chat_id}_{user_id}"})
 
-    def clear_missing_anime(self, anime_name: str = None):
-        """Clear one or all missing anime entries."""
-        if anime_name:
-            self.db["missing_anime"].delete_one({"_id": anime_name.strip().lower()})
-        else:
-            self.db["missing_anime"].delete_many({})
+    def shadow_blacklist_remove(self, chat_id, user_id):
+        self.db["shadow_blacklist"].delete_one({"_id": f"{chat_id}_{user_id}"})
 
 
 db = DB()
@@ -2401,8 +2210,7 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             f"🗓️ Global Mutes:      `{len(gmutes)}`\n\n"
             f"{'─'*14}\n"
             f"🛡️ Status:  {ICON_ON} *Online & running*\n"
-            f"🗄️ Database: {ICON_ON} *Connected*\n"
-            f"🤖 AI Engine: {'🟢 Active' if AI_API_KEY else '🔴 Not configured'}"
+            f"🗄️ Database: {ICON_ON} *Connected*"
         )
         await query.answer()
         await query.edit_message_text(
@@ -2486,26 +2294,23 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
         ]))
         return
 
-    elif data == "menu_ai":
+    elif data == "menu_premium":
+        chat_id = update.effective_chat.id if update.effective_chat else 0
+        g = db.get_group(chat_id) if chat_id else {}
+        is_prem = g.get("premium", False)
         text = (
-            f"*🤖 𝗔𝗜 𝗠𝗢𝗗𝗘𝗥𝗔𝗧𝗜𝗢𝗡*\n"
+            f"*💎 𝗣𝗥𝗘𝗠𝗜𝗨𝗠 𝗣𝗥𝗢𝗧𝗘𝗖𝗧𝗜𝗢𝗡*\n"
 
             f"{'─'*14}\n\n"
-            f"AI Engine: {'🟢 *Guardian AI — Active*' if AI_API_KEY else '🔴 *Not Configured*'}\n\n"
+            f"Status: {'🟢 *Active*' if is_prem else '🔴 *Not active in this group*'}\n\n"
             f"{'─'*14}\n"
-            f"*𝙒𝙝𝙖𝙩 𝘼𝙄 𝘿𝙤𝙚𝙨:*\n"
-            f"  🚨 Detects promo/spam content\n"
-            f"  💬 Answers common member questions\n"
-            f"  📋 Logs unanswered requests\n\n"
-            f"*𝙊𝙬𝙣𝙚𝙧 𝘾𝙤𝙢𝙢𝙖𝙣𝙙𝙨:*\n"
-            f"  `/aiapprove` — Approve group\n"
-            f"  `/airevoke` — Revoke AI\n"
-            f"  `/aigroups` — List approved\n"
-            f"  `/missinganime` — Unanswered requests\n\n"
-            f"*𝘼𝙙𝙢𝙞𝙣 𝘾𝙤𝙢𝙢𝙖𝙣𝙙:*\n"
-            f"  `/aimod on|off` — Toggle AI\n\n"
+            f"*𝙒𝙝𝙖𝙩 𝙄𝙩 𝘼𝙙𝙙𝙨:*\n"
+            f"  ✏️ *Edit Guard* — rechecks edited messages\n"
+            f"       against your filters, not just new ones\n"
+            f"  🕵️ *Bio Guard* — scans member bios for links\n"
+            f"       or blacklisted words, shadow-blocks them\n\n"
             f"{'─'*14}\n"
-            f"_AI requires owner approval per group_"
+            f"_Contact the bot owner to upgrade this group._"
         )
         await query.answer()
         await query.edit_message_text(
@@ -2702,11 +2507,9 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"  ⚡ `/power <id>` — Grant ban authority\n"
             f"  🔻 `/unpower <id>` — Revoke ban authority\n\n"
             f"{'─'*14}\n"
-            f"🤖 *𝗔𝗜 𝗔𝗦𝗦𝗜𝗦𝗧𝗔𝗡𝗧*\n\n"
-            f"  ✅ `/aiapprove <id>` — Enable for a group\n"
-            f"  🔴 `/airevoke <id>` — Disable for a group\n"
-            f"  📋 `/aigroups` — List enabled groups\n"
-            f"  📝 `/missinganime` — Unanswered requests\n\n"
+            f"💎 *𝗣𝗥𝗘𝗠𝗜𝗨𝗠*\n\n"
+            f"  ✅ `/premium <id> on` — Enable for a group\n"
+            f"  🔴 `/premium <id> off` — Disable for a group\n\n"
             f"{'─'*14}\n"
             f"🌐 `/gblacklist` · `/gwhitelist` — Global word lists\n"
             f"🤖 `/adexempt` — Auto-delete exemptions\n"
@@ -2844,8 +2647,7 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"👥 `/groups` · `/stats` — Bot statistics\n"
             f"🌐 `/gblacklist` · `/gwhitelist` — Global word lists\n"
             f"🤖 `/adexempt <id>` — Auto-delete exemption\n"
-            f"🤖 `/aiapprove` · `/airevoke` · `/aigroups`\n"
-            f"📝 `/missinganime` — Unanswered requests\n"
+            f"💎 `/premium <id> on|off` — Toggle premium\n"
         )
 
     admin_text += (
@@ -4430,246 +4232,6 @@ async def gclearwarn_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ─── /adexempt ──────────────────────────────────────────────
-# ─── /aimod ─────────────────────────────────────────────────
-async def aimod_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Admin — toggle AI moderation on/off for this group (only if owner approved)."""
-    ch = update.effective_chat
-    if ch.type == "private":
-        return await update.message.reply_text("⚠️ This command only works in a group.")
-    if not await sender_is_admin(ctx, update):
-        return await update.message.reply_text("🔒 Admins only.")
-
-    if not AI_API_KEY:
-        return await update.message.reply_text(
-            "⚠️ *AI Moderation not configured!*\n\n"
-            "Owner needs to set `AI_API_KEY` environment variable on Railway.",
-            parse_mode='Markdown'
-        )
-
-    g = db.get_group(ch.id)
-    # Check owner approval
-    if not g.get("ai_approved", False):
-        return await update.message.reply_text(
-            "⚠️ *AI is not approved for this group!*\n\n"
-            "_Ask the bot owner to run `/aiapprove` first._",
-            parse_mode='Markdown'
-        )
-
-    if not ctx.args or ctx.args[0].lower() not in ('on', 'off'):
-        status = "🟢 ON" if g.get("aimod", False) else "🔴 OFF"
-        return await update.message.reply_text(
-            f"🤖 *𝗔𝗜 𝗠𝗼𝗱𝗲𝗿𝗮𝘁𝗶𝗼𝗻*\n"
-            f"{'─'*14}\n\n"
-            f"Status: {status}\n"
-            f"Owner Approved: ✅\n\n"
-            f"Toggle: `/aimod on` or `/aimod off`\n\n"
-            f"_AI detects promotional/spam messages that bypass normal filters._",
-            parse_mode='Markdown'
-        )
-
-    val = ctx.args[0].lower() == 'on'
-    db.update_group(ch.id, {"aimod": val})
-    state = "🟢 *enabled*" if val else "🔴 *disabled*"
-    await update.message.reply_text(
-        f"🤖 AI Moderation {state}.\n\n"
-        f"{'_AI will now detect promotions & spam automatically._' if val else '_AI checks are off for this group._'}",
-        parse_mode='Markdown'
-    )
-
-
-# ─── /missinganime ──────────────────────────────────────────
-async def missinganime_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """
-    Owner only — missing anime list dekhna aur clear karna.
-    /missinganime          → top 30 list
-    /missinganime clear    → sab clear
-    /missinganime clear <name> → ek entry clear
-    """
-    if update.effective_user.id != OWNER_ID:
-        return
-
-    args = ctx.args or []
-
-    # Clear command
-    if args and args[0].lower() == "clear":
-        if len(args) > 1:
-            name = ' '.join(args[1:])
-            db.clear_missing_anime(name)
-            return await update.message.reply_text(
-                f"✅ `{name}` removed from the list.",
-                parse_mode='Markdown'
-            )
-        else:
-            db.clear_missing_anime()
-            return await update.message.reply_text("✅ Request list cleared.")
-
-    # Show list
-    missing = db.get_missing_anime_list(30)
-    if not missing:
-        return await update.message.reply_text(
-            "📋 *No unanswered requests.*\n\n"
-            "_Nothing has been logged yet._",
-            parse_mode='Markdown'
-        )
-
-    lines = []
-    for i, doc in enumerate(missing, 1):
-        name = doc.get("display_name", doc["_id"])
-        count = doc.get("count", 1)
-        lines.append(f"  {i}. `{name}` — {count}x")
-
-    text = (
-        f"📋 *𝗨𝗻𝗮𝗻𝘀𝘄𝗲𝗿𝗲𝗱 𝗥𝗲𝗾𝘂𝗲𝘀𝘁𝘀*\n"
-        f"{'─'*14}\n\n"
-        + "\n".join(lines) +
-        f"\n\n{'─'*14}\n"
-        f"_Total: {len(missing)} entries_\n"
-        f"Use `/missinganime clear` to reset the list."
-    )
-    await update.message.reply_text(text, parse_mode='Markdown')
-
-
-# ─── /aiapprove ─────────────────────────────────────────────
-async def aiapprove_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """
-    Owner only — approve a group to use AI moderation.
-    Use in group: /aiapprove        → approves current group
-    Use in DM:    /aiapprove <id>   → approves that group by chat_id
-    """
-    if update.effective_user.id != OWNER_ID:
-        return  # silent ignore
-
-    ch = update.effective_chat
-
-    # ── DM mein use kiya ──────────────────────────────────────
-    if ch.type == "private":
-        if not ctx.args:
-            return await update.message.reply_text(
-                "❌ *You must provide a chat ID in DM!*\n\n"
-                "Usage: `/aiapprove <group_chat_id>`\n\n"
-                "Example:\n"
-                "`/aiapprove -1001234567890`\n\n"
-                "_Use `/id` in the group to get its ID._",
-                parse_mode='Markdown'
-            )
-        try:
-            target_chat_id = int(ctx.args[0])
-        except ValueError:
-            return await update.message.reply_text(
-                f"❌ Invalid ID: `{ctx.args[0]}`\n\n"
-                f"_Enter only the number, e.g. `-1001234567890`_",
-                parse_mode='Markdown'
-            )
-    else:
-        # ── Group mein use kiya ───────────────────────────────
-        target_chat_id = ch.id
-
-    # DB mein save karo
-    try:
-        db.groups.update_one(
-            {"_id": target_chat_id},
-            {"$set": {"ai_approved": True, "aimod": True}},
-            upsert=True
-        )
-        await update.message.reply_text(
-            f"✅ *AI Approved!*\n"
-            f"{'─'*14}\n\n"
-            f"🤖 For group `{target_chat_id}`:\n"
-            f"  • AI Approved: ✅\n"
-            f"  • AI Status: 🟢 ON\n\n"
-            f"_Group admins can control this with `/aimod on/off`._\n"
-            f"_To revoke: `/airevoke {target_chat_id}`_",
-            parse_mode='Markdown'
-        )
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: `{e}`", parse_mode='Markdown')
-
-
-# ─── /airevoke ──────────────────────────────────────────────
-async def airevoke_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """
-    Owner only — revoke AI approval from a group.
-    Use in group: /airevoke
-    Use in DM:    /airevoke <chat_id>
-    """
-    if update.effective_user.id != OWNER_ID:
-        return  # silent ignore
-
-    ch = update.effective_chat
-
-    if ch.type == "private":
-        if not ctx.args:
-            return await update.message.reply_text(
-                "❌ *You must provide a chat ID in DM!*\n\n"
-                "Usage: `/airevoke <group_chat_id>`\n\n"
-                "Example:\n"
-                "`/airevoke -1001234567890`\n\n"
-                "_Use `/aigroups` to see approved groups._",
-                parse_mode='Markdown'
-            )
-        try:
-            target_chat_id = int(ctx.args[0])
-        except ValueError:
-            return await update.message.reply_text(
-                f"❌ Invalid ID: `{ctx.args[0]}`\n\n"
-                f"_Enter only the number, e.g. `-1001234567890`_",
-                parse_mode='Markdown'
-            )
-    else:
-        target_chat_id = ch.id
-
-    try:
-        db.groups.update_one(
-            {"_id": target_chat_id},
-            {"$set": {"ai_approved": False, "aimod": False}},
-            upsert=True
-        )
-        await update.message.reply_text(
-            f"🔴 *AI Revoked!*\n"
-            f"{'─'*14}\n\n"
-            f"For group `{target_chat_id}`:\n"
-            f"  • AI Approved: ❌\n"
-            f"  • AI Status: 🔴 OFF\n\n"
-            f"_AI moderation is now inactive there._\n"
-            f"_To re-enable: `/aiapprove {target_chat_id}`_",
-            parse_mode='Markdown'
-        )
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: `{e}`", parse_mode='Markdown')
-
-
-# ─── /aigroups ──────────────────────────────────────────────
-async def aigroups_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Owner only — list all AI-approved groups."""
-    if update.effective_user.id != OWNER_ID:
-        return
-
-    all_groups = db.get_all_groups()
-    approved = []
-    for gid in all_groups:
-        g = db.get_group(gid)
-        if g.get("ai_approved", False):
-            status = "🟢 ON" if g.get("aimod", False) else "🟡 Approved/OFF"
-            approved.append(f"  • `{gid}` — {status}")
-
-    if not approved:
-        return await update.message.reply_text(
-            "📋 *AI Approved Groups: 0*\n\n"
-            "_No group has been approved yet._\n"
-            "Use `/aiapprove` in a group or `/aiapprove <chat_id>` in DM.",
-            parse_mode='Markdown'
-        )
-
-    await update.message.reply_text(
-        f"🤖 *𝗔𝗜 𝗔𝗽𝗽𝗿𝗼𝘃𝗲𝗱 𝗚𝗿𝗼𝘂𝗽𝘀* ({len(approved)})\n"
-        f"{'─'*14}\n\n"
-        + "\n".join(approved) +
-        f"\n\n_Use `/airevoke <chat_id>` to remove._",
-        parse_mode='Markdown'
-    )
-
-
 # ─── /addteacher ────────────────────────────────────────────
 async def addteacher_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Admin only — mark a user as teacher (special promo handling)."""
@@ -4874,6 +4436,60 @@ async def unadexempt_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"_Their messages will now be auto-deleted normally._",
         parse_mode='Markdown'
     )
+
+
+# ─── /premium ───────────────────────────────────────────────
+async def premium_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Owner only — toggle Premium Protection (Edit Guard + Bio Guard) for a group.
+    Use in group: /premium on | /premium off
+    Use in DM:    /premium <chat_id> on | /premium <chat_id> off
+    """
+    if update.effective_user.id != OWNER_ID:
+        return await update.message.reply_text("🔒 Owner access only.")
+
+    ch = update.effective_chat
+    args = ctx.args
+
+    if ch.type != "private":
+        if not args or args[0].lower() not in ("on", "off"):
+            return await update.message.reply_text(
+                "ℹ️ Usage: `/premium on` or `/premium off`", parse_mode='Markdown'
+            )
+        target_chat_id = ch.id
+        state = args[0].lower() == "on"
+    else:
+        if len(args) < 2 or args[1].lower() not in ("on", "off"):
+            return await update.message.reply_text(
+                "ℹ️ Usage: `/premium <group_chat_id> on|off`\n\n"
+                "Example:\n`/premium -1001234567890 on`",
+                parse_mode='Markdown'
+            )
+        try:
+            target_chat_id = int(args[0])
+        except ValueError:
+            return await update.message.reply_text("⚠️ That doesn't look like a valid chat ID.")
+        state = args[1].lower() == "on"
+
+    db.update_group(target_chat_id, {"premium": state})
+
+    if state:
+        await update.message.reply_text(
+            f"💎 *𝗣𝗥𝗘𝗠𝗜𝗨𝗠 𝗔𝗖𝗧𝗜𝗩𝗔𝗧𝗘𝗗*\n"
+            f"{'─'*14}\n\n"
+            f"👥 Group: `{target_chat_id}`\n"
+            f"  ✏️ Edit Guard — ON\n"
+            f"  🕵️ Bio Guard — ON\n\n"
+            f"_To disable: `/premium {target_chat_id} off`_",
+            parse_mode='Markdown'
+        )
+    else:
+        await update.message.reply_text(
+            f"🔴 *𝗣𝗥𝗘𝗠𝗜𝗨𝗠 𝗗𝗘𝗔𝗖𝗧𝗜𝗩𝗔𝗧𝗘𝗗*\n\n"
+            f"👥 Group: `{target_chat_id}`\n\n"
+            f"_To re-enable: `/premium {target_chat_id} on`_",
+            parse_mode='Markdown'
+        )
 
 
 async def stats_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -5174,7 +4790,6 @@ PROVIDER_BOT_REPLIES: dict = {}
 async def track_bot_reply(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
     Jab bhi koi bot (provider) group mein kuch bheje → timestamp note karo.
-    _delayed_ai_check mein yeh timestamp use hoga.
     """
     msg = update.message
     if not msg or not msg.from_user:
@@ -5246,72 +4861,68 @@ async def track_activity_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             pass
 
 
-async def _delayed_ai_check(ctx, msg, ch, usr, txt_for_ai, is_reply_to_bot, g_settings):
+
+
+# ═══════════════════════════════════════════════════════════
+#  PREMIUM: Edit Guard — re-check edited messages
+# ═══════════════════════════════════════════════════════════
+async def on_edited_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
-    Background task — user ka message aane ke baad wait karo,
-    phir check karo ki provider bot ne kuch bheja ya nahi.
+    Catches messages edited AFTER sending. Some users send a clean message
+    first (to slip past normal checks) then edit it into a link, blacklisted
+    word, etc. Premium groups get this content re-checked on every edit.
     """
-    msg_time = time.time()  # Note karo kab message aaya
-    await asyncio.sleep(5.0)
-
-    # Check 1: Exact message_id pe reply aaya?
-    exact_replied = (
-        ch.id in PROVIDER_BOT_REPLIES and
-        msg.message_id in PROVIDER_BOT_REPLIES[ch.id].get("replied_ids", {})
-    )
-
-    # Check 2: Hamare message ke BAAD kisi bot ne kuch bheja?
-    # (Provider bot ka reply reply_to_message ke bina bhi aa sakta hai)
-    last_bot_time = PROVIDER_BOT_REPLIES.get(ch.id, {}).get("last_bot_time", 0)
-    bot_replied_after = last_bot_time > msg_time
-
-    if exact_replied or bot_replied_after:
-        # Provider bot active tha — AI chup rahe
+    msg = update.edited_message
+    if not msg:
         return
 
-    # Provider ne reply nahi kiya — AI check karo
-    reply_context = ""
-    if is_reply_to_bot and msg.reply_to_message and msg.reply_to_message.text:
-        reply_context = msg.reply_to_message.text[:300]
-
-    ai_result = await ai_check(
-        txt_for_ai, usr.id, ch.id,
-        getattr(usr, 'username', '') or '',
-        reply_context=reply_context,
-        bypass_cooldown=is_reply_to_bot
-    )
-
-    # ANIME_NOT_FOUND
-    if ai_result["action"] == "ANIME_NOT_FOUND" and ai_result.get("reply"):
-        anime_name = ai_result.get("anime_name") or txt_for_ai.strip()
-        db.log_missing_anime(anime_name, ch.id)
-        try:
-            reply_msg = await msg.reply_text(ai_result["reply"], parse_mode='Markdown')
-            asyncio.create_task(delete_after(ctx, ch.id, reply_msg.message_id, 120))
-        except Exception:
-            pass
-        try:
-            group_name = getattr(ch, 'title', str(ch.id))
-            await ctx.bot.send_message(
-                OWNER_ID,
-                f"📋 *𝗨𝗻𝗮𝗻𝘀𝘄𝗲𝗿𝗲𝗱 𝗥𝗲𝗾𝘂𝗲𝘀𝘁*\n{'─'*14}\n\n"
-                f"🔎 Item: `{anime_name}`\n"
-                f"👤 User: {user_name(usr)}\n"
-                f"💬 Group: {group_name} (`{ch.id}`)\n\n"
-                f"_User searched for it but it wasn't available._",
-                parse_mode='Markdown'
-            )
-        except Exception:
-            pass
+    ch  = update.effective_chat
+    usr = update.effective_user
+    if not ch or ch.type == "private" or not usr:
         return
 
-    # REPLY
-    if ai_result["action"] == "REPLY" and ai_result.get("reply"):
-        try:
-            reply_msg = await msg.reply_text(ai_result["reply"], parse_mode='Markdown')
-            asyncio.create_task(delete_after(ctx, ch.id, reply_msg.message_id, 90))
-        except Exception:
-            pass
+    g_settings = db.get_group(ch.id)
+    if not g_settings.get("premium", False):
+        return
+
+    if await is_adm(ctx, ch.id, usr.id):
+        return
+    if db.is_immortal(ch.id, usr.id):
+        return
+
+    group_bots = await get_group_bots(ctx, ch.id)
+    violation, matched_word = await check_violations(msg, group_bots, ctx, ch.id)
+    if not violation:
+        return
+
+    asyncio.create_task(msg.delete())
+
+    cnt = db.add_warning(ch.id, usr.id)
+    if cnt >= 4:
+        await global_mute_user(ctx, usr.id, user_name(usr))
+        return
+
+    _wd = db.get_warn_durations(ch.id)
+    await do_mute(ctx, ch.id, usr.id, _wd[cnt])
+
+    viol_txt = VIOLATION_MSG.get(violation, "Rule violation.")
+    if violation == "blacklist" and matched_word:
+        viol_txt = f"⛔ Blacklisted word used: `{matched_word}` — please don't repeat this."
+
+    bars = "🟥" * cnt + "⬜" * (4 - cnt)
+    mute_sec = _wd[cnt]
+    mute_str = f"{mute_sec}s" if mute_sec < 3600 else "1 week"
+
+    notice = await ctx.bot.send_message(
+        ch.id,
+        f"✏️ *𝗘𝗗𝗜𝗧 𝗚𝗨𝗔𝗥𝗗 𝗧𝗥𝗜𝗚𝗚𝗘𝗥𝗘𝗗*\n\n"
+        f"👤 {user_name(usr)} edited a message into a rule violation.\n"
+        f"📋 {viol_txt}\n\n"
+        f"Progress: {bars} `{cnt}/4`\n"
+        f"🔇 Muted for *{mute_str}*",
+        parse_mode='Markdown'
+    )
+    asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 60))
 
 
 # ═══════════════════════════════════════════════════════════
@@ -5487,89 +5098,103 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if db.is_immortal(ch.id, usr.id):
         return
 
+    # ── PREMIUM: Bio Guard ──────────────────────────────────
+    if g_settings.get("premium", False):
+        shadow_key = (ch.id, usr.id)
+        shadow = db.shadow_blacklist_get(ch.id, usr.id)
+
+        if shadow:
+            # Periodically re-check — bio might already be cleaned up
+            last_checked = BIO_CHECK_CACHE.get(usr.id, 0)
+            if time.time() - last_checked >= BIO_RECHECK_SEC:
+                BIO_CHECK_CACHE[usr.id] = time.time()
+                bio_fetch_ok = True
+                try:
+                    full = await ctx.bot.get_chat(usr.id)
+                    bio = getattr(full, "bio", None) or ""
+                except Exception:
+                    bio_fetch_ok = False
+                    bio = ""
+                if bio_fetch_ok:
+                    kind, matched = bio_violation(bio, ch.id)
+                    if not kind:
+                        # Bio is clean now — clear shadow status and let this message through
+                        db.shadow_blacklist_remove(ch.id, usr.id)
+                        SHADOW_MSG_COUNT.pop(shadow_key, None)
+                        SHADOW_FLOOD.pop(shadow_key, None)
+                        notice = await ctx.bot.send_message(
+                            ch.id,
+                            f"✅ {user_name(usr)}, your bio is clean now — you're all set. 🎉",
+                            parse_mode='Markdown'
+                        )
+                        asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 20))
+                        shadow = None  # fall through to normal pipeline below
+
+        if shadow:
+            # Still shadow-blacklisted — let it post, then vanish it
+            asyncio.create_task(msg.delete())
+
+            SHADOW_MSG_COUNT[shadow_key] = SHADOW_MSG_COUNT.get(shadow_key, 0) + 1
+            if SHADOW_MSG_COUNT[shadow_key] % 3 == 1:
+                kind = shadow.get("reason")
+                matched = shadow.get("matched")
+                if kind == "link":
+                    what = "a *link*"
+                else:
+                    what = f"the blacklisted word `{matched}`"
+                notice = await ctx.bot.send_message(
+                    ch.id,
+                    f"🕵️ *𝗕𝗜𝗢 𝗚𝗨𝗔𝗥𝗗*\n\n"
+                    f"👤 {user_name(usr)}, your profile bio contains {what}.\n"
+                    f"Your messages won't be visible until it's removed.\n\n"
+                    f"_Remove it from your bio, then send any message to be rechecked._",
+                    parse_mode='Markdown'
+                )
+                asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 60))
+
+            # Flood check for shadow-blacklisted user (10 msgs / 60s)
+            now = time.time()
+            times = [t for t in SHADOW_FLOOD.get(shadow_key, []) if now - t < SHADOW_FLOOD_WINDOW]
+            times.append(now)
+            SHADOW_FLOOD[shadow_key] = times
+            if len(times) > SHADOW_FLOOD_LIMIT:
+                cnt = db.add_warning(ch.id, usr.id)
+                _wd = db.get_warn_durations(ch.id)
+                await do_mute(ctx, ch.id, usr.id, _wd.get(min(cnt, 4), 120))
+                SHADOW_FLOOD[shadow_key] = []
+            return
+
+        # Not yet shadow-blacklisted — due for a bio check?
+        last_checked = BIO_CHECK_CACHE.get(usr.id, 0)
+        if time.time() - last_checked >= BIO_RECHECK_SEC:
+            BIO_CHECK_CACHE[usr.id] = time.time()
+            try:
+                full = await ctx.bot.get_chat(usr.id)
+                bio = getattr(full, "bio", None) or ""
+            except Exception:
+                bio = ""
+
+            kind, matched = bio_violation(bio, ch.id)
+            if kind:
+                db.shadow_blacklist_add(ch.id, usr.id, kind, matched)
+                asyncio.create_task(msg.delete())
+                SHADOW_MSG_COUNT[shadow_key] = 1
+                what = "a *link*" if kind == "link" else f"the blacklisted word `{matched}`"
+                notice = await ctx.bot.send_message(
+                    ch.id,
+                    f"🕵️ *𝗕𝗜𝗢 𝗚𝗨𝗔𝗥𝗗 𝗧𝗥𝗜𝗚𝗚𝗘𝗥𝗘𝗗*\n\n"
+                    f"👤 {user_name(usr)}, your profile bio contains {what}.\n"
+                    f"Your messages won't be visible until it's removed.\n\n"
+                    f"_Remove it from your bio, then send any message to be rechecked._",
+                    parse_mode='Markdown'
+                )
+                asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 60))
+                return
+
     db.inc_stat("scanned")
 
     group_bots = await get_group_bots(ctx, ch.id)
     violation, matched_word = await check_violations(msg, group_bots, ctx, ch.id)
-
-    # ── AI Engine — sirf tab jab local checks pass ho gaye ──
-    txt_for_ai = msg.text or msg.caption or ""
-    ai_result = {"action": "SAFE", "reply": ""}
-
-    if not violation and AI_API_KEY and g_settings.get("ai_approved", False) and g_settings.get("aimod", False) and not is_admin:
-        if txt_for_ai:
-            # ── Fix 1: Agar user kisi HUMAN ke message pe reply kar raha hai → AI skip ──
-            # Do members baat kar rahe hain — AI bich mein na ghuse
-            is_reply_to_human = (
-                msg.reply_to_message and
-                msg.reply_to_message.from_user and
-                not msg.reply_to_message.from_user.is_bot
-            )
-            if is_reply_to_human:
-                # Sirf AI reply skip — violation check already upar ho chuka hai
-                pass
-            else:
-                # Repeat tracker — ek hi cheez baar baar likh raha hai?
-                repeat_count = track_repeat(ch.id, usr.id, txt_for_ai)
-
-                # Check if user replied to bot's message — cooldown bypass
-                is_reply_to_bot = (
-                    msg.reply_to_message and
-                    msg.reply_to_message.from_user and
-                    msg.reply_to_message.from_user.id == ctx.bot.id
-                )
-
-                # Anime name repeat — seedha reply, AI call nahi
-                if repeat_count >= 3 and is_anime_message(txt_for_ai):
-                    anime_name = txt_for_ai.strip()
-                    ai_result = {
-                        "action": "REPLY",
-                        "reply": f"Hi {user_name(usr)}, sending *{anime_name}* repeatedly won't speed things up 😄 If it's available, it'll show up here shortly!"
-                    }
-                else:
-                    # Provider bot ka update process hone ke liye background task mein bhejo
-                    asyncio.create_task(
-                        _delayed_ai_check(
-                            ctx, msg, ch, usr, txt_for_ai,
-                            is_reply_to_bot, g_settings
-                        )
-                    )
-                    # Yahan se return — AI result baad mein process hoga
-                    return
-
-        if ai_result["action"] == "PROMO":
-            violation = "ai_promo"
-
-    # ── ANIME_NOT_FOUND → group reply + owner DM ──────────────
-    if ai_result["action"] == "ANIME_NOT_FOUND" and ai_result.get("reply"):
-        anime_name = ai_result.get("anime_name") or txt_for_ai.strip()
-        # DB mein log karo
-        db.log_missing_anime(anime_name, ch.id)
-        # Group mein reply do
-        try:
-            reply_msg = await msg.reply_text(
-                ai_result["reply"],
-                parse_mode='Markdown'
-            )
-            asyncio.create_task(delete_after(ctx, ch.id, reply_msg.message_id, 120))
-        except Exception:
-            pass
-        # Owner ko DM bhejo
-        try:
-            group_name = getattr(ch, 'title', str(ch.id))
-            await ctx.bot.send_message(
-                OWNER_ID,
-                f"📋 *𝗨𝗻𝗮𝗻𝘀𝘄𝗲𝗿𝗲𝗱 𝗥𝗲𝗾𝘂𝗲𝘀𝘁*\n"
-                f"{'─'*14}\n\n"
-                f"🔎 Item: `{anime_name}`\n"
-                f"👤 User: {user_name(usr)}\n"
-                f"💬 Group: {group_name} (`{ch.id}`)\n\n"
-                f"_User searched for it but it wasn't available._",
-                parse_mode='Markdown'
-            )
-        except Exception:
-            pass
-        return
 
     if violation:
         asyncio.create_task(msg.delete())
@@ -5578,8 +5203,8 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if is_admin:
             return
 
-        # ── Teacher special handling ──────────────────────────
-        if violation == "ai_promo" and db.is_teacher(ch.id, usr.id):
+        # ── Teacher special handling — courtesy notice + escalating mute ──
+        if db.is_teacher(ch.id, usr.id):
             promo_count = db.inc_teacher_promo_count(ch.id, usr.id)
             # 1st offense → sirf warning, no mute
             if promo_count == 1:
@@ -5587,7 +5212,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     ch.id,
                     f"📚 Hi {user_name(usr)},\n\n"
                     f"As a teacher here, you get a courtesy notice instead of a mute 🙏\n"
-                    f"But *promotional content* still isn't allowed in this group.\n\n"
+                    f"But that message still broke a group rule.\n\n"
                     f"⚠️ Please don't repeat this — next time you'll be muted.",
                     parse_mode='Markdown'
                 )
@@ -5603,7 +5228,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 notice = await ctx.bot.send_message(
                     ch.id,
                     f"📚 {user_name(usr)},\n\n"
-                    f"The promotion rule was broken again.\n"
+                    f"A group rule was broken again.\n"
                     f"🔇 Muted for *{mute_min} minutes*.\n\n"
                     f"_(Repeat offense #{promo_count - 1} — mute duration increases each time.)_",
                     parse_mode='Markdown'
@@ -6473,11 +6098,7 @@ def main():
     app.add_handler(CommandHandler("gclearwarn",       gclearwarn_cmd))
     app.add_handler(CommandHandler("adexempt",         adexempt_cmd))
     app.add_handler(CommandHandler("unadexempt",       unadexempt_cmd))
-    app.add_handler(CommandHandler("aimod",            aimod_cmd))
-    app.add_handler(CommandHandler("aiapprove",        aiapprove_cmd))
-    app.add_handler(CommandHandler("airevoke",         airevoke_cmd))
-    app.add_handler(CommandHandler("aigroups",         aigroups_cmd))
-    app.add_handler(CommandHandler("missinganime",     missinganime_cmd))
+    app.add_handler(CommandHandler("premium",          premium_cmd))
     app.add_handler(CommandHandler("addteacher",       addteacher_cmd))
     app.add_handler(CommandHandler("removeteacher",    removeteacher_cmd))
     app.add_handler(CommandHandler("teachers",         teachers_cmd))
@@ -6513,6 +6134,11 @@ def main():
         filters.COMMAND & filters.ChatType.GROUPS,
         auto_delete_commands
     ), group=2)
+    # ── PREMIUM: Edit Guard — re-check messages after they're edited ──
+    app.add_handler(MessageHandler(
+        filters.UpdateType.EDITED_MESSAGE & filters.ChatType.GROUPS,
+        on_edited_message
+    ), group=3)
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_join))
     app.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER,  on_leave))
 
