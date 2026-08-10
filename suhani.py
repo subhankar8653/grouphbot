@@ -483,6 +483,7 @@ class DB:
             "autodelete_min": None,
             "captcha": False,
             "premium": False,       # Owner-granted paid tier
+            "allow_member_usernames": False,  # Premium: sirf group-members ke @username allow karo
             "warn_durations": None,   # None = default MUTE_TIME use hoga
             "filters": {},            # per-group filter toggles (defaults merged at read time)
             "welcome_enabled": True,
@@ -1531,13 +1532,22 @@ def check_link(text):
     return False
 
 
-async def check_username(text, wl_words, ctx, chat_id):
+async def check_username(text, wl_words, ctx, chat_id, members_only=False):
     """
     Returns True if text contains a @username that should be blocked.
-    Exempt:
+    Exempt (always):
       - EXEMPT_USERNAMES (admin/owner/request/sbnime)
       - Whitelisted usernames
-      - Users who are actual members of this group (not left/kicked/banned)
+
+    members_only=False (default, all groups):
+      ANY @username mention is blocked — external @mentions aren't allowed
+      here at all.
+
+    members_only=True (Premium only — /settings → 💎 Premium →
+    👤 Allow Member Usernames):
+      An @mention is allowed if it belongs to an actual member of THIS
+      group (not left/kicked/banned). Everyone else's username is still
+      blocked, same as before.
     """
     for match in USERNAME_RE.findall(text):
         uname = match.lower()
@@ -1548,7 +1558,10 @@ async def check_username(text, wl_words, ctx, chat_id):
         if wl_words and uname in [w.lower() for w in wl_words]:
             continue
 
-        # Check if this @username is a member of the group
+        if not members_only:
+            return True  # Usernames not allowed at all in this group
+
+        # Premium mode: check if this @username is a member of the group
         is_member = False
         try:
             member = await ctx.bot.get_chat_member(chat_id, f"@{uname}")
@@ -2086,8 +2099,14 @@ async def check_violations(msg, group_bots, ctx, chat_id):
     if filt.get("nolinks", True) and check_link(text):
         return "url", None
 
-    if await check_username(text, wl_words, ctx, chat_id):
-        return "username", None
+    if '@' in text:
+        g_uname = db.get_group(chat_id)
+        members_only_uname = (
+            bool(g_uname.get("premium", False))
+            and bool(g_uname.get("allow_member_usernames", False))
+        )
+        if await check_username(text, wl_words, ctx, chat_id, members_only=members_only_uname):
+            return "username", None
 
     found_bots = BOT_RE.findall(text)
     for b in found_bots:
@@ -2599,7 +2618,9 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             f"  ✏️ *Edit Guard* — rechecks edited messages\n"
             f"       against your filters, not just new ones\n"
             f"  🕵️ *Bio Guard* — scans member bios for links\n"
-            f"       or blacklisted words, shadow-blocks them\n\n"
+            f"       or blacklisted words, shadow-blocks them\n"
+            f"  👤 *Member Username Guard* — optionally allow only\n"
+            f"       this group's own members to send a @username\n\n"
             f"{'─'*14}\n"
             f"_Contact the bot owner to upgrade this group._"
         )
@@ -6050,6 +6071,7 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
     if data == "cfg_premium":
         g = db.get_group(ch.id)
         prem_on = bool(g.get("premium", False))
+        uname_on = bool(g.get("allow_member_usernames", False))
         text = (
             f"*💎 𝗣𝗥𝗘𝗠𝗜𝗨𝗠 𝗣𝗥𝗢𝗧𝗘𝗖𝗧𝗜𝗢𝗡*\n"
             f"{'─'*14}\n\n"
@@ -6061,7 +6083,25 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
             f"  🕵️ *Bio Guard* — members with a link or blacklisted word\n"
             f"       in their profile bio get shadow-blocked (their\n"
             f"       messages silently won't be visible to anyone)\n"
+            f"  👤 *Member Username Guard* — jab ON karo, sirf isi group ke\n"
+            f"       members hi apna @username yahan mention/send kar\n"
+            f"       sakte hain; kisi bhi bahar wale ka @username bhejte hi\n"
+            f"       message delete ho kar warning milegi\n"
             f"  ⚡ Fast detection — bio changes and edits are scanned right away\n\n"
+        )
+        rows = []
+        if prem_on:
+            text += (
+                f"{'─'*14}\n"
+                f"👤 *Allow Member Usernames:* {'🟢 ON' if uname_on else '🔴 OFF'}\n"
+                f"{'_Only this group’s members can send a @username. Everyone else’s @username gets blocked + warned._' if uname_on else '_All @username mentions are currently blocked in this group (default)._'}\n\n"
+            )
+            rows.append([
+                {"text": f"👤 𝗠𝗲𝗺𝗯𝗲𝗿 𝗨𝘀𝗲𝗿𝗻𝗮𝗺𝗲𝘀 {ICON_ON if uname_on else ICON_OFF}",
+                 "callback_data": "cfg_premium_uname_toggle",
+                 "style": "success" if uname_on else "danger"}
+            ])
+        text += (
             f"{'─'*14}\n"
             f"*💰 𝗣𝗿𝗶𝗰𝗶𝗻𝗴:*\n"
             f"  • Up to 1,000 members — ₹10\n"
@@ -6070,13 +6110,18 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
             f"{'─'*14}\n"
             f"📩 To get Premium, DM `@Suhani_TG`!"
         )
-        await _cfg_edit(
-            query, ch.id, text,
-            [
-                [{"text": "📩 𝗗𝗠 @Suhani_TG", "url": "https://t.me/Suhani_TG"}],
-                [{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_main", "style": "primary"}],
-            ]
-        )
+        rows.append([{"text": "📩 𝗗𝗠 @Suhani_TG", "url": "https://t.me/Suhani_TG"}])
+        rows.append([{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_main", "style": "primary"}])
+        await _cfg_edit(query, ch.id, text, rows)
+        return
+
+    if data == "cfg_premium_uname_toggle":
+        g = db.get_group(ch.id)
+        if not bool(g.get("premium", False)):
+            await query.answer("💎 This is a Premium-only feature. DM @Suhani_TG to get Premium.", show_alert=True)
+            return
+        db.update_group(ch.id, {"allow_member_usernames": not bool(g.get("allow_member_usernames", False))})
+        await cfg_callback_reroute(update, ctx, "cfg_premium")
         return
 
     if data == "cfg_main":
