@@ -165,6 +165,7 @@ DEFAULT_FILTERS = {
     "blacklist":    True,   # group + global blacklist word enforcement
     "whitelist":    True,   # whitelist exceptions apply
     "welcome":      True,   # welcome message on join
+    "warncaptcha":  True,   # auto-unmute captcha on warning/mute (off = old admin-only unmute button)
 }
 
 FILTER_LABELS = {
@@ -185,6 +186,7 @@ FILTER_LABELS = {
     "blacklist":   "⛔ 𝗕𝗮𝗱 𝗗𝗼𝗺𝗮𝗶𝗻𝘀/𝗪𝗼𝗿𝗱𝘀",
     "whitelist":   "✅ 𝗦𝗮𝗳𝗲 𝗗𝗼𝗺𝗮𝗶𝗻𝘀/𝗪𝗼𝗿𝗱𝘀",
     "welcome":     "👋 𝗪𝗲𝗹𝗰𝗼𝗺𝗲 𝗠𝗲𝘀𝘀𝗮𝗴𝗲",
+    "warncaptcha": "🔐 𝗪𝗮𝗿𝗻 𝗔𝘂𝘁𝗼-𝗨𝗻𝗺𝘂𝘁𝗲 𝗖𝗮𝗽𝘁𝗰𝗵𝗮",
 }
 # ── Filters grouped into categories for a cleaner /settings → Filters UI ──
 FILTER_GROUPS = [
@@ -192,7 +194,7 @@ FILTER_GROUPS = [
     ("🚫 𝗖𝗼𝗻𝘁𝗲𝗻𝘁 𝗙𝗶𝗹𝘁𝗲𝗿𝘀", ["nolinks", "noforwards", "nolocations", "nocontacts",
                              "nocommands", "nohashtags", "novoice", "nochinese", "imagefilter"]),
     ("📋 𝗪𝗼𝗿𝗱 𝗟𝗶𝘀𝘁𝘀", ["blacklist", "whitelist"]),
-    ("👥 𝗚𝗿𝗼𝘂𝗽 𝗕𝗲𝗵𝗮𝘃𝗶𝗼𝘂𝗿", ["noevents", "welcome"]),
+    ("👥 𝗚𝗿𝗼𝘂𝗽 𝗕𝗲𝗵𝗮𝘃𝗶𝗼𝘂𝗿", ["noevents", "welcome", "warncaptcha"]),
 ]
 
 GMUTE_DURATION = 604800   # 1 week — global mute ki duration (seconds)
@@ -3472,9 +3474,22 @@ async def warn_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Build warning bar
     bars = "🟥" * cnt + "⬜" * (4 - cnt)
 
-    # ── Auto-unmute captcha — target khud solve karke mute + warning hata sake ──
-    cap_question, cap_answer, cap_options = generate_captcha()
-    MUTE_CAPTCHA_PENDING[f"{ch.id}_{tgt.id}"] = {"answer": cap_answer}
+    # ── Auto-unmute captcha — target khud solve karke mute + warning hata
+    # sake. Group /settings → Filters se yeh feature on/off ho sakta hai. ──
+    warncaptcha_on = db.get_filters(ch.id).get("warncaptcha", True)
+    if warncaptcha_on:
+        cap_question, cap_answer, cap_options = generate_captcha()
+        MUTE_CAPTCHA_PENDING[f"{ch.id}_{tgt.id}"] = {"answer": cap_answer}
+        captcha_block = (
+            f"\n\n🔐 *𝗔𝘂𝘁𝗼-𝗨𝗻𝗺𝘂𝘁𝗲 𝗖𝗮𝗽𝘁𝗰𝗵𝗮*\n"
+            f"Neeche sahi jawab dabao — mute *turant* hatega\n"
+            f"aur *saari warnings bhi clear* ho jaayengi:\n\n"
+            f"      `{cap_question}`"
+        )
+        warn_kb_plain = kb_warn_captcha(ch.id, tgt.id, cap_options)
+    else:
+        captcha_block = ""
+        warn_kb_plain = kb_warn_actions(ch.id, tgt.id)
 
     msg = await update.message.reply_text(
         f"⚠️ *𝗪𝗔𝗥𝗡𝗜𝗡𝗚 𝗜𝗦𝗦𝗨𝗘𝗗*\n"
@@ -3482,15 +3497,13 @@ async def warn_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"👤 {user_name(tgt)}\n"
         f"📋 Reason: _{reason}_\n\n"
         f"Progress: {bars} `{cnt}/4`\n\n"
-        f"{WARN_MSG[cnt]}\n\n"
-        f"🔐 *𝗔𝘂𝘁𝗼-𝗨𝗻𝗺𝘂𝘁𝗲 𝗖𝗮𝗽𝘁𝗰𝗵𝗮*\n"
-        f"Neeche sahi jawab dabao — mute *turant* hatega\n"
-        f"aur *saari warnings bhi clear* ho jaayengi:\n\n"
-        f"      `{cap_question}`",        parse_mode='Markdown',
-        reply_markup=kb_warn_captcha(ch.id, tgt.id, cap_options)
+        f"{WARN_MSG[cnt]}"
+        f"{captcha_block}",        parse_mode='Markdown',
+        reply_markup=warn_kb_plain
     )
     asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 90))
-    asyncio.create_task(_cleanup_mute_captcha(ch.id, tgt.id, 95))
+    if warncaptcha_on:
+        asyncio.create_task(_cleanup_mute_captcha(ch.id, tgt.id, 95))
 
 
 # ─── /warnings ──────────────────────────────────────────────
@@ -3505,23 +3518,40 @@ async def warnings_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not tgt:
         return await update.message.reply_text("⚠️ Couldn't identify that user (anonymous or channel reply).")
     if db.is_gmuted(tgt.id):
-        msg = await update.message.reply_text(
-            f"👤 {user_name(tgt)}\n\n"
-            f"💀 *𝗚𝗟𝗢𝗕𝗔𝗟𝗟𝗬 𝗠𝗨𝗧𝗘𝗗* — 1-week mute active.",
-            parse_mode='Markdown'
-        )
+        try:
+            msg = await update.message.reply_text(
+                f"👤 {user_name(tgt, escape=True)}\n\n"
+                f"💀 *𝗚𝗟𝗢𝗕𝗔𝗟𝗟𝗬 𝗠𝗨𝗧𝗘𝗗* — 1-week mute active.",
+                parse_mode='Markdown'
+            )
+        except Exception:
+            msg = await update.message.reply_text(
+                f"👤 {user_name(tgt, escape=False)}\n\n"
+                f"💀 GLOBALLY MUTED — 1-week mute active."
+            )
         asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 600))
         return
     w = db.get_warnings(ch.id, tgt.id)
     bars = "🟥" * w + "⬜" * (4 - w)
-    msg = await update.message.reply_text(
+    text = (
         f"📊 *𝗪𝗮𝗿𝗻𝗶𝗻𝗴 𝗦𝘁𝗮𝘁𝘂𝘀*\n"
         f"{'─'*14}\n\n"
-        f"👤 {user_name(tgt)}\n"
+        f"👤 {user_name(tgt, escape=True)}\n"
         f"Count: `{w}/4`\n"
-        f"Scale: {bars}",
-        parse_mode='Markdown'
+        f"Scale: {bars}"
     )
+    try:
+        msg = await update.message.reply_text(text, parse_mode='Markdown')
+    except Exception:
+        # Naam mein koi aisa special character ho sakta hai jo Markdown
+        # todta ho — plain text mein fallback taaki reply hamesha aaye,
+        # kabhi bhi silently fail na ho.
+        msg = await update.message.reply_text(
+            f"📊 Warning Status\n{'─'*14}\n\n"
+            f"👤 {user_name(tgt, escape=False)}\n"
+            f"Count: {w}/4\n"
+            f"Scale: {bars}"
+        )
     asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 600))
 
 
@@ -5477,9 +5507,24 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         color = warn_colors.get(cnt, "⚠️")
 
         # ── Auto-unmute captcha — aasan math sawaal jo galti se mute
-        # hue user khud solve karke apna mute + warning hata sake ──
-        cap_question, cap_answer, cap_options = generate_captcha()
-        MUTE_CAPTCHA_PENDING[f"{ch.id}_{usr.id}"] = {"answer": cap_answer}
+        # hue user khud solve karke apna mute + warning hata sake.
+        # Group admin ise /settings → Filters se on/off kar sakta hai. ──
+        warncaptcha_on = db.get_filters(ch.id).get("warncaptcha", True)
+        if warncaptcha_on:
+            cap_question, cap_answer, cap_options = generate_captcha()
+            MUTE_CAPTCHA_PENDING[f"{ch.id}_{usr.id}"] = {"answer": cap_answer}
+            captcha_block = (
+                f"\n\n🔐 *𝗔𝘂𝘁𝗼-𝗨𝗻𝗺𝘂𝘁𝗲 𝗖𝗮𝗽𝘁𝗰𝗵𝗮*\n"
+                f"Neeche sahi jawab dabao — mute *turant* hatega\n"
+                f"aur *saari warnings bhi clear* ho jaayengi:\n\n"
+                f"      `{cap_question}`"
+            )
+            warn_kb = ckb_warn_captcha(ch.id, usr.id, cap_options)
+            warn_kb_plain = kb_warn_captcha(ch.id, usr.id, cap_options)
+        else:
+            captcha_block = ""
+            warn_kb = ckb_warn_actions(ch.id, usr.id)
+            warn_kb_plain = kb_warn_actions(ch.id, usr.id)
 
         warn_text = (
             f"*{color} WARNING {cnt}/4 — ACTION TAKEN*\n"
@@ -5489,23 +5534,21 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"📌 _{viol_txt}_\n\n"
             f"⏱ Muted: `{mute_str}` • Next: {next_str}\n"
             f"{'─'*14}\n"
-            f"Progress: {bars} `{cnt}/4`\n\n"
-            f"🔐 *𝗔𝘂𝘁𝗼-𝗨𝗻𝗺𝘂𝘁𝗲 𝗖𝗮𝗽𝘁𝗰𝗵𝗮*\n"
-            f"Neeche sahi jawab dabao — mute *turant* hatega\n"
-            f"aur *saari warnings bhi clear* ho jaayengi:\n\n"
-            f"      `{cap_question}`"
+            f"Progress: {bars} `{cnt}/4`"
+            f"{captcha_block}"
         )
         # Blacklist-word notices should clear out fast (within 1 min) so the
         # group doesn't stay cluttered with "which word" call-outs.
         warn_delete_delay = 60 if violation == "blacklist" else 90
-        asyncio.create_task(_cleanup_mute_captcha(ch.id, usr.id, warn_delete_delay + 5))
-        warn_msg_id = await send_colored_message(ch.id, warn_text, ckb_warn_captcha(ch.id, usr.id, cap_options))
+        if warncaptcha_on:
+            asyncio.create_task(_cleanup_mute_captcha(ch.id, usr.id, warn_delete_delay + 5))
+        warn_msg_id = await send_colored_message(ch.id, warn_text, warn_kb)
         if warn_msg_id:
             asyncio.create_task(delete_after(ctx, ch.id, warn_msg_id, warn_delete_delay))
         else:
             notice = await ctx.bot.send_message(
                 ch.id, warn_text, parse_mode='Markdown',
-                reply_markup=kb_warn_captcha(ch.id, usr.id, cap_options)
+                reply_markup=warn_kb_plain
             )
             asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, warn_delete_delay))
         return
