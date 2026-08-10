@@ -315,6 +315,10 @@ CAPTCHA_PENDING = {}
 # ═══════════════════════════════════════════════════════════
 BIO_CHECK_CACHE: dict[tuple, float] = {}        # (chat_id,user_id) -> last bio-checked timestamp
 BIO_RECHECK_SEC = 1800                          # re-check a clean bio every 30 min
+SHADOW_RECHECK_SEC = 8                          # already-flagged user: recheck almost instantly
+                                                 # on their next message (bot promises this in the
+                                                 # notice text), small cooldown just avoids hammering
+                                                 # get_chat() if they spam multiple messages in a row
 SHADOW_MSG_COUNT: dict[tuple, int] = {}         # (chat_id,user_id) -> msgs since last notice
 SHADOW_FLOOD: dict[tuple, list] = {}            # (chat_id,user_id) -> [timestamps]
 SHADOW_FLOOD_LIMIT  = 10
@@ -5122,9 +5126,11 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         shadow = db.shadow_blacklist_get(ch.id, usr.id)
 
         if shadow:
-            # Periodically re-check — bio might already be cleaned up
+            # Already flagged — recheck almost instantly on their next
+            # message (not the slow 30-min general scan), since the bot's
+            # own notice promises "send any message to be rechecked".
             last_checked = BIO_CHECK_CACHE.get(shadow_key, 0)
-            if time.time() - last_checked >= BIO_RECHECK_SEC:
+            if time.time() - last_checked >= SHADOW_RECHECK_SEC:
                 BIO_CHECK_CACHE[shadow_key] = time.time()
                 bio_fetch_ok = True
                 try:
