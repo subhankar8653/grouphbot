@@ -1338,6 +1338,75 @@ def user_mention(u) -> str:
         return "User"
 
 
+# ═══════════════════════════════════════════════════════════
+#  UNIFIED TARGET RESOLUTION — reply / user_id / @username
+# ═══════════════════════════════════════════════════════════
+# Admin-facing commands (ban, mute, warn, etc.) should ALWAYS accept a
+# target in any of these 3 forms, no matter who's using it (normal admin,
+# owner, or a "Remain Anonymous" group-admin account):
+#   1) /cmd @username
+#   2) /cmd <user_id>
+#   3) reply to the user's message + /cmd
+# This single helper does that resolution consistently everywhere, so a
+# command can never silently support only one of the three.
+async def resolve_target(update: Update, ctx, usage: str):
+    """
+    Returns (target_id, target_obj, consumed, error):
+      target_id  -> resolved user id, or None if resolution failed
+      target_obj -> a User/Chat-like object with .id/.first_name/.username
+                    (for building names/mentions), or None if we only have
+                    a bare numeric id and couldn't look up a profile for it
+      consumed   -> how many leading ctx.args were used for the target
+                    (0 if resolved via reply, 1 if via id/@username) — so
+                    the caller can treat the *rest* of ctx.args as
+                    reason/duration/etc.
+      error      -> a ready-to-send error/usage message, or None on success
+    """
+    msg = update.message
+    if msg.reply_to_message and msg.reply_to_message.from_user:
+        u = msg.reply_to_message.from_user
+        return u.id, u, 0, None
+
+    if ctx.args:
+        raw = ctx.args[0]
+        if raw.startswith('@'):
+            uname = raw.lstrip('@')
+            try:
+                chat_obj = await ctx.bot.get_chat(f"@{uname}")
+                return chat_obj.id, chat_obj, 1, None
+            except Exception:
+                return None, None, 1, f"❌ Cannot find user: `{raw}`"
+        try:
+            tid = int(raw)
+        except ValueError:
+            return None, None, 1, f"❌ Invalid user ID or username: `{raw}`"
+        # Numeric ID given — try to also fetch a display name/profile so
+        # messages look nice; totally fine if this fails, we still have the id.
+        try:
+            chat_obj = await ctx.bot.get_chat(tid)
+            return chat_obj.id, chat_obj, 1, None
+        except Exception:
+            return tid, None, 1, None
+
+    return None, None, 0, usage
+
+
+def target_name(obj, tid, escape=False):
+    """Display name for a resolved target — falls back to bare ID if we
+    only have a numeric id with no fetched profile."""
+    if obj is not None:
+        return user_name(obj, escape=escape)
+    return f"`{tid}`"
+
+
+def target_mention(obj, tid):
+    """Notifying tg://user mention for a resolved target — falls back to a
+    generic link by ID if we only have a numeric id with no fetched profile."""
+    if obj is not None:
+        return user_mention(obj)
+    return f"[User](tg://user?id={tid})"
+
+
 def is_thank_you_text(text: str) -> bool:
     """Check karo ki message me thank-you wala keyword hai ya nahi (Hindi/English mix)."""
     if not text:
@@ -2916,36 +2985,22 @@ async def immortal_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await is_adm(ctx, ch.id, user.id) and user.id != OWNER_ID:
         return await update.message.reply_text("🔒 Admins only.")
 
-    target_id = None
-    target_name = None
+    tid, tobj, _, err = await resolve_target(
+        update, ctx,
+        "❌ Usage:\n`/immortal <user_id | @username>`\nor reply to user message with `/immortal`"
+    )
+    if err:
+        return await update.message.reply_text(err, parse_mode='Markdown')
 
-    if ctx.args:
-        try:
-            target_id = int(ctx.args[0])
-        except ValueError:
-            return await update.message.reply_text(
-                "⚠️ That doesn't look like a valid user ID.\nUsage: `/immortal 1234567890`",
-                parse_mode='Markdown'
-            )
-    elif update.message.reply_to_message:
-        target_id = update.message.reply_to_message.from_user.id
-        target_name = user_name(update.message.reply_to_message.from_user)
-    else:
-        return await update.message.reply_text(
-            "❌ Usage:\n`/immortal <user_id>`\nor reply to user message with `/immortal`",
-            parse_mode='Markdown'
-        )
-
-    db.add_immortal(ch.id, target_id)
+    db.add_immortal(ch.id, tid)
     await update.message.reply_text(
         f"👑 *𝗜𝗠𝗠𝗢𝗥𝗧𝗔𝗟 𝗦𝗧𝗔𝗧𝗨𝗦 𝗚𝗥𝗔𝗡𝗧𝗘𝗗*\n"
         f"{'─'*14}\n\n"
-        f"🆔 User: `{target_id}`"
-        f"{f'  ({target_name})' if target_name else ''}\n\n"
+        f"🆔 User: {target_name(tobj, tid)}\n\n"
         f"✅ This user is now *immune* to all rules!\n"
         f"• Links, forwards, any content — allowed\n"
         f"• Bot will never act on their messages\n\n"
-        f"Use `/unimmortal {target_id}` to revoke.",
+        f"Use `/unimmortal {tid}` to revoke.",
         parse_mode='Markdown'
     )
 
@@ -2959,23 +3014,16 @@ async def unimmortal_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await is_adm(ctx, ch.id, user.id) and user.id != OWNER_ID:
         return await update.message.reply_text("🔒 Admins only.")
 
-    target_id = None
-    if ctx.args:
-        try:
-            target_id = int(ctx.args[0])
-        except ValueError:
-            return await update.message.reply_text("⚠️ That doesn't look like a valid user ID.")
-    elif update.message.reply_to_message:
-        target_id = update.message.reply_to_message.from_user.id
-    else:
-        return await update.message.reply_text(
-            "❌ Usage: `/unimmortal <user_id>`",
-            parse_mode='Markdown'
-        )
+    tid, tobj, _, err = await resolve_target(
+        update, ctx,
+        "❌ Usage: `/unimmortal <user_id | @username>`\nor reply to user message"
+    )
+    if err:
+        return await update.message.reply_text(err, parse_mode='Markdown')
 
-    db.remove_immortal(ch.id, target_id)
+    db.remove_immortal(ch.id, tid)
     await update.message.reply_text(
-        f"✅ Immortal status *removed* for `{target_id}`.\n"
+        f"✅ Immortal status *removed* for {target_name(tobj, tid)}.\n"
         f"They are now subject to group rules.",
         parse_mode='Markdown'
     )
@@ -3371,15 +3419,18 @@ async def testmute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private": return
     if not await sender_is_admin(ctx, update): return
-    if not update.message.reply_to_message:
-        return await update.message.reply_text("↩️ Reply to a user first.")
-    tgt = update.message.reply_to_message.from_user
-    if await is_adm(ctx, ch.id, tgt.id):
+    tid, tobj, _, err = await resolve_target(
+        update, ctx,
+        "↩️ Reply to a user, or use `/testmute <user_id | @username>`"
+    )
+    if err:
+        return await update.message.reply_text(err, parse_mode='Markdown')
+    if await is_adm(ctx, ch.id, tid):
         return await update.message.reply_text("🔒 Admins can't be muted.")
-    if await do_mute(ctx, ch.id, tgt.id, 35):
+    if await do_mute(ctx, ch.id, tid, 35):
         await update.message.reply_text(
             f"🧪 *𝗧𝗲𝘀𝘁 𝗠𝘂𝘁𝗲 𝗔𝗽𝗽𝗹𝗶𝗲𝗱*\n\n"
-            f"👤 {user_name(tgt)} — muted for *35 seconds*.",
+            f"👤 {target_name(tobj, tid)} — muted for *35 seconds*.",
             parse_mode='Markdown'
         )
     else:
@@ -3391,28 +3442,29 @@ async def mute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private": return
     if not await sender_is_admin(ctx, update): return
-    if not update.message.reply_to_message:
-        return await update.message.reply_text(
-            "↩️ Reply to a user first.\nUsage: `/mute 60`",
-            parse_mode='Markdown'
-        )
-    tgt = update.message.reply_to_message.from_user
-    if await is_adm(ctx, ch.id, tgt.id):
+    tid, tobj, consumed, err = await resolve_target(
+        update, ctx,
+        "↩️ Reply to a user, or use `/mute <user_id | @username> [seconds]`"
+    )
+    if err:
+        return await update.message.reply_text(err, parse_mode='Markdown')
+    if await is_adm(ctx, ch.id, tid):
         return await update.message.reply_text("🔒 Admins can't be muted.")
     sec = 35
-    if ctx.args:
+    rest_args = ctx.args[consumed:] if ctx.args else []
+    if rest_args:
         try:
-            sec = max(35, int(ctx.args[0]))
+            sec = max(35, int(rest_args[0]))
         except:
             pass
-    if await do_mute(ctx, ch.id, tgt.id, sec):
+    if await do_mute(ctx, ch.id, tid, sec):
         await update.message.reply_text(
             f"🔇 *Muted*\n\n"
-            f"👤 {user_name(tgt)}\n"
+            f"👤 {target_name(tobj, tid)}\n"
             f"⏱ Duration: *{sec} seconds*",
             parse_mode='Markdown',
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔊 𝗨𝗻𝗺𝘂𝘁𝗲", callback_data=f"unmute_{ch.id}_{tgt.id}")]
+                [InlineKeyboardButton("🔊 𝗨𝗻𝗺𝘂𝘁𝗲", callback_data=f"unmute_{ch.id}_{tid}")]
             ])
         )
 
@@ -3422,11 +3474,15 @@ async def unmute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private": return
     if not await sender_is_admin(ctx, update): return
-    if not update.message.reply_to_message: return
-    tgt = update.message.reply_to_message.from_user
-    await global_unmute_user(ctx, tgt.id)
+    tid, tobj, _, err = await resolve_target(
+        update, ctx,
+        "↩️ Reply to a user, or use `/unmute <user_id | @username>`"
+    )
+    if err:
+        return await update.message.reply_text(err, parse_mode='Markdown')
+    await global_unmute_user(ctx, tid)
     await update.message.reply_text(
-        f"🔊 *𝗨𝗻𝗺𝘂𝘁𝗲𝗱*\n\n👤 {user_name(tgt)} can send messages again — *saare groups* mein.",
+        f"🔊 *𝗨𝗻𝗺𝘂𝘁𝗲𝗱*\n\n👤 {target_name(tobj, tid)} can send messages again — *saare groups* mein.",
         parse_mode='Markdown'
     )
 
@@ -3436,20 +3492,24 @@ async def ban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private": return
     if not await sender_is_admin(ctx, update): return
-    if not update.message.reply_to_message:
-        return await update.message.reply_text("↩️ Reply to a user to ban them.")
-    tgt = update.message.reply_to_message.from_user
-    if await is_adm(ctx, ch.id, tgt.id):
+    tid, tobj, consumed, err = await resolve_target(
+        update, ctx,
+        "↩️ Reply to a user, or use `/ban <user_id | @username> [reason]`"
+    )
+    if err:
+        return await update.message.reply_text(err, parse_mode='Markdown')
+    if await is_adm(ctx, ch.id, tid):
         return await update.message.reply_text("🔒 Admins can't be banned.")
-    reason = ' '.join(ctx.args) if ctx.args else "No reason provided"
-    if await do_ban(ctx, ch.id, tgt.id):
+    rest_args = ctx.args[consumed:] if ctx.args else []
+    reason = ' '.join(rest_args) if rest_args else "No reason provided"
+    if await do_ban(ctx, ch.id, tid):
         await update.message.reply_text(
             f"🔨 *𝗨𝘀𝗲𝗿 𝗕𝗮𝗻𝗻𝗲𝗱*\n"
             f"{'─'*14}\n\n"
-            f"👤 {user_name(tgt)}\n"
+            f"👤 {target_name(tobj, tid)}\n"
             f"📋 Reason: _{reason}_",
             parse_mode='Markdown',
-            reply_markup=kb_unban_button(ch.id, tgt.id)
+            reply_markup=kb_unban_button(ch.id, tid)
         )
     else:
         await update.message.reply_text("⚠️ Couldn't ban — make sure the bot has admin rights.")
@@ -3460,22 +3520,15 @@ async def unban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private": return
     if not await sender_is_admin(ctx, update): return
-    target_id = None
-    if ctx.args:
-        try:
-            target_id = int(ctx.args[0])
-        except:
-            return await update.message.reply_text(
-                "ℹ️ Usage: `/unban <user_id>`",
-                parse_mode='Markdown'
-            )
-    elif update.message.reply_to_message:
-        target_id = update.message.reply_to_message.from_user.id
-    else:
-        return await update.message.reply_text("↩️ Reply to a user or provide their user ID.")
-    if await do_unban(ctx, ch.id, target_id):
+    tid, tobj, _, err = await resolve_target(
+        update, ctx,
+        "↩️ Reply to a user, or use `/unban <user_id | @username>`"
+    )
+    if err:
+        return await update.message.reply_text(err, parse_mode='Markdown')
+    if await do_unban(ctx, ch.id, tid):
         await update.message.reply_text(
-            f"✅ `{target_id}` has been *unbanned*.",
+            f"✅ {target_name(tobj, tid)} has been *unbanned*.",
             parse_mode='Markdown'
         )
 
@@ -3485,15 +3538,21 @@ async def warn_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     if ch.type == "private": return
     if not await sender_is_admin(ctx, update): return
-    if not update.message.reply_to_message: return
-    tgt = update.message.reply_to_message.from_user
-    if await is_adm(ctx, ch.id, tgt.id): return
-    reason = ' '.join(ctx.args) if ctx.args else "Rule violation"
-    cnt = db.add_warning(ch.id, tgt.id)
+    tid, tobj, consumed, err = await resolve_target(
+        update, ctx,
+        "↩️ Reply to a user, or use `/warn <user_id | @username> [reason]`"
+    )
+    if err:
+        return await update.message.reply_text(err, parse_mode='Markdown')
+    if await is_adm(ctx, ch.id, tid):
+        return await update.message.reply_text("🔒 Admins can't be warned.")
+    rest_args = ctx.args[consumed:] if ctx.args else []
+    reason = ' '.join(rest_args) if rest_args else "Rule violation"
+    cnt = db.add_warning(ch.id, tid)
     if cnt >= 4:
-        await global_mute_user(ctx, tgt.id, user_name(tgt))
+        await global_mute_user(ctx, tid, target_name(tobj, tid))
         return
-    await do_mute(ctx, ch.id, tgt.id, db.get_warn_durations(ch.id)[cnt])
+    await do_mute(ctx, ch.id, tid, db.get_warn_durations(ch.id)[cnt])
 
     # Build warning bar
     bars = "🟥" * cnt + "⬜" * (4 - cnt)
@@ -3503,22 +3562,22 @@ async def warn_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     warncaptcha_on = db.get_filters(ch.id).get("warncaptcha", True)
     if warncaptcha_on:
         cap_question, cap_answer, cap_options = generate_captcha()
-        MUTE_CAPTCHA_PENDING[f"{ch.id}_{tgt.id}"] = {"answer": cap_answer}
+        MUTE_CAPTCHA_PENDING[f"{ch.id}_{tid}"] = {"answer": cap_answer}
         captcha_block = (
             f"\n\n🔐 *𝗔𝘂𝘁𝗼-𝗨𝗻𝗺𝘂𝘁𝗲 𝗖𝗮𝗽𝘁𝗰𝗵𝗮*\n"
             f"Neeche sahi jawab dabao — mute *turant* hatega\n"
             f"aur *saari warnings bhi clear* ho jaayengi:\n\n"
             f"      `{cap_question}`"
         )
-        warn_kb_plain = kb_warn_captcha(ch.id, tgt.id, cap_options)
+        warn_kb_plain = kb_warn_captcha(ch.id, tid, cap_options)
     else:
         captcha_block = ""
-        warn_kb_plain = kb_warn_actions(ch.id, tgt.id)
+        warn_kb_plain = kb_warn_actions(ch.id, tid)
 
     msg = await update.message.reply_text(
         f"⚠️ *𝗪𝗔𝗥𝗡𝗜𝗡𝗚 𝗜𝗦𝗦𝗨𝗘𝗗*\n"
         f"{'─'*14}\n\n"
-        f"👤 {user_name(tgt)}\n"
+        f"👤 {target_name(tobj, tid)}\n"
         f"📋 Reason: _{reason}_\n\n"
         f"Progress: {bars} `{cnt}/4`\n\n"
         f"{WARN_MSG[cnt]}"
@@ -3527,7 +3586,7 @@ async def warn_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 90))
     if warncaptcha_on:
-        asyncio.create_task(_cleanup_mute_captcha(ch.id, tgt.id, 95))
+        asyncio.create_task(_cleanup_mute_captcha(ch.id, tid, 95))
 
 
 # ─── /warnings ──────────────────────────────────────────────
@@ -3587,31 +3646,28 @@ async def reset_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     if not await sender_is_admin(ctx, update):
         return await update.message.reply_text("🔒 Admins only.")
-    if not update.message.reply_to_message:
-        return await update.message.reply_text(
-            "↩️ Us user ke message par *reply* karke `/resetwarnings` bhejo.",
-            parse_mode='Markdown'
-        )
-    tgt = update.message.reply_to_message.from_user
-    if tgt is None:
-        return await update.message.reply_text(
-            "⚠️ Yeh message kisi identify hone wale user ka nahi hai — kisi real user ke message par reply karo."
-        )
-    if tgt.id == ANON_ADMIN_ID:
+    tid, tobj, _, err = await resolve_target(
+        update, ctx,
+        "↩️ Reply to a user, or use `/resetwarnings <user_id | @username>`"
+    )
+    if err:
+        return await update.message.reply_text(err, parse_mode='Markdown')
+    if tid == ANON_ADMIN_ID:
         return await update.message.reply_text(
             "⚠️ Yeh ek *anonymous admin* message hai, isliye asli user pata nahi chal raha.\n"
-            "Us user ke apne (non-anonymous) message par reply karke dobara try karo.",
+            "Us user ke apne (non-anonymous) message par reply karke dobara try karo, "
+            "ya unka user ID/@username seedhe use karo.",
             parse_mode='Markdown'
         )
-    await global_unmute_user(ctx, tgt.id)
-    text = f"✅ *𝗪𝗮𝗿𝗻𝗶𝗻𝗴𝘀 𝗿𝗲𝘀𝗲𝘁*\n\n👤 {user_name(tgt, escape=True)} now has 0 warnings — *saare groups* mein unmute ho gaya."
+    await global_unmute_user(ctx, tid)
+    text = f"✅ *𝗪𝗮𝗿𝗻𝗶𝗻𝗴𝘀 𝗿𝗲𝘀𝗲𝘁*\n\n👤 {target_name(tobj, tid, escape=True)} now has 0 warnings — *saare groups* mein unmute ho gaya."
     try:
         await update.message.reply_text(text, parse_mode='Markdown')
     except Exception:
         # Naam mein Markdown-breaking character ho sakta hai — plain text
         # fallback taaki confirmation kabhi bhi silently gayab na ho.
         await update.message.reply_text(
-            f"✅ Warnings reset\n\n👤 {user_name(tgt, escape=False)} now has 0 warnings — unmuted in all groups."
+            f"✅ Warnings reset\n\n👤 {target_name(tobj, tid, escape=False)} now has 0 warnings — unmuted in all groups."
         )
 
 
@@ -4183,29 +4239,19 @@ async def power_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return await update.message.reply_text("🔒 Owner access only.")
 
-    target_id = None
-    if ctx.args:
-        try:
-            target_id = int(ctx.args[0])
-        except ValueError:
-            return await update.message.reply_text(
-                "❌ Usage: `/power <user_id>`",
-                parse_mode='Markdown'
-            )
-    elif update.message.reply_to_message:
-        target_id = update.message.reply_to_message.from_user.id
-    else:
-        return await update.message.reply_text(
-            "❌ Usage: `/power <user_id>` or reply to user",
-            parse_mode='Markdown'
-        )
+    tid, tobj, _, err = await resolve_target(
+        update, ctx,
+        "❌ Usage: `/power <user_id | @username>` or reply to user"
+    )
+    if err:
+        return await update.message.reply_text(err, parse_mode='Markdown')
 
-    db.add_powered(target_id)
+    db.add_powered(tid)
     await update.message.reply_text(
         f"⚡ *𝗣𝗼𝘄𝗲𝗿 𝗚𝗿𝗮𝗻𝘁𝗲𝗱*\n"
         f"{'─'*14}\n\n"
-        f"🆔 User `{target_id}` can now use `/fban` and `/gunban`.\n\n"
-        f"Use `/unpower {target_id}` to revoke.",
+        f"🆔 User: {target_name(tobj, tid)} can now use `/fban` and `/gunban`.\n\n"
+        f"Use `/unpower {tid}` to revoke.",
         parse_mode='Markdown'
     )
 
@@ -4216,26 +4262,16 @@ async def unpower_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return await update.message.reply_text("🔒 Owner access only.")
 
-    target_id = None
-    if ctx.args:
-        try:
-            target_id = int(ctx.args[0])
-        except ValueError:
-            return await update.message.reply_text(
-                "❌ Usage: `/unpower <user_id>`",
-                parse_mode='Markdown'
-            )
-    elif update.message.reply_to_message:
-        target_id = update.message.reply_to_message.from_user.id
-    else:
-        return await update.message.reply_text(
-            "❌ Usage: `/unpower <user_id>` or reply to user",
-            parse_mode='Markdown'
-        )
+    tid, tobj, _, err = await resolve_target(
+        update, ctx,
+        "❌ Usage: `/unpower <user_id | @username>` or reply to user"
+    )
+    if err:
+        return await update.message.reply_text(err, parse_mode='Markdown')
 
-    db.remove_powered(target_id)
+    db.remove_powered(tid)
     await update.message.reply_text(
-        f"✅ Power *revoked* from `{target_id}`.",
+        f"✅ Power *revoked* from {target_name(tobj, tid)}.",
         parse_mode='Markdown'
     )
 
@@ -4495,23 +4531,17 @@ async def removeteacher_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await sender_is_admin(ctx, update):
         return await update.message.reply_text("🔒 Admins only.")
 
-    target_id = None
-    if update.message.reply_to_message:
-        target_id = update.message.reply_to_message.from_user.id
-    elif ctx.args:
-        try:
-            target_id = int(ctx.args[0])
-        except ValueError:
-            return await update.message.reply_text("⚠️ That doesn't look like a valid ID.")
-    else:
-        return await update.message.reply_text(
-            "ℹ️ Usage: `/removeteacher <id>`", parse_mode='Markdown'
-        )
+    tid, tobj, _, err = await resolve_target(
+        update, ctx,
+        "ℹ️ Usage: `/removeteacher <user_id | @username>` or reply to user"
+    )
+    if err:
+        return await update.message.reply_text(err, parse_mode='Markdown')
 
-    db.remove_teacher(ch.id, target_id)
-    db.reset_teacher_promo_count(ch.id, target_id)
+    db.remove_teacher(ch.id, tid)
+    db.reset_teacher_promo_count(ch.id, tid)
     await update.message.reply_text(
-        f"✅ Teacher status removed for `{target_id}`.\n"
+        f"✅ Teacher status removed for {target_name(tobj, tid)}.\n"
         f"_Their promo count has also been reset._",
         parse_mode='Markdown'
     )
