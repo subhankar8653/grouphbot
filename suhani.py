@@ -2099,21 +2099,34 @@ async def mute_captcha_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if chosen == pending["answer"]:
         MUTE_CAPTCHA_PENDING.pop(key, None)
-        await global_unmute_user(ctx, user_id)
+        # Answer the callback FIRST — this is what makes Telegram show the
+        # "verified" tap instantly instead of waiting for unmute+DB work.
+        await query.answer("✅ Verified!")
+
+        # W1–W3 → mute was only local (this group), so unmute only here —
+        # fast, single API call. Only W4 (real gmute) needs the all-groups
+        # loop, since that's the only case where every group was muted.
+        was_gmuted = db.is_gmuted(user_id)
+        if was_gmuted:
+            await global_unmute_user(ctx, user_id)
+            scope_line = "🔊 Unmuted in *all groups* — you can send messages again."
+        else:
+            db.reset_warnings(chat_id, user_id)
+            await do_unmute(ctx, chat_id, user_id)
+            scope_line = "🔊 Unmuted in this group — you can send messages again."
+
         success_text = (
-            f"✅ *𝗖𝗔𝗣𝗧𝗖𝗛𝗔 𝗩𝗘𝗥𝗜𝗙𝗜𝗘𝗗!*\n"
-            f"{'─'*14}\n\n"
+            f"✅ *Captcha Verified*\n"
             f"👤 {user_mention(query.from_user)}\n"
-            f"🔊 Mute *saare groups* se hat gaya — ab aap message bhej sakte ho.\n"
-            f"♻️ Saari purani warnings bhi clear ho gayi hain."
+            f"{scope_line}\n"
+            f"♻️ Warnings cleared."
         )
         try:
             await query.message.edit_text(success_text, parse_mode='Markdown')
         except Exception:
             pass
-        await query.answer("✅ Sahi jawab — unmute + warnings clear! 🎉")
     else:
-        await query.answer("❌ Galat jawab — dobara try karo!", show_alert=True)
+        await query.answer("❌ Wrong answer — try again!", show_alert=True)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -5547,9 +5560,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             cap_question, cap_answer, cap_options = generate_captcha()
             MUTE_CAPTCHA_PENDING[f"{ch.id}_{usr.id}"] = {"answer": cap_answer}
             captcha_block = (
-                f"\n\n🔐 *𝗔𝘂𝘁𝗼-𝗨𝗻𝗺𝘂𝘁𝗲 𝗖𝗮𝗽𝘁𝗰𝗵𝗮*\n"
-                f"Neeche sahi jawab dabao — mute *turant* hatega\n"
-                f"aur *saari warnings bhi clear* ho jaayengi:\n\n"
+                f"\n🔐 Tap the right answer to unmute + clear warnings:\n"
                 f"      `{cap_question}`"
             )
             warn_kb = ckb_warn_captcha(ch.id, usr.id, cap_options)
@@ -5560,14 +5571,11 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             warn_kb_plain = kb_warn_actions(ch.id, usr.id)
 
         warn_text = (
-            f"*{color} WARNING {cnt}/4 — ACTION TAKEN*\n"
-
-            f"{'─'*14}\n\n"
+            f"*{color} WARNING {cnt}/4*\n"
             f"👤 {user_mention(usr)}\n"
-            f"📌 _{viol_txt}_\n\n"
+            f"📌 _{viol_txt}_\n"
             f"⏱ Muted: `{mute_str}` • Next: {next_str}\n"
-            f"{'─'*14}\n"
-            f"Progress: {bars} `{cnt}/4`"
+            f"Progress: {bars}"
             f"{captcha_block}"
         )
         # Blacklist-word notices should clear out fast (within 1 min) so the
