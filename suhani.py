@@ -2538,7 +2538,8 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{'─'*14}\n"
             f"💎 *𝗣𝗥𝗘𝗠𝗜𝗨𝗠*\n\n"
             f"  ✅ `/premium <id> on` — Enable for a group\n"
-            f"  🔴 `/premium <id> off` — Disable for a group\n\n"
+            f"  🔴 `/premium <id> off` — Disable for a group\n"
+            f"  📋 `/premium_list` — List all groups with Premium ON\n\n"
             f"{'─'*14}\n"
             f"🌐 `/gblacklist` · `/gwhitelist` — Global word lists\n"
             f"🤖 `/adexempt` — Auto-delete exemptions\n"
@@ -2677,6 +2678,7 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"🌐 `/gblacklist` · `/gwhitelist` — Global word lists\n"
             f"🤖 `/adexempt <id>` — Auto-delete exemption\n"
             f"💎 `/premium <id> on|off` — Toggle premium\n"
+            f"📋 `/premium_list` — List Premium groups\n"
         )
 
     admin_text += (
@@ -4521,6 +4523,95 @@ async def premium_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
 
 
+_prem_list_cache: dict[int, list] = {}   # owner_id -> resolved premium group rows (pagination cache)
+
+async def premium_list_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Owner only — sirf woh groups list karo jinme Premium Protection (Edit
+    Guard + Bio Guard) ON hai.
+    """
+    if update.effective_user.id != OWNER_ID:
+        return await update.message.reply_text("🔒 Owner access only.")
+
+    all_ids = db.get_all_groups()
+    premium_ids = [gid for gid in all_ids if db.get_group(gid).get("premium", False)]
+
+    if not premium_ids:
+        return await update.message.reply_text("💎 No groups currently have Premium active.")
+
+    status_msg = await update.message.reply_text(
+        f"⏳ Fetching details for {len(premium_ids)} premium group(s)…"
+    )
+
+    me = await ctx.bot.get_me()
+    rows = []
+    for gid in premium_ids:
+        title, link, members, status = await _resolve_group_full(ctx, gid, me.id)
+        if status == "ok":
+            rows.append((title, link, members))
+        elif status == "removed":
+            # Bot is no longer admin in this group — clear the premium flag
+            # too, so it doesn't keep showing up as "premium" for no reason.
+            db.update_group(gid, {"premium": False})
+        await asyncio.sleep(0.15)
+
+    _prem_list_cache[update.effective_user.id] = rows
+    await status_msg.delete()
+
+    if not rows:
+        return await update.message.reply_text(
+            "💎 No groups currently have Premium active "
+            "(the bot was removed from the old premium group(s), so the flag was cleared)."
+        )
+
+    text, markup = _build_premium_list_page(rows, 0)
+    await update.message.reply_text(text, parse_mode='HTML', disable_web_page_preview=True, reply_markup=markup)
+
+
+def _build_premium_list_page(rows: list, page: int):
+    total = len(rows)
+    total_pages = max(1, (total + GROUPS_PER_PAGE - 1) // GROUPS_PER_PAGE)
+    page = max(0, min(page, total_pages - 1))
+    start = page * GROUPS_PER_PAGE
+    chunk = rows[start:start + GROUPS_PER_PAGE]
+
+    lines = [f"💎 <b>𝗣𝗿𝗲𝗺𝗶𝘂𝗺 𝗚𝗿𝗼𝘂𝗽𝘀:</b> {total}  <i>(page {page+1}/{total_pages})</i>\n"]
+    for i, (title, link, members) in enumerate(chunk, start=start + 1):
+        title_safe = html.escape(title)
+        mem_txt = f" — 👤 {members}" if members is not None else ""
+        if link:
+            lines.append(f"{i}. <a href=\"{html.escape(link)}\">{title_safe}</a>{mem_txt}")
+        else:
+            lines.append(f"{i}. {title_safe}{mem_txt}")
+
+    buttons = []
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton("◀️ 𝗣𝗿𝗲𝘃", callback_data=f"premlistpg_{page-1}"))
+    if page < total_pages - 1:
+        nav_row.append(InlineKeyboardButton("𝗡𝗲𝘅𝘁 ▶️", callback_data=f"premlistpg_{page+1}"))
+    if nav_row:
+        buttons.append(nav_row)
+
+    markup = InlineKeyboardMarkup(buttons) if buttons else None
+    return "\n".join(lines), markup
+
+
+async def premium_list_page_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if update.effective_user.id != OWNER_ID:
+        return await query.answer("🔒 Not for you.", show_alert=True)
+
+    rows = _prem_list_cache.get(update.effective_user.id)
+    if not rows:
+        return await query.answer("⚠️ List expired — run /premium_list again.", show_alert=True)
+
+    page = int(query.data.split("_", 1)[1])
+    text, markup = _build_premium_list_page(rows, page)
+    await query.answer()
+    await query.edit_message_text(text, parse_mode='HTML', disable_web_page_preview=True, reply_markup=markup)
+
+
 async def stats_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     s = db.get_stats()
@@ -5481,6 +5572,7 @@ def kb_settings_main(chat_id):
     captcha_on = bool(g.get("captcha"))
     bl_count = len(db.get_blacklist(chat_id) or [])
     wl_count = len(db.get_whitelist(chat_id) or [])
+    prem_on = bool(g.get("premium", False))
     return [
         [
             {"text": "📜 𝗥𝘂𝗹𝗲𝘀", "callback_data": "cfg_rules", "style": "primary"},
@@ -5506,6 +5598,10 @@ def kb_settings_main(chat_id):
              "style": "success" if captcha_on else "danger"},
             {"text": "🏆 𝗥𝗲𝗽𝘂𝘁𝗮𝘁𝗶𝗼𝗻", "callback_data": "menu_repboard", "style": "primary"},
         ],
+        [
+            {"text": f"💎 𝗣𝗿𝗲𝗺𝗶𝘂𝗺 {ICON_ON if prem_on else ICON_OFF}", "callback_data": "cfg_premium",
+             "style": "success" if prem_on else "danger"},
+        ],
         [{"text": "❌ 𝗖𝗹𝗼𝘀𝗲", "callback_data": "close_menu", "style": "danger"}],
     ]
 
@@ -5518,6 +5614,7 @@ def _settings_overview_text(chat_id):
     captcha_on = bool(g.get("captcha"))
     bl_count = len(db.get_blacklist(chat_id) or [])
     wl_count = len(db.get_whitelist(chat_id) or [])
+    prem_on = bool(g.get("premium", False))
     return (
         f"*⚙️ 𝗚𝗥𝗢𝗨𝗣 𝗦𝗘𝗧𝗧𝗜𝗡𝗚𝗦 𝗣𝗔𝗡𝗘𝗟*\n"
         f"{'─'*14}\n\n"
@@ -5527,6 +5624,7 @@ def _settings_overview_text(chat_id):
         f"  ⏱️ Msg auto-del: {ICON_ON + ' ' + _sec_human(ad) if ad else ICON_OFF + ' Off'}\n"
         f"  🎭 Captcha: {ICON_ON + ' On' if captcha_on else ICON_OFF + ' Off'}\n"
         f"  ⛔ Blacklist words: {bl_count}  •  ✅ Whitelist: {wl_count}\n"
+        f"  💎 Premium: {ICON_ON + ' Active' if prem_on else ICON_OFF + ' Not active'}\n"
         f"{'─'*14}\n\n"
         f"Tap a button below to view or change a setting 👇\n"
         f"_Admins and the owner only — this panel closes automatically when idle._"
@@ -5621,6 +5719,39 @@ async def cfg_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data: str
 
 
 async def _cfg_callback_body(update, ctx, data, query, ch, u):
+    # ── Premium ──
+    if data == "cfg_premium":
+        g = db.get_group(ch.id)
+        prem_on = bool(g.get("premium", False))
+        text = (
+            f"*💎 𝗣𝗥𝗘𝗠𝗜𝗨𝗠 𝗣𝗥𝗢𝗧𝗘𝗖𝗧𝗜𝗢𝗡*\n"
+            f"{'─'*14}\n\n"
+            f"Status: {'🟢 *Active in this group*' if prem_on else '🔴 *Not active in this group*'}\n\n"
+            f"{'─'*14}\n"
+            f"*✨ 𝗣𝗿𝗲𝗺𝗶𝘂𝗺 𝗕𝗲𝗻𝗲𝗳𝗶𝘁𝘀:*\n"
+            f"  ✏️ *Edit Guard* — if someone edits an old clean message\n"
+            f"       into a link or blacklisted word, it's caught instantly\n"
+            f"  🕵️ *Bio Guard* — members with a link or blacklisted word\n"
+            f"       in their profile bio get shadow-blocked (their\n"
+            f"       messages silently won't be visible to anyone)\n"
+            f"  ⚡ Fast detection — bio changes and edits are scanned right away\n\n"
+            f"{'─'*14}\n"
+            f"*💰 𝗣𝗿𝗶𝗰𝗶𝗻𝗴:*\n"
+            f"  • Up to 1,000 members — ₹10\n"
+            f"  • Up to 10,000 members — ₹49\n"
+            f"  • Above 10,000 — +₹5 for every extra 1,000 members\n\n"
+            f"{'─'*14}\n"
+            f"📩 To get Premium, DM @Suhani_TG!"
+        )
+        await _cfg_edit(
+            query, ch.id, text,
+            [
+                [{"text": "📩 𝗗𝗠 @Suhani_TG", "url": "https://t.me/Suhani_TG"}],
+                [{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_main", "style": "primary"}],
+            ]
+        )
+        return
+
     if data == "cfg_main":
         SETTINGS_PENDING.pop((ch.id, u.id), None)
         await _cfg_edit(query, ch.id, _settings_overview_text(ch.id), kb_settings_main(ch.id))
@@ -6131,6 +6262,7 @@ def main():
     app.add_handler(CommandHandler("adexempt",         adexempt_cmd))
     app.add_handler(CommandHandler("unadexempt",       unadexempt_cmd))
     app.add_handler(CommandHandler("premium",          premium_cmd))
+    app.add_handler(CommandHandler("premium_list",      premium_list_cmd))
     app.add_handler(CommandHandler("addteacher",       addteacher_cmd))
     app.add_handler(CommandHandler("removeteacher",    removeteacher_cmd))
     app.add_handler(CommandHandler("teachers",         teachers_cmd))
@@ -6142,6 +6274,7 @@ def main():
     app.add_handler(CallbackQueryHandler(menu_callback,       pattern=r"^(menu_|show_|unmute_|unban_|dismiss_|close_)"))
     app.add_handler(CallbackQueryHandler(rep_callback,        pattern=r"^rep:"))
     app.add_handler(CallbackQueryHandler(groups_page_callback, pattern=r"^grppg_"))
+    app.add_handler(CallbackQueryHandler(premium_list_page_callback, pattern=r"^premlistpg_"))
     # rankings_callback (lbd:) aur withdraw_approval_callback (wd:) DISABLED
     # saath saath /rankings aur /withdraw feature ke — neeche dekho.
 
