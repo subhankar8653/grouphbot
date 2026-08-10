@@ -5712,6 +5712,17 @@ async def cfg_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data: str
 
     try:
         await _cfg_callback_body(update, ctx, data, query, ch, u)
+    except Exception:
+        # Kabhi bhi (future mein) kisi panel-text mein Markdown parse error
+        # ho, to user ko blank/frozen panel ki jagah ek clear error dikhe —
+        # silently kuch na hone se yeh behtar hai, taaki bug turant pakda jaaye.
+        try:
+            await ctx.bot.send_message(
+                ch.id, "⚠️ Something went wrong opening that panel — please try again.",
+                reply_to_message_id=query.message.message_id
+            )
+        except Exception:
+            pass
     finally:
         # Panel abhi bhi khula hai (close/delete nahi hua) — idle-timer (re)start karo,
         # taaki 1 min tak koi use na kare to khud delete ho jaaye.
@@ -5741,7 +5752,7 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
             f"  • Up to 10,000 members — ₹49\n"
             f"  • Above 10,000 — +₹5 for every extra 1,000 members\n\n"
             f"{'─'*14}\n"
-            f"📩 To get Premium, DM @Suhani_TG!"
+            f"📩 To get Premium, DM `@Suhani_TG`!"
         )
         await _cfg_edit(
             query, ch.id, text,
