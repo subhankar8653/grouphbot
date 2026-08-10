@@ -313,12 +313,19 @@ CAPTCHA_PENDING = {}
 # ═══════════════════════════════════════════════════════════
 #  PREMIUM — Bio Guard & Edit Guard state
 # ═══════════════════════════════════════════════════════════
-BIO_CHECK_CACHE: dict[tuple, float] = {}        # (chat_id,user_id) -> last bio-checked timestamp
-BIO_RECHECK_SEC = 1800                          # re-check a clean bio every 30 min
-SHADOW_RECHECK_SEC = 8                          # already-flagged user: recheck almost instantly
-                                                 # on their next message (bot promises this in the
-                                                 # notice text), small cooldown just avoids hammering
-                                                 # get_chat() if they spam multiple messages in a row
+# NOTE: two SEPARATE caches, one per direction. Earlier both directions
+# shared one dict/key, so checking a flagged user's bio (found clean)
+# stamped the same key that the "still clean, scan for new violation"
+# path also reads — which blocked the *next* scan for the full 30 min,
+# even though the user had just added a link back. Keeping them apart
+# means clearing a violation and adding a new one both get picked up
+# fast, independently of each other.
+CLEAN_CHECK_CACHE: dict[tuple, float] = {}      # (chat_id,user_id) -> last scan while bio was clean
+FLAGGED_CHECK_CACHE: dict[tuple, float] = {}    # (chat_id,user_id) -> last recheck while shadow-flagged
+BIO_RECHECK_SEC = 20                            # clean user: how often we scan their bio for a new violation
+SHADOW_RECHECK_SEC = 8                          # flagged user: how often we recheck if they cleaned it up
+                                                 # (both kept short — small cooldown just avoids hammering
+                                                 # get_chat() if someone spams messages back to back)
 SHADOW_MSG_COUNT: dict[tuple, int] = {}         # (chat_id,user_id) -> msgs since last notice
 SHADOW_FLOOD: dict[tuple, list] = {}            # (chat_id,user_id) -> [timestamps]
 SHADOW_FLOOD_LIMIT  = 10
@@ -5127,11 +5134,11 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         if shadow:
             # Already flagged — recheck almost instantly on their next
-            # message (not the slow 30-min general scan), since the bot's
-            # own notice promises "send any message to be rechecked".
-            last_checked = BIO_CHECK_CACHE.get(shadow_key, 0)
+            # message (not the slow scan), since the bot's own notice
+            # promises "send any message to be rechecked".
+            last_checked = FLAGGED_CHECK_CACHE.get(shadow_key, 0)
             if time.time() - last_checked >= SHADOW_RECHECK_SEC:
-                BIO_CHECK_CACHE[shadow_key] = time.time()
+                FLAGGED_CHECK_CACHE[shadow_key] = time.time()
                 bio_fetch_ok = True
                 try:
                     full = await ctx.bot.get_chat(usr.id)
@@ -5146,6 +5153,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                         db.shadow_blacklist_remove(ch.id, usr.id)
                         SHADOW_MSG_COUNT.pop(shadow_key, None)
                         SHADOW_FLOOD.pop(shadow_key, None)
+                        FLAGGED_CHECK_CACHE.pop(shadow_key, None)
                         notice = await ctx.bot.send_message(
                             ch.id,
                             f"✅ {user_name(usr)}, your bio is clean now — you're all set. 🎉",
@@ -5189,9 +5197,9 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
 
         # Not yet shadow-blacklisted — due for a bio check?
-        last_checked = BIO_CHECK_CACHE.get(shadow_key, 0)
+        last_checked = CLEAN_CHECK_CACHE.get(shadow_key, 0)
         if time.time() - last_checked >= BIO_RECHECK_SEC:
-            BIO_CHECK_CACHE[shadow_key] = time.time()
+            CLEAN_CHECK_CACHE[shadow_key] = time.time()
             try:
                 full = await ctx.bot.get_chat(usr.id)
                 bio = getattr(full, "bio", None) or ""
