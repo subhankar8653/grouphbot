@@ -1531,6 +1531,20 @@ async def global_mute_user(ctx, user_id, display_name=None):
             pass
 
 
+async def global_unmute_user(ctx, user_id):
+    """Warning clear ho ya mute manually hataya jaaye — user ko SAARE
+    groups mein ek saath unmute karo aur uska gmute record bhi hata do.
+    (Warnings clearing DB-level me instant hai, sirf Telegram-restriction
+    hataana har group mein alag se karna padta hai — isliye yeh loop.)"""
+    db.remove_gmute(user_id)   # gmute hatao + saare groups ki warnings clear karo
+    for gid in db.get_all_groups():
+        try:
+            await do_unmute(ctx, gid, user_id)
+            await asyncio.sleep(0.1)
+        except:
+            pass
+
+
 # ═══════════════════════════════════════════════════════════
 #  INLINE KEYBOARD BUILDERS
 # ═══════════════════════════════════════════════════════════
@@ -2085,13 +2099,12 @@ async def mute_captcha_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if chosen == pending["answer"]:
         MUTE_CAPTCHA_PENDING.pop(key, None)
-        await do_unmute(ctx, chat_id, user_id)
-        db.reset_warnings(chat_id, user_id)
+        await global_unmute_user(ctx, user_id)
         success_text = (
             f"✅ *𝗖𝗔𝗣𝗧𝗖𝗛𝗔 𝗩𝗘𝗥𝗜𝗙𝗜𝗘𝗗!*\n"
             f"{'─'*14}\n\n"
             f"👤 {user_mention(query.from_user)}\n"
-            f"🔊 Mute hat gaya — ab aap group mein message bhej sakte ho.\n"
+            f"🔊 Mute *saare groups* se hat gaya — ab aap message bhej sakte ho.\n"
             f"♻️ Saari purani warnings bhi clear ho gayi hain."
         )
         try:
@@ -2533,8 +2546,8 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
                 c_id = int(parts[1])
                 u_id = int(parts[2])
                 if await is_adm(ctx, c_id, query.from_user.id) or query.from_user.id == OWNER_ID:
-                    await do_unmute(ctx, c_id, u_id)
-                    await query.answer("✅ User unmuted!", show_alert=True)
+                    await global_unmute_user(ctx, u_id)
+                    await query.answer("✅ User unmuted in all groups!", show_alert=True)
                     await query.message.edit_reply_markup(reply_markup=None)
                 else:
                     await query.answer("🔒 Admins only.", show_alert=True)
@@ -3398,13 +3411,11 @@ async def unmute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await sender_is_admin(ctx, update): return
     if not update.message.reply_to_message: return
     tgt = update.message.reply_to_message.from_user
-    db.remove_gmute(tgt.id)
-    if await do_unmute(ctx, ch.id, tgt.id):
-        db.reset_warnings(ch.id, tgt.id)
-        await update.message.reply_text(
-            f"🔊 *𝗨𝗻𝗺𝘂𝘁𝗲𝗱*\n\n👤 {user_name(tgt)} can send messages again.",
-            parse_mode='Markdown'
-        )
+    await global_unmute_user(ctx, tgt.id)
+    await update.message.reply_text(
+        f"🔊 *𝗨𝗻𝗺𝘂𝘁𝗲𝗱*\n\n👤 {user_name(tgt)} can send messages again — *saare groups* mein.",
+        parse_mode='Markdown'
+    )
 
 
 # ─── /ban ───────────────────────────────────────────────────
@@ -3557,16 +3568,38 @@ async def warnings_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ─── /resetwarnings ─────────────────────────────────────────
 async def reset_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ANON_ADMIN_ID = 1087968824
     ch = update.effective_chat
-    if ch.type == "private": return
-    if not await sender_is_admin(ctx, update): return
-    if not update.message.reply_to_message: return
+    if ch.type == "private":
+        return
+    if not await sender_is_admin(ctx, update):
+        return await update.message.reply_text("🔒 Admins only.")
+    if not update.message.reply_to_message:
+        return await update.message.reply_text(
+            "↩️ Us user ke message par *reply* karke `/resetwarnings` bhejo.",
+            parse_mode='Markdown'
+        )
     tgt = update.message.reply_to_message.from_user
-    db.reset_warnings(ch.id, tgt.id)
-    await update.message.reply_text(
-        f"✅ *𝗪𝗮𝗿𝗻𝗶𝗻𝗴𝘀 𝗿𝗲𝘀𝗲𝘁*\n\n👤 {user_name(tgt)} now has 0 warnings.",
-        parse_mode='Markdown'
-    )
+    if tgt is None:
+        return await update.message.reply_text(
+            "⚠️ Yeh message kisi identify hone wale user ka nahi hai — kisi real user ke message par reply karo."
+        )
+    if tgt.id == ANON_ADMIN_ID:
+        return await update.message.reply_text(
+            "⚠️ Yeh ek *anonymous admin* message hai, isliye asli user pata nahi chal raha.\n"
+            "Us user ke apne (non-anonymous) message par reply karke dobara try karo.",
+            parse_mode='Markdown'
+        )
+    await global_unmute_user(ctx, tgt.id)
+    text = f"✅ *𝗪𝗮𝗿𝗻𝗶𝗻𝗴𝘀 𝗿𝗲𝘀𝗲𝘁*\n\n👤 {user_name(tgt, escape=True)} now has 0 warnings — *saare groups* mein unmute ho gaya."
+    try:
+        await update.message.reply_text(text, parse_mode='Markdown')
+    except Exception:
+        # Naam mein Markdown-breaking character ho sakta hai — plain text
+        # fallback taaki confirmation kabhi bhi silently gayab na ho.
+        await update.message.reply_text(
+            f"✅ Warnings reset\n\n👤 {user_name(tgt, escape=False)} now has 0 warnings — unmuted in all groups."
+        )
 
 
 # ─── /del ───────────────────────────────────────────────────
