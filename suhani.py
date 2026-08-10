@@ -310,6 +310,15 @@ MAX_CACHE = 100
 
 CAPTCHA_PENDING = {}
 
+# ── Warn/Mute Auto-Unmute Captcha ──
+# Jab bhi kisi user ko blacklist/link/violation ki wajah se warning
+# milti hai aur wo mute ho jaata hai, uske saath ek aasan math captcha
+# attach hota hai. Captcha sahi solve karte hi: (1) mute turant hat
+# jaata hai, (2) us user ki SAARI warnings clear ho jaati hain — taaki
+# galti se mute hue log khud hi, bina kisi admin ke, apna account fix
+# kar sakein. Key format: "{chat_id}_{user_id}" -> {"answer": str}
+MUTE_CAPTCHA_PENDING = {}
+
 # ═══════════════════════════════════════════════════════════
 #  PREMIUM — Bio Guard & Edit Guard state
 # ═══════════════════════════════════════════════════════════
@@ -1673,6 +1682,19 @@ def kb_warn_actions(chat_id, user_id):
         ]
     ])
 
+def kb_warn_captcha(chat_id, user_id, options):
+    """Warning message ke saath attach hone wala self-serve captcha —
+    sirf jis user ko warning mili hai wahi ise solve kar sakta hai.
+    Solve karte hi mute hatega aur SAARI warnings clear ho jaayengi."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(opt, callback_data=f"wcap_{chat_id}_{user_id}_{opt}") for opt in options[:2]],
+        [InlineKeyboardButton(opt, callback_data=f"wcap_{chat_id}_{user_id}_{opt}") for opt in options[2:]],
+        [
+            InlineKeyboardButton("🔊 𝗨𝗻𝗺𝘂𝘁𝗲 (𝗔𝗱𝗺𝗶𝗻)", callback_data=f"unmute_{chat_id}_{user_id}"),
+            InlineKeyboardButton("🗑️ 𝗗𝗶𝘀𝗺𝗶𝘀𝘀", callback_data=f"dismiss_warn"),
+        ]
+    ])
+
 def kb_unban_button(chat_id, user_id):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🔓 𝗨𝗻𝗯𝗮𝗻", callback_data=f"unban_{chat_id}_{user_id}")]
@@ -1754,6 +1776,17 @@ def ckb_warn_actions(chat_id, user_id):
         {"text": "🔊 𝗨𝗻𝗺𝘂𝘁𝗲",   "callback_data": f"unmute_{chat_id}_{user_id}", "style": "success"},
         {"text": "🗑️ 𝗗𝗶𝘀𝗺𝗶𝘀𝘀", "callback_data": "dismiss_warn",                "style": "danger"},
     ]]
+
+def ckb_warn_captcha(chat_id, user_id, options):
+    """Colored-button version of kb_warn_captcha (send_colored_message ke saath use hoti hai)."""
+    return [
+        [{"text": opt, "callback_data": f"wcap_{chat_id}_{user_id}_{opt}", "style": "primary"} for opt in options[:2]],
+        [{"text": opt, "callback_data": f"wcap_{chat_id}_{user_id}_{opt}", "style": "primary"} for opt in options[2:]],
+        [
+            {"text": "🔊 𝗨𝗻𝗺𝘂𝘁𝗲 (𝗔𝗱𝗺𝗶𝗻)", "callback_data": f"unmute_{chat_id}_{user_id}", "style": "success"},
+            {"text": "🗑️ 𝗗𝗶𝘀𝗺𝗶𝘀𝘀",         "callback_data": "dismiss_warn",                "style": "danger"},
+        ]
+    ]
 
 def ckb_join_welcome():
     return [
@@ -2011,6 +2044,61 @@ async def captcha_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.answer("✅ Correct — welcome!")
     else:
         await query.answer("❌ Wrong answer — try again.", show_alert=True)
+
+
+async def _cleanup_mute_captcha(chat_id, user_id, delay):
+    """Warn-message auto-delete hone ke baad stale pending captcha hata do."""
+    await asyncio.sleep(delay)
+    MUTE_CAPTCHA_PENDING.pop(f"{chat_id}_{user_id}", None)
+
+
+async def mute_captcha_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Warning/mute ke saath attach captcha ka handler.
+    Sahi jawab → us user ka mute turant hatta hai AUR uski saari
+    warnings clear ho jaati hain (jaise /resetwarnings chala ho)."""
+    query = update.callback_query
+    data  = query.data
+    parts = data.split("_")
+    if len(parts) < 4:
+        await query.answer()
+        return
+
+    _, chat_id_s, user_id_s, chosen = parts[0], parts[1], parts[2], parts[3]
+    try:
+        chat_id = int(chat_id_s)
+        user_id = int(user_id_s)
+    except ValueError:
+        await query.answer()
+        return
+
+    if query.from_user.id != user_id:
+        await query.answer("🔒 Yeh captcha sirf muted user ke liye hai.", show_alert=True)
+        return
+
+    key = f"{chat_id}_{user_id}"
+    pending = MUTE_CAPTCHA_PENDING.get(key)
+    if not pending:
+        await query.answer("⏰ Yeh captcha ab valid nahi hai.", show_alert=True)
+        return
+
+    if chosen == pending["answer"]:
+        MUTE_CAPTCHA_PENDING.pop(key, None)
+        await do_unmute(ctx, chat_id, user_id)
+        db.reset_warnings(chat_id, user_id)
+        success_text = (
+            f"✅ *𝗖𝗔𝗣𝗧𝗖𝗛𝗔 𝗩𝗘𝗥𝗜𝗙𝗜𝗘𝗗!*\n"
+            f"{'─'*14}\n\n"
+            f"👤 {user_mention(query.from_user)}\n"
+            f"🔊 Mute hat gaya — ab aap group mein message bhej sakte ho.\n"
+            f"♻️ Saari purani warnings bhi clear ho gayi hain."
+        )
+        try:
+            await query.message.edit_text(success_text, parse_mode='Markdown')
+        except Exception:
+            pass
+        await query.answer("✅ Sahi jawab — unmute + warnings clear! 🎉")
+    else:
+        await query.answer("❌ Galat jawab — dobara try karo!", show_alert=True)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -3383,16 +3471,26 @@ async def warn_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # Build warning bar
     bars = "🟥" * cnt + "⬜" * (4 - cnt)
+
+    # ── Auto-unmute captcha — target khud solve karke mute + warning hata sake ──
+    cap_question, cap_answer, cap_options = generate_captcha()
+    MUTE_CAPTCHA_PENDING[f"{ch.id}_{tgt.id}"] = {"answer": cap_answer}
+
     msg = await update.message.reply_text(
         f"⚠️ *𝗪𝗔𝗥𝗡𝗜𝗡𝗚 𝗜𝗦𝗦𝗨𝗘𝗗*\n"
         f"{'─'*14}\n\n"
         f"👤 {user_name(tgt)}\n"
         f"📋 Reason: _{reason}_\n\n"
         f"Progress: {bars} `{cnt}/4`\n\n"
-        f"{WARN_MSG[cnt]}",        parse_mode='Markdown',
-        reply_markup=kb_warn_actions(ch.id, tgt.id)
+        f"{WARN_MSG[cnt]}\n\n"
+        f"🔐 *𝗔𝘂𝘁𝗼-𝗨𝗻𝗺𝘂𝘁𝗲 𝗖𝗮𝗽𝘁𝗰𝗵𝗮*\n"
+        f"Neeche sahi jawab dabao — mute *turant* hatega\n"
+        f"aur *saari warnings bhi clear* ho jaayengi:\n\n"
+        f"      `{cap_question}`",        parse_mode='Markdown',
+        reply_markup=kb_warn_captcha(ch.id, tgt.id, cap_options)
     )
     asyncio.create_task(delete_after(ctx, ch.id, msg.message_id, 90))
+    asyncio.create_task(_cleanup_mute_captcha(ch.id, tgt.id, 95))
 
 
 # ─── /warnings ──────────────────────────────────────────────
@@ -5378,6 +5476,11 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         warn_colors = {1: "🟡", 2: "🟠", 3: "🔴", 4: "💀"}
         color = warn_colors.get(cnt, "⚠️")
 
+        # ── Auto-unmute captcha — aasan math sawaal jo galti se mute
+        # hue user khud solve karke apna mute + warning hata sake ──
+        cap_question, cap_answer, cap_options = generate_captcha()
+        MUTE_CAPTCHA_PENDING[f"{ch.id}_{usr.id}"] = {"answer": cap_answer}
+
         warn_text = (
             f"*{color} WARNING {cnt}/4 — ACTION TAKEN*\n"
 
@@ -5386,18 +5489,23 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"📌 _{viol_txt}_\n\n"
             f"⏱ Muted: `{mute_str}` • Next: {next_str}\n"
             f"{'─'*14}\n"
-            f"Progress: {bars} `{cnt}/4`"
+            f"Progress: {bars} `{cnt}/4`\n\n"
+            f"🔐 *𝗔𝘂𝘁𝗼-𝗨𝗻𝗺𝘂𝘁𝗲 𝗖𝗮𝗽𝘁𝗰𝗵𝗮*\n"
+            f"Neeche sahi jawab dabao — mute *turant* hatega\n"
+            f"aur *saari warnings bhi clear* ho jaayengi:\n\n"
+            f"      `{cap_question}`"
         )
         # Blacklist-word notices should clear out fast (within 1 min) so the
         # group doesn't stay cluttered with "which word" call-outs.
         warn_delete_delay = 60 if violation == "blacklist" else 90
-        warn_msg_id = await send_colored_message(ch.id, warn_text, ckb_warn_actions(ch.id, usr.id))
+        asyncio.create_task(_cleanup_mute_captcha(ch.id, usr.id, warn_delete_delay + 5))
+        warn_msg_id = await send_colored_message(ch.id, warn_text, ckb_warn_captcha(ch.id, usr.id, cap_options))
         if warn_msg_id:
             asyncio.create_task(delete_after(ctx, ch.id, warn_msg_id, warn_delete_delay))
         else:
             notice = await ctx.bot.send_message(
                 ch.id, warn_text, parse_mode='Markdown',
-                reply_markup=kb_warn_actions(ch.id, usr.id)
+                reply_markup=kb_warn_captcha(ch.id, usr.id, cap_options)
             )
             asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, warn_delete_delay))
         return
@@ -6282,6 +6390,7 @@ def main():
     # ── Callback Queries ─────────────────────────────────────
     app.add_handler(CallbackQueryHandler(cfg_callback,        pattern=r"^cfg_"))
     app.add_handler(CallbackQueryHandler(captcha_callback,    pattern=r"^captcha_"))
+    app.add_handler(CallbackQueryHandler(mute_captcha_callback, pattern=r"^wcap_"))
     app.add_handler(CallbackQueryHandler(menu_callback,       pattern=r"^(menu_|show_|unmute_|unban_|dismiss_|close_)"))
     app.add_handler(CallbackQueryHandler(rep_callback,        pattern=r"^rep:"))
     app.add_handler(CallbackQueryHandler(groups_page_callback, pattern=r"^grppg_"))
