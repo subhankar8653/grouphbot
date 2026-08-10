@@ -313,7 +313,7 @@ CAPTCHA_PENDING = {}
 # ═══════════════════════════════════════════════════════════
 #  PREMIUM — Bio Guard & Edit Guard state
 # ═══════════════════════════════════════════════════════════
-BIO_CHECK_CACHE: dict[int, float] = {}          # user_id -> last bio-checked timestamp
+BIO_CHECK_CACHE: dict[tuple, float] = {}        # (chat_id,user_id) -> last bio-checked timestamp
 BIO_RECHECK_SEC = 1800                          # re-check a clean bio every 30 min
 SHADOW_MSG_COUNT: dict[tuple, int] = {}         # (chat_id,user_id) -> msgs since last notice
 SHADOW_FLOOD: dict[tuple, list] = {}            # (chat_id,user_id) -> [timestamps]
@@ -1192,8 +1192,12 @@ async def is_adm(ctx, chat_id, user_id):
             # Dono fail — agar pehle se cached hai toh woh use karo
             if k in CACHE:
                 return CACHE[k][0]
-            # Koi info nahi — doubt mein admin maano (safe side)
-            return True
+            # Koi info nahi — doubt mein NON-ADMIN maano (safe side).
+            # Pehle "True" tha, jisse API fail hone par har user galti se
+            # admin ban jata tha aur saare moderation checks (bio guard,
+            # blacklist, edit guard) skip ho jaate the. Moderation ke liye
+            # "safe" hamesha "restrict karo", "chhod do" nahi hota.
+            return False
 
 
 def get_sender_id(update: Update) -> int:
@@ -1296,6 +1300,20 @@ def user_name(u, escape: bool = False) -> str:
     except Exception:
         raw = "User"
     return md_esc(raw) if escape else raw
+
+
+def user_mention(u) -> str:
+    """Legacy-Markdown mention link — [Name](tg://user?id=...).
+    @username plain text sirf tabhi notify karta hai jab user ka koi public
+    username ho; jinke paas username nahi hai unhe kabhi notification nahi
+    milti. tg://user link hamesha, har user ke liye, real notification
+    trigger karti hai — isliye mute/warn/edit-guard jaise "user ko pata
+    chalna chahiye" wale messages mein ISKO use karo, user_name() ko nahi."""
+    try:
+        name = md_esc(u.first_name or (f"@{u.username}" if u.username else str(u.id)))
+        return f"[{name}](tg://user?id={u.id})"
+    except Exception:
+        return "User"
 
 
 def is_thank_you_text(text: str) -> bool:
@@ -4916,7 +4934,7 @@ async def on_edited_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     notice = await ctx.bot.send_message(
         ch.id,
         f"✏️ *𝗘𝗗𝗜𝗧 𝗚𝗨𝗔𝗥𝗗 𝗧𝗥𝗜𝗚𝗚𝗘𝗥𝗘𝗗*\n\n"
-        f"👤 {user_name(usr)} edited a message into a rule violation.\n"
+        f"👤 {user_mention(usr)} edited a message into a rule violation.\n"
         f"📋 {viol_txt}\n\n"
         f"Progress: {bars} `{cnt}/4`\n"
         f"🔇 Muted for *{mute_str}*",
@@ -5105,9 +5123,9 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         if shadow:
             # Periodically re-check — bio might already be cleaned up
-            last_checked = BIO_CHECK_CACHE.get(usr.id, 0)
+            last_checked = BIO_CHECK_CACHE.get(shadow_key, 0)
             if time.time() - last_checked >= BIO_RECHECK_SEC:
-                BIO_CHECK_CACHE[usr.id] = time.time()
+                BIO_CHECK_CACHE[shadow_key] = time.time()
                 bio_fetch_ok = True
                 try:
                     full = await ctx.bot.get_chat(usr.id)
@@ -5145,7 +5163,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 notice = await ctx.bot.send_message(
                     ch.id,
                     f"🕵️ *𝗕𝗜𝗢 𝗚𝗨𝗔𝗥𝗗*\n\n"
-                    f"👤 {user_name(usr)}, your profile bio contains {what}.\n"
+                    f"👤 {user_mention(usr)}, your profile bio contains {what}.\n"
                     f"Your messages won't be visible until it's removed.\n\n"
                     f"_Remove it from your bio, then send any message to be rechecked._",
                     parse_mode='Markdown'
@@ -5165,9 +5183,9 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
 
         # Not yet shadow-blacklisted — due for a bio check?
-        last_checked = BIO_CHECK_CACHE.get(usr.id, 0)
+        last_checked = BIO_CHECK_CACHE.get(shadow_key, 0)
         if time.time() - last_checked >= BIO_RECHECK_SEC:
-            BIO_CHECK_CACHE[usr.id] = time.time()
+            BIO_CHECK_CACHE[shadow_key] = time.time()
             try:
                 full = await ctx.bot.get_chat(usr.id)
                 bio = getattr(full, "bio", None) or ""
@@ -5183,7 +5201,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 notice = await ctx.bot.send_message(
                     ch.id,
                     f"🕵️ *𝗕𝗜𝗢 𝗚𝗨𝗔𝗥𝗗 𝗧𝗥𝗜𝗚𝗚𝗘𝗥𝗘𝗗*\n\n"
-                    f"👤 {user_name(usr)}, your profile bio contains {what}.\n"
+                    f"👤 {user_mention(usr)}, your profile bio contains {what}.\n"
                     f"Your messages won't be visible until it's removed.\n\n"
                     f"_Remove it from your bio, then send any message to be rechecked._",
                     parse_mode='Markdown'
@@ -5227,7 +5245,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 await do_mute(ctx, ch.id, usr.id, mute_sec)
                 notice = await ctx.bot.send_message(
                     ch.id,
-                    f"📚 {user_name(usr)},\n\n"
+                    f"📚 {user_mention(usr)},\n\n"
                     f"A group rule was broken again.\n"
                     f"🔇 Muted for *{mute_min} minutes*.\n\n"
                     f"_(Repeat offense #{promo_count - 1} — mute duration increases each time.)_",
@@ -5259,7 +5277,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"*{color} WARNING {cnt}/4 — ACTION TAKEN*\n"
 
             f"{'─'*14}\n\n"
-            f"👤 *{user_name(usr)}*\n"
+            f"👤 {user_mention(usr)}\n"
             f"📌 _{viol_txt}_\n\n"
             f"⏱ Muted: `{mute_str}` • Next: {next_str}\n"
             f"{'─'*14}\n"
