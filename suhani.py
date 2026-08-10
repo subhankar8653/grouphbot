@@ -362,6 +362,19 @@ def bio_violation(bio: str, chat_id: int):
 # ═══════════════════════════════════════════════════════════
 #  MONGODB DATABASE
 # ═══════════════════════════════════════════════════════════
+class SeenUser:
+    """Lightweight User-lookalike (id/first_name/username) built from our
+    own seen-users index, so user_name()/user_mention() can render a nice
+    name/mention for a target resolved by @username or userid — without
+    needing a live Telegram API object."""
+    __slots__ = ("id", "first_name", "username")
+
+    def __init__(self, id_, first_name=None, username=None):
+        self.id = id_
+        self.first_name = first_name
+        self.username = username
+
+
 class DB:
     def __init__(self):
         try:
@@ -388,6 +401,13 @@ class DB:
         self.rep_daily  = self.db["rep_daily_limit"] # daily rep-give tracking (3/day cap)
         self.accepted_rep_groups = self.db["accepted_rep_groups"]  # groups jinka rep Guardian Coin mein convert hota hai
         self.withdrawals = self.db["withdrawals"]    # Guardian Coin withdrawal requests
+        # user_index: username/user_id se seen-user lookup — Telegram Bot API
+        # khud arbitrary @username ya user_id ko resolve NAHI kar sakta jab
+        # tak bot ne us user ka koi message/join kahin dekha na ho. Isliye
+        # har group message + naye member pe yahan ek chhoti si local index
+        # banate hain, taaki /ban, /mute, /warn waghera @username ya userid
+        # se bhi reliably kaam karein (sirf reply pe depend na karna pade).
+        self.user_index = self.db["user_index"]
 
         if not self.stats_c.find_one({"_id": "global"}):
             self.stats_c.insert_one({"_id": "global", "warnings": 0, "mutes": 0, "scanned": 0, "gmutes": 0})
@@ -405,6 +425,7 @@ class DB:
             self.activity.create_index([("user_id", 1), ("date", 1)])
             self.withdrawals.create_index("status")
             self.withdrawals.create_index([("user_id", 1), ("status", 1)])
+            self.user_index.create_index("username")
             print("✅ MongoDB indexes ensured!")
         except Exception as e:
             print(f"⚠️ Index creation warning: {e}")
@@ -414,6 +435,44 @@ class DB:
 
     def get_stats(self):
         return self.stats_c.find_one({"_id": "global"}) or {}
+
+    def remember_user(self, user):
+        """Har real (non-bot) user ka id + username + first_name yaad rakho.
+        Yeh call bahut cheap hai (ek upsert) aur har group message +
+        naye member join pe hoti hai — isi index se baad mein /ban, /mute,
+        /warn waghera ko sirf @username ya userid se bhi target resolve
+        karne diya jaata hai, reply ke bina."""
+        if user is None or getattr(user, "is_bot", False):
+            return
+        try:
+            doc = {}
+            if getattr(user, "username", None):
+                doc["username"] = user.username.lower()
+            if getattr(user, "first_name", None):
+                doc["first_name"] = user.first_name
+            if not doc:
+                return
+            self.user_index.update_one({"_id": user.id}, {"$set": doc}, upsert=True)
+        except Exception:
+            pass
+
+    def find_user_by_username(self, username):
+        """@username (bina @) se pehle-dekhe hue user ka ID dhoondo."""
+        try:
+            doc = self.user_index.find_one({"username": username.lower()})
+            return doc["_id"] if doc else None
+        except Exception:
+            return None
+
+    def get_user_info(self, user_id):
+        """Seen-user index se ek user ka naam/username nikaalo (display ke liye)."""
+        try:
+            doc = self.user_index.find_one({"_id": user_id})
+            if not doc:
+                return None
+            return SeenUser(user_id, doc.get("first_name"), doc.get("username"))
+        except Exception:
+            return None
 
     def add_group(self, chat_id):
         self.groups.update_one({"_id": chat_id}, {"$setOnInsert": {
@@ -1353,7 +1412,7 @@ async def resolve_target(update: Update, ctx, usage: str):
     """
     Returns (target_id, target_obj, consumed, error):
       target_id  -> resolved user id, or None if resolution failed
-      target_obj -> a User/Chat-like object with .id/.first_name/.username
+      target_obj -> a User/SeenUser-like object with .id/.first_name/.username
                     (for building names/mentions), or None if we only have
                     a bare numeric id and couldn't look up a profile for it
       consumed   -> how many leading ctx.args were used for the target
@@ -1361,6 +1420,13 @@ async def resolve_target(update: Update, ctx, usage: str):
                     the caller can treat the *rest* of ctx.args as
                     reason/duration/etc.
       error      -> a ready-to-send error/usage message, or None on success
+
+    IMPORTANT: Telegram's Bot API cannot resolve an arbitrary @username or
+    userid on its own — it only knows about users the bot has already
+    "seen" somewhere (a message, a join event, a DM). So this relies on
+    db.user_index (built from every group message via track_bot_reply and
+    every join via on_join) as the primary source of truth, with
+    ctx.bot.get_chat() only as a best-effort bonus for a nicer name.
     """
     msg = update.message
     if msg.reply_to_message and msg.reply_to_message.from_user:
@@ -1369,24 +1435,35 @@ async def resolve_target(update: Update, ctx, usage: str):
 
     if ctx.args:
         raw = ctx.args[0]
+
         if raw.startswith('@'):
             uname = raw.lstrip('@')
+            uid = db.find_user_by_username(uname)
+            if uid:
+                info = db.get_user_info(uid) or SeenUser(uid, username=uname)
+                return uid, info, 1, None
+            # Not in our own index yet — try Telegram directly as a
+            # last resort (works occasionally, e.g. if bot has DM'd them).
             try:
                 chat_obj = await ctx.bot.get_chat(f"@{uname}")
                 return chat_obj.id, chat_obj, 1, None
             except Exception:
-                return None, None, 1, f"❌ Cannot find user: `{raw}`"
+                return None, None, 1, (
+                    f"❌ Can't find `@{uname}` yet.\n"
+                    f"Bot ne is user ka koi message ya join is group mein "
+                    f"track nahi kiya — isliye @username se resolve nahi ho paa raha.\n"
+                    f"Fix: unke kisi message par *reply* karke command bhejo, "
+                    f"ya unka *numeric user ID* use karo."
+                )
+
         try:
             tid = int(raw)
         except ValueError:
             return None, None, 1, f"❌ Invalid user ID or username: `{raw}`"
-        # Numeric ID given — try to also fetch a display name/profile so
-        # messages look nice; totally fine if this fails, we still have the id.
-        try:
-            chat_obj = await ctx.bot.get_chat(tid)
-            return chat_obj.id, chat_obj, 1, None
-        except Exception:
-            return tid, None, 1, None
+        # Numeric ID given — pull a display name from our own index if we
+        # have one (no Telegram API call needed, so this never fails/hangs).
+        info = db.get_user_info(tid)
+        return tid, info, 1, None
 
     return None, None, 0, usage
 
@@ -3467,6 +3544,11 @@ async def mute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("🔊 𝗨𝗻𝗺𝘂𝘁𝗲", callback_data=f"unmute_{ch.id}_{tid}")]
             ])
         )
+    else:
+        await update.message.reply_text(
+            "⚠️ Couldn't mute — make sure the bot is admin here and the "
+            "user is actually a member of this group."
+        )
 
 
 # ─── /unmute ────────────────────────────────────────────────
@@ -3531,6 +3613,8 @@ async def unban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"✅ {target_name(tobj, tid)} has been *unbanned*.",
             parse_mode='Markdown'
         )
+    else:
+        await update.message.reply_text("⚠️ Couldn't unban — check the bot has admin rights.")
 
 
 # ─── /warn ──────────────────────────────────────────────────
@@ -5118,6 +5202,15 @@ async def track_bot_reply(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     if not msg or not msg.from_user:
         return
+
+    # ── Seen-users index — HAR group message se sender ko yaad rakho.
+    # Yeh alag hai upar wale is_bot check se: humein human users bhi
+    # chahiye taaki /ban, /mute, /warn waghera baad mein @username ya
+    # userid se bhi resolve ho sakein (sirf reply pe depend na rahe). ──
+    db.remember_user(msg.from_user)
+    if msg.reply_to_message and msg.reply_to_message.from_user:
+        db.remember_user(msg.reply_to_message.from_user)
+
     # Sirf dusre bots track karo (hamara bot nahi)
     if not msg.from_user.is_bot or msg.from_user.id == ctx.bot.id:
         return
@@ -5649,6 +5742,7 @@ async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
     for member in update.message.new_chat_members:
+        db.remember_user(member)  # seen-users index — resolve @username/userid later
         if member.id == ctx.bot.id:
             db.add_group(update.effective_chat.id)
             try:
@@ -5998,557 +6092,4 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
             f"*📜 GROUP RULES*\n{'─'*14}\n\n{rules}\n\n"
             f"_To set a new rule, tap the button below and send your message._",
             [
-                [{"text": "✏️ 𝗦𝗲𝘁 𝗡𝗲𝘄 𝗥𝘂𝗹𝗲𝘀", "callback_data": "cfg_rules_set", "style": "primary"}],
-                [{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_main", "style": "primary"}],
-            ]
-        )
-        return
-
-    if data == "cfg_rules_set":
-        SETTINGS_PENDING[(ch.id, u.id)] = {"action": "rules", "panel_msg_id": query.message.message_id}
-        await _cfg_edit(query, ch.id, "✏️ *Type and send the new rules* (next message):", rows_back_cfg())
-        return
-
-    # ── Sticker auto-delete ──
-    if data == "cfg_stkdel":
-        g = db.get_group(ch.id)
-        stk = g.get("sticker_delete_min")
-        await _cfg_edit(
-            query, ch.id,
-            f"*🗑️ STICKER AUTO-DELETE*\n{'─'*14}\n\n"
-            f"Status: {'🟢 ON — ' + str(stk) + ' min' if stk else '🔴 OFF'}\n\n"
-            f"_Stickers/GIFs will auto-delete after this duration._",
-            [
-                [{"text": "🔴 𝗧𝘂𝗿𝗻 𝗢𝗙𝗙" if stk else "🟢 Turn ON", "callback_data": "cfg_stkdel_toggle",
-                  "style": "danger" if stk else "success"}],
-                [{"text": "✏️ 𝗦𝗲𝘁 𝗠𝗶𝗻𝘂𝘁𝗲𝘀", "callback_data": "cfg_stkdel_set", "style": "primary"}],
-                [{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_main", "style": "primary"}],
-            ]
-        )
-        return
-
-    if data == "cfg_stkdel_toggle":
-        g = db.get_group(ch.id)
-        if g.get("sticker_delete_min"):
-            db.update_group(ch.id, {"sticker_delete_min": None})
-        else:
-            db.update_group(ch.id, {"sticker_delete_min": 5})
-        await cfg_callback_reroute(update, ctx, "cfg_stkdel")
-        return
-
-    if data == "cfg_stkdel_set":
-        SETTINGS_PENDING[(ch.id, u.id)] = {"action": "stkdel_min", "panel_msg_id": query.message.message_id}
-        await _cfg_edit(
-            query, ch.id,
-            "✏️ *After how many minutes should stickers/GIFs be deleted?* (send a number, e.g. `5`):",
-            rows_back_cfg()
-        )
-        return
-
-    # ── Auto-delete ──
-    if data == "cfg_autodel":
-        g = db.get_group(ch.id)
-        ad = g.get("autodelete_min")
-        await _cfg_edit(
-            query, ch.id,
-            f"*⏱️ AUTO-DELETE MESSAGES*\n{'─'*14}\n\n"
-            f"Status: {'🟢 ON — ' + str(ad) + ' min' if ad else '🔴 OFF'}\n\n"
-            f"_Normal messages will auto-delete after this duration._",
-            [
-                [{"text": "🔴 𝗧𝘂𝗿𝗻 𝗢𝗙𝗙" if ad else "🟢 Turn ON", "callback_data": "cfg_autodel_toggle",
-                  "style": "danger" if ad else "success"}],
-                [{"text": "✏️ 𝗦𝗲𝘁 𝗠𝗶𝗻𝘂𝘁𝗲𝘀", "callback_data": "cfg_autodel_set", "style": "primary"}],
-                [{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_main", "style": "primary"}],
-            ]
-        )
-        return
-
-    if data == "cfg_autodel_toggle":
-        g = db.get_group(ch.id)
-        if g.get("autodelete_min"):
-            db.update_group(ch.id, {"autodelete_min": None})
-        else:
-            db.update_group(ch.id, {"autodelete_min": 10})
-        await cfg_callback_reroute(update, ctx, "cfg_autodel")
-        return
-
-    if data == "cfg_autodel_set":
-        SETTINGS_PENDING[(ch.id, u.id)] = {"action": "autodel_min", "panel_msg_id": query.message.message_id}
-        await _cfg_edit(
-            query, ch.id,
-            "✏️ *After how many minutes should normal messages be deleted?* (send a number, e.g. `10`):",
-            rows_back_cfg()
-        )
-        return
-
-    # ── Warn durations ──
-    if data == "cfg_warndur":
-        wd = db.get_warn_durations(ch.id)
-        await _cfg_edit(
-            query, ch.id,
-            f"*⚠️ WARN → MUTE DURATIONS*\n{'─'*14}\n\n"
-            f"🟡 W1: `{_sec_human(wd[1])}`\n"
-            f"🟠 W2: `{_sec_human(wd[2])}`\n"
-            f"🔴 W3: `{_sec_human(wd[3])}`\n"
-            f"💀 W4: `{_sec_human(wd[4])}` _(global mute)_\n\n"
-            f"_Select a stage to edit:_",
-            [
-                [
-                    {"text": "𝗪𝟭 ✏️", "callback_data": "cfg_wd_1", "style": "primary"},
-                    {"text": "𝗪𝟮 ✏️", "callback_data": "cfg_wd_2", "style": "primary"},
-                ],
-                [
-                    {"text": "𝗪𝟯 ✏️", "callback_data": "cfg_wd_3", "style": "primary"},
-                    {"text": "𝗪𝟰 ✏️", "callback_data": "cfg_wd_4", "style": "primary"},
-                ],
-                [{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_main", "style": "primary"}],
-            ]
-        )
-        return
-
-    if data.startswith("cfg_wd_"):
-        stage = int(data.split("_")[-1])
-        SETTINGS_PENDING[(ch.id, u.id)] = {"action": "warndur", "extra": stage, "panel_msg_id": query.message.message_id}
-        await _cfg_edit(query, ch.id, f"✏️ *Send seconds for W{stage}* (e.g. `60`):", rows_back_cfg())
-        return
-
-    # ── Blacklist ──
-    if data == "cfg_bl":
-        words = db.get_blacklist(ch.id)
-        preview = ", ".join(words[:15]) if words else "_(empty)_"
-        await _cfg_edit(
-            query, ch.id,
-            f"*⛔ 𝗚𝗥𝗢𝗨𝗣 𝗕𝗟𝗔𝗖𝗞𝗟𝗜𝗦𝗧*\n{'─'*14}\n\n"
-            f"Words: {preview}\n\n"
-            f"_You can also disable the owner's global blacklist words for this group._",
-            [
-                [
-                    {"text": "➕ 𝗔𝗱𝗱 𝗪𝗼𝗿𝗱", "callback_data": "cfg_bl_add", "style": "success"},
-                    {"text": "➖ 𝗥𝗲𝗺𝗼𝘃𝗲 𝗪𝗼𝗿𝗱", "callback_data": "cfg_bl_rem", "style": "danger"},
-                ],
-                [{"text": "🌐 𝗚𝗹𝗼𝗯𝗮𝗹 𝗪𝗼𝗿𝗱𝘀 (𝗼𝘄𝗻𝗲𝗿 𝘀𝗲𝘁)", "callback_data": "cfg_bl_g", "style": "primary"}],
-                [{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_main", "style": "primary"}],
-            ]
-        )
-        return
-
-    if data == "cfg_bl_add":
-        SETTINGS_PENDING[(ch.id, u.id)] = {"action": "bl_add", "panel_msg_id": query.message.message_id}
-        await _cfg_edit(query, ch.id, "✏️ *Send the word to add to the blacklist:*", rows_back_cfg())
-        return
-
-    if data == "cfg_bl_rem":
-        SETTINGS_PENDING[(ch.id, u.id)] = {"action": "bl_rem", "panel_msg_id": query.message.message_id}
-        await _cfg_edit(query, ch.id, "✏️ *Send the word to remove from the blacklist:*", rows_back_cfg())
-        return
-
-    if data == "cfg_bl_g":
-        gwords = db.get_gblacklist()
-        disabled = set(db.get_disabled_gwords(ch.id))
-        if not gwords:
-            await _cfg_edit(query, ch.id, "🌐 *Owner hasn't set any global blacklist word yet.*", rows_back_cfg())
-            return
-        rows = []
-        for w in gwords[:20]:
-            off = w in disabled
-            icon = "🔴 OFF" if off else "🟢 ON"
-            rows.append([{"text": f"{icon} — {w}", "callback_data": f"cfg_bl_gt_{w[:45]}",
-                          "style": "danger" if off else "success"}])
-        rows.append([{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_bl", "style": "primary"}])
-        await _cfg_edit(
-            query, ch.id,
-            f"*🌐 GLOBAL BLACKLIST WORDS*\n{'─'*14}\n\n"
-            f"_Tap to turn ON/OFF for your group (the global list itself won't change, only your group is affected):_",
-            rows
-        )
-        return
-
-    if data.startswith("cfg_bl_gt_"):
-        word = data[len("cfg_bl_gt_"):]
-        disabled = set(db.get_disabled_gwords(ch.id))
-        if word in disabled:
-            db.enable_gword(ch.id, word)
-        else:
-            db.disable_gword(ch.id, word)
-        await cfg_callback_reroute(update, ctx, "cfg_bl_g")
-        return
-
-    # ── Whitelist ──
-    if data == "cfg_wl":
-        words = db.get_whitelist(ch.id)
-        preview = ", ".join(words[:15]) if words else "_(empty)_"
-        await _cfg_edit(
-            query, ch.id,
-            f"*✅ 𝗚𝗥𝗢𝗨𝗣 𝗪𝗛𝗜𝗧𝗘𝗟𝗜𝗦𝗧*\n{'─'*14}\n\n"
-            f"Words: {preview}\n\n"
-            f"_You can also disable the owner's global whitelist words for this group._",
-            [
-                [
-                    {"text": "➕ 𝗔𝗱𝗱 𝗪𝗼𝗿𝗱", "callback_data": "cfg_wl_add", "style": "success"},
-                    {"text": "➖ 𝗥𝗲𝗺𝗼𝘃𝗲 𝗪𝗼𝗿𝗱", "callback_data": "cfg_wl_rem", "style": "danger"},
-                ],
-                [{"text": "🌐 𝗚𝗹𝗼𝗯𝗮𝗹 𝗪𝗼𝗿𝗱𝘀 (𝗼𝘄𝗻𝗲𝗿 𝘀𝗲𝘁)", "callback_data": "cfg_wl_g", "style": "primary"}],
-                [{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_main", "style": "primary"}],
-            ]
-        )
-        return
-
-    if data == "cfg_wl_add":
-        SETTINGS_PENDING[(ch.id, u.id)] = {"action": "wl_add", "panel_msg_id": query.message.message_id}
-        await _cfg_edit(query, ch.id, "✏️ *Send the word to add to the whitelist:*", rows_back_cfg())
-        return
-
-    if data == "cfg_wl_rem":
-        SETTINGS_PENDING[(ch.id, u.id)] = {"action": "wl_rem", "panel_msg_id": query.message.message_id}
-        await _cfg_edit(query, ch.id, "✏️ *Send the word to remove from the whitelist:*", rows_back_cfg())
-        return
-
-    if data == "cfg_wl_g":
-        gwords = db.get_gwhitelist()
-        disabled = set(db.get_disabled_gwhite(ch.id))
-        if not gwords:
-            await _cfg_edit(query, ch.id, "🌐 *Owner hasn't set any global whitelist word yet.*", rows_back_cfg())
-            return
-        rows = []
-        for w in gwords[:20]:
-            off = w in disabled
-            icon = "🔴 OFF" if off else "🟢 ON"
-            rows.append([{"text": f"{icon} — {w}", "callback_data": f"cfg_wl_gt_{w[:45]}",
-                          "style": "danger" if off else "success"}])
-        rows.append([{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_wl", "style": "primary"}])
-        await _cfg_edit(
-            query, ch.id,
-            f"*🌐 GLOBAL WHITELIST WORDS*\n{'─'*14}\n\n"
-            f"_Tap to turn ON/OFF for your group:_",
-            rows
-        )
-        return
-
-    if data.startswith("cfg_wl_gt_"):
-        word = data[len("cfg_wl_gt_"):]
-        disabled = set(db.get_disabled_gwhite(ch.id))
-        if word in disabled:
-            db.enable_gwhite(ch.id, word)
-        else:
-            db.disable_gwhite(ch.id, word)
-        await cfg_callback_reroute(update, ctx, "cfg_wl_g")
-        return
-
-    # ── Filters grid ──
-    if data == "cfg_noop":
-        return
-
-    if data == "cfg_filters":
-        await _cfg_edit(
-            query, ch.id,
-            f"*🛡️ FILTERS — {_filters_status_line(ch.id)}*\n{'─'*14}\n\n"
-            f"✅ = ON     ▫️ = OFF\n"
-            f"_Tap any filter — it toggles ON/OFF instantly._",
-            kb_filters_grid(ch.id)
-        )
-        return
-
-    if data.startswith("cfg_f_"):
-        key = data[len("cfg_f_"):]
-        if key in DEFAULT_FILTERS:
-            cur = db.get_filters(ch.id).get(key)
-            db.set_filter(ch.id, key, not cur)
-            state = "🟢 ON" if not cur else "🔴 OFF"
-            try:
-                await query.answer(f"{FILTER_LABELS.get(key, key)} → {state}")
-            except Exception:
-                pass
-        await _cfg_edit(
-            query, ch.id,
-            f"*🛡️ FILTERS — {_filters_status_line(ch.id)}*\n{'─'*14}\n\n"
-            f"✅ = ON     ▫️ = OFF\n"
-            f"_Tap any filter — it toggles ON/OFF instantly._",
-            kb_filters_grid(ch.id)
-        )
-        return
-
-    # ── Captcha ──
-    if data == "cfg_captcha":
-        g = db.get_group(ch.id)
-        on = bool(g.get("captcha"))
-        await _cfg_edit(
-            query, ch.id,
-            f"*🎭 CAPTCHA VERIFICATION*\n{'─'*14}\n\n"
-            f"Status: {ICON_ON + ' ON' if on else ICON_OFF + ' OFF'}\n\n"
-            f"_New members must solve a math question to chat, until verified._",
-            [
-                [{"text": f"{ICON_OFF} 𝗧𝘂𝗿𝗻 𝗢𝗙𝗙" if on else f"{ICON_ON} Turn ON", "callback_data": "cfg_captcha_toggle",
-                  "style": "danger" if on else "success"}],
-                [{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_main", "style": "primary"}],
-            ]
-        )
-        return
-
-    if data == "cfg_captcha_toggle":
-        g = db.get_group(ch.id)
-        db.update_group(ch.id, {"captcha": not bool(g.get("captcha"))})
-        await cfg_callback_reroute(update, ctx, "cfg_captcha")
-        return
-
-
-async def cfg_callback_reroute(update, ctx, new_data):
-    """Ek hi callback function ke andar dusre 'view' pe re-render karne ke liye."""
-    await cfg_callback(update, ctx, data=new_data)
-
-
-async def handle_settings_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE, key) -> bool:
-    """/settings panel se pending text-input (rules/word/number) ko process karta hai."""
-    pending = SETTINGS_PENDING.get(key)
-    if not pending:
-        return False
-    ch_id, user_id = key
-    msg = update.message
-    text = (msg.text or "").strip()
-    action = pending["action"]
-
-    if not await _cfg_is_authorized(ctx, ch_id, user_id):
-        SETTINGS_PENDING.pop(key, None)
-        return False
-
-    def _int_or_none(s):
-        try:
-            return int(s)
-        except Exception:
-            return None
-
-    reply = None
-    if action == "rules":
-        db.set_rules(ch_id, text)
-        reply = "✅ *Rules updated.*"
-    elif action == "stkdel_min":
-        n = _int_or_none(text)
-        if n is None or n <= 0:
-            reply = "⚠️ Send a valid number (e.g. `5`)."
-        else:
-            db.update_group(ch_id, {"sticker_delete_min": n})
-            reply = f"✅ *Sticker auto-delete set to {n} min.*"
-    elif action == "autodel_min":
-        n = _int_or_none(text)
-        if n is None or n <= 0:
-            reply = "⚠️ Send a valid number (e.g. `10`)."
-        else:
-            db.update_group(ch_id, {"autodelete_min": n})
-            reply = f"✅ *Auto-delete set to {n} min.*"
-    elif action == "warndur":
-        n = _int_or_none(text)
-        stage = pending.get("extra")
-        if n is None or n <= 0:
-            reply = "⚠️ Send a valid number of seconds (e.g. `60`)."
-        else:
-            db.set_warn_duration(ch_id, stage, n)
-            reply = f"✅ *W{stage} duration set to {_sec_human(n)}.*"
-    elif action == "bl_add":
-        if text:
-            db.add_blacklist(ch_id, text.split()[0])
-            reply = f"✅ *'{text.split()[0]}' added to the blacklist.*"
-    elif action == "bl_rem":
-        if text:
-            db.remove_blacklist(ch_id, text.split()[0])
-            reply = f"✅ *'{text.split()[0]}' removed from the blacklist.*"
-    elif action == "wl_add":
-        if text:
-            db.add_whitelist(ch_id, text.split()[0])
-            reply = f"✅ *'{text.split()[0]}' added to the whitelist.*"
-    elif action == "wl_rem":
-        if text:
-            db.remove_whitelist(ch_id, text.split()[0])
-            reply = f"✅ *'{text.split()[0]}' removed from the whitelist.*"
-
-    SETTINGS_PENDING.pop(key, None)
-    if reply is None:
-        reply = "⚠️ Something went wrong — try /settings again."
-
-    panel_msg_id = pending.get("panel_msg_id")
-    back_rows = [[{"text": "◀️ 𝗕𝗮𝗰𝗸 𝘁𝗼 𝗦𝗲𝘁𝘁𝗶𝗻𝗴𝘀", "callback_data": "cfg_main", "style": "primary"}]]
-
-    # Purana "type karke bhejo" prompt ab kaam ka nahi raha — usi message ko edit
-    # karke confirmation dikhao, taaki ek fizool message group mein na reh jaaye.
-    edited = False
-    if panel_msg_id:
-        ok = await edit_colored_message(ch_id, panel_msg_id, reply, back_rows, parse_mode='Markdown')
-        if not ok:
-            try:
-                await ctx.bot.edit_message_text(
-                    chat_id=ch_id, message_id=panel_msg_id,
-                    text=reply, parse_mode='Markdown', reply_markup=_rows_to_markup(back_rows)
-                )
-                ok = True
-            except Exception:
-                ok = False
-        if ok:
-            _remember_menu_owner(ch_id, panel_msg_id, user_id)
-            schedule_panel_autodelete(ctx, ch_id, panel_msg_id)
-            edited = True
-
-    if not edited:
-        msg_id = await send_colored_message(ch_id, reply, back_rows, parse_mode='Markdown')
-        if not msg_id:
-            sent = await msg.reply_text(reply, parse_mode='Markdown', reply_markup=_rows_to_markup(back_rows))
-            msg_id = sent.message_id
-        _remember_menu_owner(ch_id, msg_id, user_id)
-        schedule_panel_autodelete(ctx, ch_id, msg_id)
-
-    try:
-        await msg.delete()
-    except Exception:
-        pass
-    return True
-
-
-# ═══════════════════════════════════════════════════════════
-#  WEB SERVER (Railway health check)
-# ═══════════════════════════════════════════════════════════
-web_app = Flask(__name__)
-
-@web_app.route('/')
-def home():
-    return "🛡️ Guardian Bot — Online"
-
-@web_app.route('/health')
-def health():
-    return "OK"
-
-def run_web():
-    port = int(os.environ.get('PORT', 8080))
-    web_app.run(host='0.0.0.0', port=port, use_reloader=False)
-
-
-# ═══════════════════════════════════════════════════════════
-#  MAIN
-# ═══════════════════════════════════════════════════════════
-def main():
-    print("╔" + "═"*43 + "╗")
-    print("║   🛡️  GUARDIAN GROUP PROTECTION BOT v9.0   ║")
-    print("╠" + "═"*43 + "╣")
-    print("║   ⚡ MongoDB Database Active              ║")
-    print("║   👑 Immortal Users System                ║")
-    print("║   🎭 Captcha Verification                 ║")
-    print("║   🗑️  Sticker/Media Auto-Delete           ║")
-    print("║   ⛔ Custom Blacklist/Whitelist           ║")
-    print("║   🌊 Anti-Flood Protection                ║")
-    print("╚" + "═"*43 + "╝")
-    print(f"👑 Owner ID: {OWNER_ID}")
-    print(f"🌐 Web Port: {os.environ.get('PORT', 8080)}")
-    print("─" * 45)
-
-    app = Application.builder().token(BOT_TOKEN).build()
-
-    # ── Commands ─────────────────────────────────────────────
-    app.add_handler(CommandHandler("start",            start_cmd))
-    app.add_handler(CommandHandler("help",             help_cmd))
-    app.add_handler(CommandHandler("rule",             rule_cmd))
-    app.add_handler(CommandHandler("rules",            rule_cmd))
-    app.add_handler(CommandHandler("setrules",         setrules_cmd))
-    app.add_handler(CommandHandler("id",               id_cmd))
-    app.add_handler(CommandHandler("setlinked",        setlinked_cmd))
-    app.add_handler(CommandHandler("testmute",         testmute_cmd))
-    app.add_handler(CommandHandler("mute",             mute_cmd))
-    app.add_handler(CommandHandler("unmute",           unmute_cmd))
-    app.add_handler(CommandHandler("ban",              ban_cmd))
-    app.add_handler(CommandHandler("unban",            unban_cmd))
-    app.add_handler(CommandHandler("warn",             warn_cmd))
-    app.add_handler(CommandHandler("warnings",         warnings_cmd))
-    app.add_handler(CommandHandler("resetwarnings",    reset_cmd))
-    app.add_handler(CommandHandler("rep",              rep_cmd))
-    app.add_handler(CommandHandler("repboard",         repboard_cmd))
-    # ── Guardian Coin / money reward system: DISABLED (2026-08) ──
-    # Reputation ab sirf warnings clear karne ke kaam aata hai, koi
-    # paisa/coin conversion nahi hota. Isliye /wallet, /withdraw,
-    # /accept_rep, /unaccept_rep, /earn_groups, /makeconvertible
-    # commands register nahi kiye ja rahe.
-    app.add_handler(CommandHandler("reputation",       reputation_cmd))
-    app.add_handler(CommandHandler("del",              del_cmd))
-    app.add_handler(CommandHandler("purge",            purge_cmd))
-    app.add_handler(CommandHandler("immortal",         immortal_cmd))
-    app.add_handler(CommandHandler("unimmortal",       unimmortal_cmd))
-    app.add_handler(CommandHandler("immortals",        immortals_cmd))
-    app.add_handler(CommandHandler("addblacklist",     addblacklist_cmd))
-    app.add_handler(CommandHandler("removeblacklist",  removeblacklist_cmd))
-    app.add_handler(CommandHandler("blacklist",        blacklist_cmd))
-    app.add_handler(CommandHandler("addwhitelist",     addwhitelist_cmd))
-    app.add_handler(CommandHandler("removewhitelist",  removewhitelist_cmd))
-    app.add_handler(CommandHandler("whitelist",        whitelist_cmd))
-    app.add_handler(CommandHandler("sticker_delete",   sticker_delete_cmd))
-    app.add_handler(CommandHandler("autodelete",       autodelete_cmd))
-    app.add_handler(CommandHandler("captcha",          captcha_cmd))
-    app.add_handler(CommandHandler("broadcast",        broadcast_cmd))
-    app.add_handler(CommandHandler("groups",           groups_cmd))
-    app.add_handler(CommandHandler("regroup",          regroup_cmd))
-    app.add_handler(CommandHandler("globalmutes",      globalmutes_cmd))
-    app.add_handler(CommandHandler("unglobalmute",     unglobalmute_cmd))
-    app.add_handler(CommandHandler("gblacklist",       gblacklist_cmd))
-    app.add_handler(CommandHandler("gwhitelist",       gwhitelist_cmd))
-    app.add_handler(CommandHandler("stats",            stats_cmd))
-    # /rankings (message-activity leaderboard): DISABLED — isko chalu rakhne
-    # ke liye har group ke har message ko scan karna padta tha, jo bade
-    # groups mein bot ko slow/busy kar deta tha.
-    app.add_handler(CommandHandler("power",            power_cmd))
-    app.add_handler(CommandHandler("unpower",          unpower_cmd))
-    app.add_handler(CommandHandler("fban",             fban_cmd))
-    app.add_handler(CommandHandler("gunban",           gunban_cmd))
-    app.add_handler(CommandHandler("gclearwarn",       gclearwarn_cmd))
-    app.add_handler(CommandHandler("adexempt",         adexempt_cmd))
-    app.add_handler(CommandHandler("unadexempt",       unadexempt_cmd))
-    app.add_handler(CommandHandler("premium",          premium_cmd))
-    app.add_handler(CommandHandler("premium_list",      premium_list_cmd))
-    app.add_handler(CommandHandler("addteacher",       addteacher_cmd))
-    app.add_handler(CommandHandler("removeteacher",    removeteacher_cmd))
-    app.add_handler(CommandHandler("teachers",         teachers_cmd))
-    app.add_handler(CommandHandler("settings",         settings_cmd))
-
-    # ── Callback Queries ─────────────────────────────────────
-    app.add_handler(CallbackQueryHandler(cfg_callback,        pattern=r"^cfg_"))
-    app.add_handler(CallbackQueryHandler(captcha_callback,    pattern=r"^captcha_"))
-    app.add_handler(CallbackQueryHandler(mute_captcha_callback, pattern=r"^wcap_"))
-    app.add_handler(CallbackQueryHandler(menu_callback,       pattern=r"^(menu_|show_|unmute_|unban_|dismiss_|close_)"))
-    app.add_handler(CallbackQueryHandler(rep_callback,        pattern=r"^rep:"))
-    app.add_handler(CallbackQueryHandler(groups_page_callback, pattern=r"^grppg_"))
-    app.add_handler(CallbackQueryHandler(premium_list_page_callback, pattern=r"^premlistpg_"))
-    # rankings_callback (lbd:) aur withdraw_approval_callback (wd:) DISABLED
-    # saath saath /rankings aur /withdraw feature ke — neeche dekho.
-
-    # ── Message Handlers ─────────────────────────────────────
-    # NOTE: activity tracker (message-count leaderboard) handler yahan se
-    # HATA diya gaya hai — yeh pehle group=-1 pe har single group message
-    # (commands samet) scan karta tha sirf /rankings leaderboard ke liye,
-    # jisse bade groups mein bot busy/slow ho jaata tha. Ab yeh scan hi
-    # nahi hota — bot ka load kaafi kam ho gaya hai.
-    # Bot reply tracker — group ke saare messages dekho (bots ke replies track karne ke liye)
-    app.add_handler(MessageHandler(
-        filters.ALL & filters.ChatType.GROUPS,
-        track_bot_reply
-    ), group=0)
-    # Main message handler
-    app.add_handler(MessageHandler(
-        filters.ALL & filters.ChatType.GROUPS & ~filters.COMMAND,
-        check_msg
-    ), group=1)
-    # ── Command auto-delete (10 min) — chahe koi bhi command ho, group mein ──
-    app.add_handler(MessageHandler(
-        filters.COMMAND & filters.ChatType.GROUPS,
-        auto_delete_commands
-    ), group=2)
-    # ── PREMIUM: Edit Guard — re-check messages after they're edited ──
-    app.add_handler(MessageHandler(
-        filters.UpdateType.EDITED_MESSAGE & filters.ChatType.GROUPS,
-        on_edited_message
-    ), group=3)
-    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_join))
-    app.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER,  on_leave))
-
-    # NOTE: daily_global_winner_job (activity-leaderboard #1 ko free rep dena)
-    # DISABLED — yeh /rankings activity-tracking data pe depend karta tha,
-    # jo ab scan hi nahi hota.
-
-    print("✅ Bot Started! Polling...")
-    app.run_polling(drop_pending_updates=True)
-
-
-if __name__ == "__main__":
-    Thread(target=run_web, daemon=True).start()
-    main()
+                [{"text": "✏️ 𝗦𝗲𝘁 𝗡𝗲𝘄 𝗥𝘂𝗹𝗲�                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     
