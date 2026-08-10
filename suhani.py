@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ╔══════════════════════════════════════════════════╗
-║   🛡️  GUARDIAN GROUP PROTECTION BOT  v2.0        ║
+║   🛡️  GUARDIAN GROUP PROTECTION BOT  v10.0        ║
 ║   ⚡  MongoDB Persistent Database                ║
 ║   🔗  Advanced Link Detection                    ║
 ║   🕵️  Hidden Link Detection                     ║
@@ -14,6 +14,10 @@
 ║   🎭  Captcha Verification                       ║
 ║   💀  FBan / Global Ban System                   ║
 ╚══════════════════════════════════════════════════╝
+
+  NOTE: this header is a developer-only code comment.
+  It is never sent to Telegram — it does not affect
+  bot UI, styling, or anything users/admins see.
 """
 
 import re, os, asyncio, time, random, string, json, html
@@ -75,52 +79,52 @@ ICON_DIAMOND  = "💎"
 # ═══════════════════════════════════════════════════════════
 WARN_MSG = {
     1: (
-        "🟡 *WARNING 1/4*\n"
+        "🟡 *𝗪𝗔𝗥𝗡𝗜𝗡𝗚 𝟭/𝟰*\n"
         "──────────────\n"
-        "Rule violation detected!\n"
+        "Rule violation detected.\n"
         "⏱ Muted for *35 seconds*\n\n"
-        "_Be careful next time._"
+        "_Please be careful next time._"
     ),
     2: (
-        "🟠 *WARNING 2/4*\n"
+        "🟠 *𝗪𝗔𝗥𝗡𝗜𝗡𝗚 𝟮/𝟰*\n"
         "──────────────\n"
-        "Stop breaking the rules!\n"
+        "Another rule was broken.\n"
         "⏱ Muted for *60 seconds*\n\n"
         "_Only 2 chances left._"
     ),
     3: (
-        "🔴 *WARNING 3/4 — LAST CHANCE*\n"
+        "🔴 *𝗪𝗔𝗥𝗡𝗜𝗡𝗚 𝟯/𝟰 — 𝗟𝗔𝗦𝗧 𝗖𝗛𝗔𝗡𝗖𝗘*\n"
         "──────────────\n"
-        "⚡ Next violation = *1 WEEK mute in ALL groups!*\n"
+        "⚡ Next violation = *1 week mute, in every group.*\n"
         "⏱ Muted for *120 seconds*\n\n"
         "_This is your final warning._"
     ),
     4: (
-        "💀 *GLOBAL MUTE ACTIVATED*\n"
+        "💀 *𝗚𝗟𝗢𝗕𝗔𝗟 𝗠𝗨𝗧𝗘 𝗔𝗖𝗧𝗜𝗩𝗔𝗧𝗘𝗗*\n"
         "──────────────\n"
-        "🗓 *1 WEEK* mute — applied in *ALL groups*\n"
-        "🔐 Only an admin can unmute you.\n\n"
-        "_You crossed the line._"
+        "🗓 *1 week* mute — applied in *every group*\n"
+        "🔐 Only an admin can lift it.\n\n"
+        "_The limit was reached._"
     ),
 }
 
 VIOLATION_MSG = {
-    "bot":          "🤖 External bot username detected!",
-    "url":          "🔗 Links/URLs are not allowed here!",
-    "username":     "👤 External usernames (@mentions) are not allowed here!",
-    "forward":      "↩️ Forwarded messages not allowed!",
-    "adult_emoji":  "🔞 Adult emojis are strictly banned!",
-    "adult_word":   "🚫 Inappropriate language detected!",
-    "blacklist":    "⛔ Blacklisted word used!",
-    "flood":        "🌊 Slow down! Anti-flood triggered!",
-    "stylish_font": "✍️ Stylish/fancy fonts are NOT allowed in this group!",
-    "hidden_link":  "🔗 Hidden links in text are NOT allowed here!",
-    "ai_promo":     "🤖 AI detected promotional/spam content!",
-    "location":     "📍 Location sharing is not allowed here!",
-    "contact":      "📇 Sharing contacts is not allowed here!",
-    "hashtag":      "#️⃣ Hashtags are not allowed here!",
-    "voice":        "🎙️ Voice messages are not allowed here!",
-    "chinese":      "🈲 Chinese language text is not allowed here!",
+    "bot":          "🤖 External bot usernames aren't allowed here.",
+    "url":          "🔗 Links and URLs aren't allowed here.",
+    "username":     "👤 External @mentions aren't allowed here.",
+    "forward":      "↩️ Forwarded messages aren't allowed here.",
+    "adult_emoji":  "🔞 Adult emojis aren't allowed here.",
+    "adult_word":   "🚫 Inappropriate language detected.",
+    "blacklist":    "⛔ That word is blacklisted in this group.",
+    "flood":        "🌊 Slow down — anti-flood triggered.",
+    "stylish_font": "✍️ Stylish or fancy fonts aren't allowed here.",
+    "hidden_link":  "🔗 Hidden links in text aren't allowed here.",
+    "ai_promo":     "🤖 AI flagged this as promotional or spam content.",
+    "location":     "📍 Sharing location isn't allowed here.",
+    "contact":      "📇 Sharing contacts isn't allowed here.",
+    "hashtag":      "#️⃣ Hashtags aren't allowed here.",
+    "voice":        "🎙️ Voice messages aren't allowed here.",
+    "chinese":      "🈲 Chinese-language text isn't allowed here.",
 }
 
 # Usernames that are always exempt from @mention filtering
@@ -166,31 +170,31 @@ DEFAULT_FILTERS = {
 }
 
 FILTER_LABELS = {
-    "antispam":    "🚨 Antispam Filter",
-    "antiflood":   "🌊 Anti-Flood",
-    "imagefilter": "🖼️ Unsafe Image Filter",
-    "noevents":    "🚪 Join/Left Events",
-    "nolinks":     "🔗 Links Filter",
-    "noforwards":  "↩️ Forwards Filter",
-    "nolocations": "📍 Locations Filter",
-    "nocontacts":  "📇 Contacts Filter",
-    "nocommands":  "🤖 Other-Bot Commands",
-    "nohashtags":  "#️⃣ Hashtags Filter",
-    "novoice":     "🎙️ Voice Filter",
-    "nochinese":   "🈲 Chinese Text Filter",
-    "nobots":      "🛑 Adding Spambots",
-    "profanity":   "🤬 Bad Words Filter",
-    "blacklist":   "⛔ Bad Domains/Words",
-    "whitelist":   "✅ Safe Domains/Words",
-    "welcome":     "👋 Welcome Message",
+    "antispam":    "🚨 𝗔𝗻𝘁𝗶𝘀𝗽𝗮𝗺 𝗙𝗶𝗹𝘁𝗲𝗿",
+    "antiflood":   "🌊 𝗔𝗻𝘁𝗶-𝗙𝗹𝗼𝗼𝗱",
+    "imagefilter": "🖼️ 𝗨𝗻𝘀𝗮𝗳𝗲 𝗜𝗺𝗮𝗴𝗲 𝗙𝗶𝗹𝘁𝗲𝗿",
+    "noevents":    "🚪 𝗝𝗼𝗶𝗻/𝗟𝗲𝗳𝘁 𝗘𝘃𝗲𝗻𝘁𝘀",
+    "nolinks":     "🔗 𝗟𝗶𝗻𝗸𝘀 𝗙𝗶𝗹𝘁𝗲𝗿",
+    "noforwards":  "↩️ 𝗙𝗼𝗿𝘄𝗮𝗿𝗱𝘀 𝗙𝗶𝗹𝘁𝗲𝗿",
+    "nolocations": "📍 𝗟𝗼𝗰𝗮𝘁𝗶𝗼𝗻𝘀 𝗙𝗶𝗹𝘁𝗲𝗿",
+    "nocontacts":  "📇 𝗖𝗼𝗻𝘁𝗮𝗰𝘁𝘀 𝗙𝗶𝗹𝘁𝗲𝗿",
+    "nocommands":  "🤖 𝗢𝘁𝗵𝗲𝗿-𝗕𝗼𝘁 𝗖𝗼𝗺𝗺𝗮𝗻𝗱𝘀",
+    "nohashtags":  "#️⃣ 𝗛𝗮𝘀𝗵𝘁𝗮𝗴𝘀 𝗙𝗶𝗹𝘁𝗲𝗿",
+    "novoice":     "🎙️ 𝗩𝗼𝗶𝗰𝗲 𝗙𝗶𝗹𝘁𝗲𝗿",
+    "nochinese":   "🈲 𝗖𝗵𝗶𝗻𝗲𝘀𝗲 𝗧𝗲𝘅𝘁 𝗙𝗶𝗹𝘁𝗲𝗿",
+    "nobots":      "🛑 𝗔𝗱𝗱𝗶𝗻𝗴 𝗦𝗽𝗮𝗺𝗯𝗼𝘁𝘀",
+    "profanity":   "🤬 𝗕𝗮𝗱 𝗪𝗼𝗿𝗱𝘀 𝗙𝗶𝗹𝘁𝗲𝗿",
+    "blacklist":   "⛔ 𝗕𝗮𝗱 𝗗𝗼𝗺𝗮𝗶𝗻𝘀/𝗪𝗼𝗿𝗱𝘀",
+    "whitelist":   "✅ 𝗦𝗮𝗳𝗲 𝗗𝗼𝗺𝗮𝗶𝗻𝘀/𝗪𝗼𝗿𝗱𝘀",
+    "welcome":     "👋 𝗪𝗲𝗹𝗰𝗼𝗺𝗲 𝗠𝗲𝘀𝘀𝗮𝗴𝗲",
 }
 # ── Filters grouped into categories for a cleaner /settings → Filters UI ──
 FILTER_GROUPS = [
-    ("🛡️ Core Protection", ["antispam", "antiflood", "nobots", "profanity"]),
-    ("🚫 Content Filters", ["nolinks", "noforwards", "nolocations", "nocontacts",
+    ("🛡️ 𝗖𝗼𝗿𝗲 𝗣𝗿𝗼𝘁𝗲𝗰𝘁𝗶𝗼𝗻", ["antispam", "antiflood", "nobots", "profanity"]),
+    ("🚫 𝗖𝗼𝗻𝘁𝗲𝗻𝘁 𝗙𝗶𝗹𝘁𝗲𝗿𝘀", ["nolinks", "noforwards", "nolocations", "nocontacts",
                              "nocommands", "nohashtags", "novoice", "nochinese", "imagefilter"]),
-    ("📋 Word Lists", ["blacklist", "whitelist"]),
-    ("👥 Group Behaviour", ["noevents", "welcome"]),
+    ("📋 𝗪𝗼𝗿𝗱 𝗟𝗶𝘀𝘁𝘀", ["blacklist", "whitelist"]),
+    ("👥 𝗚𝗿𝗼𝘂𝗽 𝗕𝗲𝗵𝗮𝘃𝗶𝗼𝘂𝗿", ["noevents", "welcome"]),
 ]
 
 GMUTE_DURATION = 604800   # 1 week — global mute ki duration (seconds)
@@ -1784,56 +1788,56 @@ def kb_main_menu(is_admin=False):
     normal user ko sirf wahi buttons dikhte hain jo vo use kar sakta hai."""
     rows = [
         [
-            InlineKeyboardButton("⭐ My Profile", callback_data="rep:myprofile"),
-            InlineKeyboardButton("🏆 Rep Board", callback_data="menu_repboard"),
+            InlineKeyboardButton("⭐ 𝗠𝘆 𝗣𝗿𝗼𝗳𝗶𝗹𝗲", callback_data="rep:myprofile"),
+            InlineKeyboardButton("🏆 𝗥𝗲𝗽 𝗕𝗼𝗮𝗿𝗱", callback_data="menu_repboard"),
         ],
         [
-            InlineKeyboardButton("👤 My Commands", callback_data="menu_user"),
-            InlineKeyboardButton("📜 Rules", callback_data="show_rules"),
+            InlineKeyboardButton("👤 𝗠𝘆 𝗖𝗼𝗺𝗺𝗮𝗻𝗱𝘀", callback_data="menu_user"),
+            InlineKeyboardButton("📜 𝗥𝘂𝗹𝗲𝘀", callback_data="show_rules"),
         ],
         [
-            InlineKeyboardButton("⚠️ Warn System", callback_data="menu_warns"),
+            InlineKeyboardButton("⚠️ 𝗪𝗮𝗿𝗻 𝗦𝘆𝘀𝘁𝗲𝗺", callback_data="menu_warns"),
         ],
         [
-            InlineKeyboardButton("🛡️ Protections", callback_data="menu_protection"),
+            InlineKeyboardButton("🛡️ 𝗣𝗿𝗼𝘁𝗲𝗰𝘁𝗶𝗼𝗻𝘀", callback_data="menu_protection"),
         ],
     ]
     if is_admin:
-        rows[-1].append(InlineKeyboardButton("⚙️ Settings", callback_data="menu_settings"))
-        rows.append([InlineKeyboardButton("👮 Admin Panel", callback_data="menu_admin")])
-    rows.append([InlineKeyboardButton("❌ Close", callback_data="close_menu")])
+        rows[-1].append(InlineKeyboardButton("⚙️ 𝗦𝗲𝘁𝘁𝗶𝗻𝗴𝘀", callback_data="menu_settings"))
+        rows.append([InlineKeyboardButton("👮 𝗔𝗱𝗺𝗶𝗻 𝗣𝗮𝗻𝗲𝗹", callback_data="menu_admin")])
+    rows.append([InlineKeyboardButton("❌ 𝗖𝗹𝗼𝘀𝗲", callback_data="close_menu")])
     return InlineKeyboardMarkup(rows)
 
 def kb_back():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("◀️ Back to Menu", callback_data="menu_main")]
+        [InlineKeyboardButton("◀️ 𝗕𝗮𝗰𝗸 𝘁𝗼 𝗠𝗲𝗻𝘂", callback_data="menu_main")]
     ])
 
 def kb_back_with_help():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("◀️ Back", callback_data="menu_main"),
-            InlineKeyboardButton("📜 Rules", callback_data="show_rules"),
+            InlineKeyboardButton("◀️ 𝗕𝗮𝗰𝗸", callback_data="menu_main"),
+            InlineKeyboardButton("📜 𝗥𝘂𝗹𝗲𝘀", callback_data="show_rules"),
         ]
     ])
 
 def kb_rules():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📜 View Rules", callback_data="show_rules")],
-        [InlineKeyboardButton("🆔 My ID", callback_data="show_id")],
+        [InlineKeyboardButton("📜 𝗩𝗶𝗲𝘄 𝗥𝘂𝗹𝗲𝘀", callback_data="show_rules")],
+        [InlineKeyboardButton("🆔 𝗠𝘆 𝗜𝗗", callback_data="show_id")],
     ])
 
 def kb_warn_actions(chat_id, user_id):
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🔊 Unmute", callback_data=f"unmute_{chat_id}_{user_id}"),
-            InlineKeyboardButton("🗑️ Dismiss", callback_data=f"dismiss_warn"),
+            InlineKeyboardButton("🔊 𝗨𝗻𝗺𝘂𝘁𝗲", callback_data=f"unmute_{chat_id}_{user_id}"),
+            InlineKeyboardButton("🗑️ 𝗗𝗶𝘀𝗺𝗶𝘀𝘀", callback_data=f"dismiss_warn"),
         ]
     ])
 
 def kb_unban_button(chat_id, user_id):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔓 Unban", callback_data=f"unban_{chat_id}_{user_id}")]
+        [InlineKeyboardButton("🔓 𝗨𝗻𝗯𝗮𝗻", callback_data=f"unban_{chat_id}_{user_id}")]
     ])
 
 def kb_captcha(chat_id, user_id, options):
@@ -1845,22 +1849,22 @@ def kb_captcha(chat_id, user_id, options):
 def kb_join_welcome():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("📜 Group Rules", callback_data="show_rules"),
-            InlineKeyboardButton("🆘 Help", callback_data="menu_user"),
+            InlineKeyboardButton("📜 𝗚𝗿𝗼𝘂𝗽 𝗥𝘂𝗹𝗲𝘀", callback_data="show_rules"),
+            InlineKeyboardButton("🆘 𝗛𝗲𝗹𝗽", callback_data="menu_user"),
         ],
         [
-            InlineKeyboardButton("⚠️ Warn System", callback_data="menu_warns"),
+            InlineKeyboardButton("⚠️ 𝗪𝗮𝗿𝗻 𝗦𝘆𝘀𝘁𝗲𝗺", callback_data="menu_warns"),
         ]
     ])
 
 def kb_bot_added():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("📋 Commands", callback_data="menu_admin"),
-            InlineKeyboardButton("⚙️ Setup", callback_data="menu_settings"),
+            InlineKeyboardButton("📋 𝗖𝗼𝗺𝗺𝗮𝗻𝗱𝘀", callback_data="menu_admin"),
+            InlineKeyboardButton("⚙️ 𝗦𝗲𝘁𝘂𝗽", callback_data="menu_settings"),
         ],
         [
-            InlineKeyboardButton("🛡️ Protections", callback_data="menu_protection"),
+            InlineKeyboardButton("🛡️ 𝗣𝗿𝗼𝘁𝗲𝗰𝘁𝗶𝗼𝗻𝘀", callback_data="menu_protection"),
         ]
     ])
 
@@ -1873,86 +1877,86 @@ def ckb_main_menu(is_admin=False):
     dikhte hain, normal user ko sirf wahi buttons dikhte hain jo vo use kar sakta hai."""
     rows = [
         [
-            {"text": "⭐ My Profile",    "callback_data": "rep:myprofile",   "style": "success"},
-            {"text": "🏆 Rep Board",     "callback_data": "menu_repboard",   "style": "success"},
+            {"text": "⭐ 𝗠𝘆 𝗣𝗿𝗼𝗳𝗶𝗹𝗲",    "callback_data": "rep:myprofile",   "style": "success"},
+            {"text": "🏆 𝗥𝗲𝗽 𝗕𝗼𝗮𝗿𝗱",     "callback_data": "menu_repboard",   "style": "success"},
         ],
         [
-            {"text": "👤 My Commands",   "callback_data": "menu_user",       "style": "primary"},
-            {"text": "📜 Rules",         "callback_data": "show_rules",      "style": "primary"},
+            {"text": "👤 𝗠𝘆 𝗖𝗼𝗺𝗺𝗮𝗻𝗱𝘀",   "callback_data": "menu_user",       "style": "primary"},
+            {"text": "📜 𝗥𝘂𝗹𝗲𝘀",         "callback_data": "show_rules",      "style": "primary"},
         ],
         [
-            {"text": "⚠️ Warn System",  "callback_data": "menu_warns",      "style": "danger"},
+            {"text": "⚠️ 𝗪𝗮𝗿𝗻 𝗦𝘆𝘀𝘁𝗲𝗺",  "callback_data": "menu_warns",      "style": "danger"},
         ],
         [
-            {"text": "🛡️ Protections",  "callback_data": "menu_protection", "style": "primary"},
+            {"text": "🛡️ 𝗣𝗿𝗼𝘁𝗲𝗰𝘁𝗶𝗼𝗻𝘀",  "callback_data": "menu_protection", "style": "primary"},
         ],
     ]
     if is_admin:
-        rows[-1].append({"text": "⚙️ Settings", "callback_data": "menu_settings", "style": "primary"})
-        rows.append([{"text": "👮 Admin Panel", "callback_data": "menu_admin", "style": "danger"}])
-    rows.append([{"text": "❌ Close", "callback_data": "close_menu", "style": "danger"}])
+        rows[-1].append({"text": "⚙️ 𝗦𝗲𝘁𝘁𝗶𝗻𝗴𝘀", "callback_data": "menu_settings", "style": "primary"})
+        rows.append([{"text": "👮 𝗔𝗱𝗺𝗶𝗻 𝗣𝗮𝗻𝗲𝗹", "callback_data": "menu_admin", "style": "danger"}])
+    rows.append([{"text": "❌ 𝗖𝗹𝗼𝘀𝗲", "callback_data": "close_menu", "style": "danger"}])
     return rows
 
 def ckb_back():
-    return [[{"text": "◀️ Back to Menu", "callback_data": "menu_main", "style": "primary"}]]
+    return [[{"text": "◀️ 𝗕𝗮𝗰𝗸 𝘁𝗼 𝗠𝗲𝗻𝘂", "callback_data": "menu_main", "style": "primary"}]]
 
 def ckb_stats_refresh():
     return [[
-        {"text": "🔄 Refresh",  "callback_data": "menu_stats", "style": "primary"},
-        {"text": "◀️ Back",     "callback_data": "menu_main",  "style": "primary"},
+        {"text": "🔄 𝗥𝗲𝗳𝗿𝗲𝘀𝗵",  "callback_data": "menu_stats", "style": "primary"},
+        {"text": "◀️ 𝗕𝗮𝗰𝗸",     "callback_data": "menu_main",  "style": "primary"},
     ]]
 
 def ckb_repinfo(user_id=0):
     return [[
-        {"text": "◀️ Back",     "callback_data": "menu_main",  "style": "primary"},
+        {"text": "◀️ 𝗕𝗮𝗰𝗸",     "callback_data": "menu_main",  "style": "primary"},
     ]]
 
 def ckb_warn_actions(chat_id, user_id):
     return [[
-        {"text": "🔊 Unmute",   "callback_data": f"unmute_{chat_id}_{user_id}", "style": "success"},
-        {"text": "🗑️ Dismiss", "callback_data": "dismiss_warn",                "style": "danger"},
+        {"text": "🔊 𝗨𝗻𝗺𝘂𝘁𝗲",   "callback_data": f"unmute_{chat_id}_{user_id}", "style": "success"},
+        {"text": "🗑️ 𝗗𝗶𝘀𝗺𝗶𝘀𝘀", "callback_data": "dismiss_warn",                "style": "danger"},
     ]]
 
 def ckb_join_welcome():
     return [
         [
-            {"text": "📜 Group Rules", "callback_data": "show_rules", "style": "success"},
-            {"text": "🆘 Help",        "callback_data": "menu_user",  "style": "primary"},
+            {"text": "📜 𝗚𝗿𝗼𝘂𝗽 𝗥𝘂𝗹𝗲𝘀", "callback_data": "show_rules", "style": "success"},
+            {"text": "🆘 𝗛𝗲𝗹𝗽",        "callback_data": "menu_user",  "style": "primary"},
         ],
         [
-            {"text": "⚠️ Warn System", "callback_data": "menu_warns", "style": "danger"},
+            {"text": "⚠️ 𝗪𝗮𝗿𝗻 𝗦𝘆𝘀𝘁𝗲𝗺", "callback_data": "menu_warns", "style": "danger"},
         ]
     ]
 
 def ckb_bot_added():
     return [
         [
-            {"text": "📋 Commands",     "callback_data": "menu_admin",      "style": "primary"},
-            {"text": "⚙️ Setup",        "callback_data": "menu_settings",   "style": "primary"},
+            {"text": "📋 𝗖𝗼𝗺𝗺𝗮𝗻𝗱𝘀",     "callback_data": "menu_admin",      "style": "primary"},
+            {"text": "⚙️ 𝗦𝗲𝘁𝘂𝗽",        "callback_data": "menu_settings",   "style": "primary"},
         ],
         [
-            {"text": "🛡️ Protections", "callback_data": "menu_protection", "style": "success"},
+            {"text": "🛡️ 𝗣𝗿𝗼𝘁𝗲𝗰𝘁𝗶𝗼𝗻𝘀", "callback_data": "menu_protection", "style": "success"},
         ]
     ]
 
 def ckb_rep_board(chat_id, user_id):
     return [
         [
-            {"text": "🔄 Refresh",       "callback_data": f"rep:board:{chat_id}", "style": "primary"},
-            {"text": "⭐ My Profile",    "callback_data": "rep:myprofile", "style": "success"},
+            {"text": "🔄 𝗥𝗲𝗳𝗿𝗲𝘀𝗵",       "callback_data": f"rep:board:{chat_id}", "style": "primary"},
+            {"text": "⭐ 𝗠𝘆 𝗣𝗿𝗼𝗳𝗶𝗹𝗲",    "callback_data": "rep:myprofile", "style": "success"},
         ],
         [
-            {"text": "🌐 Global Refresh","callback_data": "rep:global:0",          "style": "primary"},
+            {"text": "🌐 𝗚𝗹𝗼𝗯𝗮𝗹 𝗥𝗲𝗳𝗿𝗲𝘀𝗵","callback_data": "rep:global:0",          "style": "primary"},
         ]
     ]
 
 def ckb_start_group(is_admin=False):
     rows = [[
-        {"text": "📋 Commands", "callback_data": "menu_main",   "style": "primary"},
-        {"text": "📜 Rules",    "callback_data": "show_rules",  "style": "success"},
+        {"text": "📋 𝗖𝗼𝗺𝗺𝗮𝗻𝗱𝘀", "callback_data": "menu_main",   "style": "primary"},
+        {"text": "📜 𝗥𝘂𝗹𝗲𝘀",    "callback_data": "show_rules",  "style": "success"},
     ]]
     if is_admin:
-        rows.append([{"text": "⚙️ Settings", "callback_data": "cfg_main", "style": "primary"}])
+        rows.append([{"text": "⚙️ 𝗦𝗲𝘁𝘁𝗶𝗻𝗴𝘀", "callback_data": "cfg_main", "style": "primary"}])
     return rows
 
 
@@ -2125,7 +2129,7 @@ async def captcha_timeout(ctx, chat_id, user_id, msg_id, expire):
             await ctx.bot.delete_message(chat_id, msg_id)
             msg = await ctx.bot.send_message(
                 chat_id,
-                f"⛔ *Verification Failed*\n\n"
+                f"⛔ *𝗩𝗲𝗿𝗶𝗳𝗶𝗰𝗮𝘁𝗶𝗼𝗻 𝗙𝗮𝗶𝗹𝗲𝗱*\n\n"
                 f"User `{user_id}` was removed for not completing verification in time.",
                 parse_mode='Markdown'
             )
@@ -2161,7 +2165,7 @@ async def captcha_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.message.delete()
         msg = await ctx.bot.send_message(
             chat_id,
-            f"✅ *Verification Passed*\n\n"
+            f"✅ *𝗩𝗲𝗿𝗶𝗳𝗶𝗰𝗮𝘁𝗶𝗼𝗻 𝗣𝗮𝘀𝘀𝗲𝗱*\n\n"
             f"Welcome to the group — you're all set. 🎉",
             parse_mode='Markdown'
         )
@@ -2256,10 +2260,10 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             text,
             reply_markup=InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("◀️ Back", callback_data="menu_main"),
-                    InlineKeyboardButton("🏆 Rep Board", callback_data="menu_repboard"),
+                    InlineKeyboardButton("◀️ 𝗕𝗮𝗰𝗸", callback_data="menu_main"),
+                    InlineKeyboardButton("🏆 𝗥𝗲𝗽 𝗕𝗼𝗮𝗿𝗱", callback_data="menu_repboard"),
                 ],
-                [InlineKeyboardButton("❌ Close", callback_data="close_menu")],
+                [InlineKeyboardButton("❌ 𝗖𝗹𝗼𝘀𝗲", callback_data="close_menu")],
             ]),
             parse_mode='Markdown'
         )
@@ -2296,10 +2300,10 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             text,
             reply_markup=InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("◀️ Back", callback_data="menu_main"),
-                    InlineKeyboardButton("⚙️ Settings", callback_data="menu_settings"),
+                    InlineKeyboardButton("◀️ 𝗕𝗮𝗰𝗸", callback_data="menu_main"),
+                    InlineKeyboardButton("⚙️ 𝗦𝗲𝘁𝘁𝗶𝗻𝗴𝘀", callback_data="menu_settings"),
                 ],
-                [InlineKeyboardButton("❌ Close", callback_data="close_menu")],
+                [InlineKeyboardButton("❌ 𝗖𝗹𝗼𝘀𝗲", callback_data="close_menu")],
             ]),
             parse_mode='Markdown'
         )
@@ -2333,8 +2337,8 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
         await query.edit_message_text(
             text,
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("◀️ Back", callback_data="menu_main")],
-                [InlineKeyboardButton("❌ Close", callback_data="close_menu")],
+                [InlineKeyboardButton("◀️ 𝗕𝗮𝗰𝗸", callback_data="menu_main")],
+                [InlineKeyboardButton("❌ 𝗖𝗹𝗼𝘀𝗲", callback_data="close_menu")],
             ]),
             parse_mode='Markdown'
         )
@@ -2365,7 +2369,7 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             f"   🌐 _Applied across every group_\n"
             f"   🔐 _Only an admin can lift it_\n\n"
             f"{'─'*14}\n"
-            f"💡 *Tip:* Reply with “thank you” to clear one warning.\n"
+            f"💡 *𝙏𝙞𝙥:* Reply with “thank you” to clear one warning.\n"
             f"_Violations trigger warnings automatically._"
         )
         await query.answer()
@@ -2373,10 +2377,10 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             text,
             reply_markup=InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("◀️ Back", callback_data="menu_main"),
-                    InlineKeyboardButton("⚠️ My Warnings", callback_data="show_my_warnings"),
+                    InlineKeyboardButton("◀️ 𝗕𝗮𝗰𝗸", callback_data="menu_main"),
+                    InlineKeyboardButton("⚠️ 𝗠𝘆 𝗪𝗮𝗿𝗻𝗶𝗻𝗴𝘀", callback_data="show_my_warnings"),
                 ],
-                [InlineKeyboardButton("❌ Close", callback_data="close_menu")],
+                [InlineKeyboardButton("❌ 𝗖𝗹𝗼𝘀𝗲", callback_data="close_menu")],
             ]),
             parse_mode='Markdown'
         )
@@ -2405,10 +2409,10 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             text,
             reply_markup=InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("🔄 Refresh", callback_data="menu_stats"),
-                    InlineKeyboardButton("◀️ Back", callback_data="menu_main"),
+                    InlineKeyboardButton("🔄 𝗥𝗲𝗳𝗿𝗲𝘀𝗵", callback_data="menu_stats"),
+                    InlineKeyboardButton("◀️ 𝗕𝗮𝗰𝗸", callback_data="menu_main"),
                 ],
-                [InlineKeyboardButton("❌ Close", callback_data="close_menu")],
+                [InlineKeyboardButton("❌ 𝗖𝗹𝗼𝘀𝗲", callback_data="close_menu")],
             ]),
             parse_mode='Markdown'
         )
@@ -2455,16 +2459,16 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             text,
             reply_markup=InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("🔄 Refresh", callback_data="menu_repboard"),
-                    InlineKeyboardButton("⭐ My Profile", callback_data="rep:myprofile"),
+                    InlineKeyboardButton("🔄 𝗥𝗲𝗳𝗿𝗲𝘀𝗵", callback_data="menu_repboard"),
+                    InlineKeyboardButton("⭐ 𝗠𝘆 𝗣𝗿𝗼𝗳𝗶𝗹𝗲", callback_data="rep:myprofile"),
                 ],
                 [
-                    InlineKeyboardButton("📊 Group Rank", callback_data=f"rep:board:{ch_id}"),
-                    InlineKeyboardButton("🌐 Global Rank", callback_data="rep:global:0"),
+                    InlineKeyboardButton("📊 𝗚𝗿𝗼𝘂𝗽 𝗥𝗮𝗻𝗸", callback_data=f"rep:board:{ch_id}"),
+                    InlineKeyboardButton("🌐 𝗚𝗹𝗼𝗯𝗮𝗹 𝗥𝗮𝗻𝗸", callback_data="rep:global:0"),
                 ],
                 [
-                    InlineKeyboardButton("◀️ Back", callback_data="menu_main"),
-                    InlineKeyboardButton("❌ Close", callback_data="close_menu"),
+                    InlineKeyboardButton("◀️ 𝗕𝗮𝗰𝗸", callback_data="menu_main"),
+                    InlineKeyboardButton("❌ 𝗖𝗹𝗼𝘀𝗲", callback_data="close_menu"),
                 ],
             ]),
             parse_mode='Markdown'
@@ -2478,7 +2482,7 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
         query.data = "menu_repboard"
         # Re-trigger via same logic
         await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🏆 Open Rep Board", callback_data="menu_repboard")]
+            [InlineKeyboardButton("🏆 𝗢𝗽𝗲𝗻 𝗥𝗲𝗽 𝗕𝗼𝗮𝗿𝗱", callback_data="menu_repboard")]
         ]))
         return
 
@@ -2489,16 +2493,16 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             f"{'─'*14}\n\n"
             f"AI Engine: {'🟢 *Guardian AI — Active*' if AI_API_KEY else '🔴 *Not Configured*'}\n\n"
             f"{'─'*14}\n"
-            f"*What AI Does:*\n"
+            f"*𝙒𝙝𝙖𝙩 𝘼𝙄 𝘿𝙤𝙚𝙨:*\n"
             f"  🚨 Detects promo/spam content\n"
             f"  💬 Answers common member questions\n"
             f"  📋 Logs unanswered requests\n\n"
-            f"*Owner Commands:*\n"
+            f"*𝙊𝙬𝙣𝙚𝙧 𝘾𝙤𝙢𝙢𝙖𝙣𝙙𝙨:*\n"
             f"  `/aiapprove` — Approve group\n"
             f"  `/airevoke` — Revoke AI\n"
             f"  `/aigroups` — List approved\n"
             f"  `/missinganime` — Unanswered requests\n\n"
-            f"*Admin Command:*\n"
+            f"*𝘼𝙙𝙢𝙞𝙣 𝘾𝙤𝙢𝙢𝙖𝙣𝙙:*\n"
             f"  `/aimod on|off` — Toggle AI\n\n"
             f"{'─'*14}\n"
             f"_AI requires owner approval per group_"
@@ -2507,8 +2511,8 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
         await query.edit_message_text(
             text,
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("◀️ Back", callback_data="menu_main")],
-                [InlineKeyboardButton("❌ Close", callback_data="close_menu")],
+                [InlineKeyboardButton("◀️ 𝗕𝗮𝗰𝗸", callback_data="menu_main")],
+                [InlineKeyboardButton("❌ 𝗖𝗹𝗼𝘀𝗲", callback_data="close_menu")],
             ]),
             parse_mode='Markdown'
         )
@@ -2529,7 +2533,7 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             rules_text = (
                 f"📜 *𝗚𝗥𝗢𝗨𝗣 𝗥𝗨𝗟𝗘𝗦*\n"
                 f"{'─'*14}\n\n"
-                f"🚫 *NOT ALLOWED:*\n\n"
+                f"🚫 *𝙉𝙊𝙏 𝘼𝙇𝙇𝙊𝙒𝙀𝘿:*\n\n"
                 f"  1️⃣  🤖 External bot usernames\n"
                 f"  2️⃣  🔗 Links & URLs\n"
                 f"  3️⃣  ↩️ Forwarded messages\n"
@@ -2539,7 +2543,7 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
                 f"  6️⃣  ⛔ Blacklisted words\n"
                 f"  7️⃣  🌊 Spamming / Flooding\n\n"
                 f"{'─'*14}\n\n"
-                f"⚠️ *PUNISHMENT SCALE:*\n"
+                f"⚠️ *𝙋𝙐𝙉𝙄𝙎𝙃𝙈𝙀𝙉𝙏 𝙎𝘾𝘼𝙇𝙀:*\n"
                 f"  • 1st offense → 35s mute\n"
                 f"  • 2nd offense → 60s mute\n"
                 f"  • 3rd offense → 120s mute\n"
@@ -2551,8 +2555,8 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
         await query.edit_message_text(
             rules_text,
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("◀️ Back", callback_data="menu_main")],
-                [InlineKeyboardButton("❌ Close", callback_data="close_menu")],
+                [InlineKeyboardButton("◀️ 𝗕𝗮𝗰𝗸", callback_data="menu_main")],
+                [InlineKeyboardButton("❌ 𝗖𝗹𝗼𝘀𝗲", callback_data="close_menu")],
             ]),
             parse_mode='Markdown'
         )
@@ -2651,19 +2655,19 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if ch.type != "private":
         is_admin_here = (u.id == OWNER_ID) or await is_adm(ctx, ch.id, u.id)
         start_text = (
-            f"🛡️ *Guardian* is online and protecting this group.\n"
+            f"🛡️ *𝗚𝘂𝗮𝗿𝗱𝗶𝗮𝗻* is online and protecting this group.\n"
             f"_Type /help to see all commands._"
         )
         if is_admin_here:
             start_text += f"\n⚙️ _Admins — open /settings for the control panel._"
         buttons = [
             [
-                InlineKeyboardButton("📋 Commands", callback_data="menu_main"),
-                InlineKeyboardButton("📜 Rules", callback_data="show_rules"),
+                InlineKeyboardButton("📋 𝗖𝗼𝗺𝗺𝗮𝗻𝗱𝘀", callback_data="menu_main"),
+                InlineKeyboardButton("📜 𝗥𝘂𝗹𝗲𝘀", callback_data="show_rules"),
             ]
         ]
         if is_admin_here:
-            buttons.append([InlineKeyboardButton("⚙️ Settings", callback_data="cfg_main")])
+            buttons.append([InlineKeyboardButton("⚙️ 𝗦𝗲𝘁𝘁𝗶𝗻𝗴𝘀", callback_data="cfg_main")])
         msg_id = await send_colored_message(ch.id, start_text, ckb_start_group(is_admin_here))
         if not msg_id:
             sent = await update.message.reply_text(
@@ -2712,8 +2716,8 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown',
             reply_markup=InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("📊 Stats", callback_data="menu_stats"),
-                    InlineKeyboardButton("🛡️ Protections", callback_data="menu_protection"),
+                    InlineKeyboardButton("📊 𝗦𝘁𝗮𝘁𝘀", callback_data="menu_stats"),
+                    InlineKeyboardButton("🛡️ 𝗣𝗿𝗼𝘁𝗲𝗰𝘁𝗶𝗼𝗻𝘀", callback_data="menu_protection"),
                 ]
             ])
         )
@@ -2744,8 +2748,8 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown',
         reply_markup=InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("📋 All Commands", callback_data="menu_user"),
-                InlineKeyboardButton("⚠️ Warn System", callback_data="menu_warns"),
+                InlineKeyboardButton("📋 𝗔𝗹𝗹 𝗖𝗼𝗺𝗺𝗮𝗻𝗱𝘀", callback_data="menu_user"),
+                InlineKeyboardButton("⚠️ 𝗪𝗮𝗿𝗻 𝗦𝘆𝘀𝘁𝗲𝗺", callback_data="menu_warns"),
             ],
         ])
     )
@@ -2781,11 +2785,11 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown',
             reply_markup=InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("📜 Rules", callback_data="show_rules"),
-                    InlineKeyboardButton("⚠️ Warns Info", callback_data="menu_warns"),
+                    InlineKeyboardButton("📜 𝗥𝘂𝗹𝗲𝘀", callback_data="show_rules"),
+                    InlineKeyboardButton("⚠️ 𝗪𝗮𝗿𝗻𝘀 𝗜𝗻𝗳𝗼", callback_data="menu_warns"),
                 ],
                 [
-                    InlineKeyboardButton("🛡️ Protections", callback_data="menu_protection"),
+                    InlineKeyboardButton("🛡️ 𝗣𝗿𝗼𝘁𝗲𝗰𝘁𝗶𝗼𝗻𝘀", callback_data="menu_protection"),
                 ]
             ])
         )
@@ -2846,7 +2850,7 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     admin_text += (
         f"\n{'─'*14}\n"
-        f"⚠️ *Warning scale:* W1→35s · W2→60s · W3→120s · W4→1 week 🌐"
+        f"⚠️ *𝙒𝙖𝙧𝙣𝙞𝙣𝙜 𝙨𝙘𝙖𝙡𝙚:* W1→35s · W2→60s · W3→120s · W4→1 week 🌐"
     )
 
     sent = await update.message.reply_text(
@@ -2854,12 +2858,12 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown',
         reply_markup=InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("🛡️ Protections", callback_data="menu_protection"),
-                InlineKeyboardButton("⚙️ Settings", callback_data="menu_settings"),
+                InlineKeyboardButton("🛡️ 𝗣𝗿𝗼𝘁𝗲𝗰𝘁𝗶𝗼𝗻𝘀", callback_data="menu_protection"),
+                InlineKeyboardButton("⚙️ 𝗦𝗲𝘁𝘁𝗶𝗻𝗴𝘀", callback_data="menu_settings"),
             ],
             [
-                InlineKeyboardButton("⚠️ Warn System", callback_data="menu_warns"),
-                InlineKeyboardButton("📊 Stats", callback_data="menu_stats"),
+                InlineKeyboardButton("⚠️ 𝗪𝗮𝗿𝗻 𝗦𝘆𝘀𝘁𝗲𝗺", callback_data="menu_warns"),
+                InlineKeyboardButton("📊 𝗦𝘁𝗮𝘁𝘀", callback_data="menu_stats"),
             ]
         ])
     )
@@ -2908,7 +2912,7 @@ async def rule_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         text,
         parse_mode='Markdown',
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("⚠️ Warn System", callback_data="menu_warns")]
+            [InlineKeyboardButton("⚠️ 𝗪𝗮𝗿𝗻 𝗦𝘆𝘀𝘁𝗲𝗺", callback_data="menu_warns")]
         ])
     )
     if update.effective_chat.type != "private" and update.effective_user:
@@ -2942,7 +2946,7 @@ async def id_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ch = update.effective_chat
     target = update.message.reply_to_message.from_user if update.message.reply_to_message else u
     text = (
-        f"🆔 *User Information*\n"
+        f"🆔 *𝗨𝘀𝗲𝗿 𝗜𝗻𝗳𝗼𝗿𝗺𝗮𝘁𝗶𝗼𝗻*\n"
         f"{'─'*14}\n\n"
         f"👤 Name: `{target.first_name or ''}`\n"
         f"🔑 ID: `{target.id}`\n"
@@ -2950,7 +2954,7 @@ async def id_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if target.username:
         text += f"🔗 Username: @{target.username}\n"
     if ch.type != "private":
-        text += f"\n💬 *Group ID:* `{ch.id}`"
+        text += f"\n💬 *𝙂𝙧𝙤𝙪𝙥 𝙄𝘿:* `{ch.id}`"
     await update.message.reply_text(text, parse_mode='Markdown')
 
 
@@ -3065,7 +3069,7 @@ async def addblacklist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     word = ' '.join(ctx.args).lower().strip()
     db.add_blacklist(ch.id, word)
     await update.message.reply_text(
-        f"⛔ *Blacklisted:* `{word}`\n\n"
+        f"⛔ *𝘽𝙡𝙖𝙘𝙠𝙡𝙞𝙨𝙩𝙚𝙙:* `{word}`\n\n"
         f"Anyone using this word will be *warned automatically*.",
         parse_mode='Markdown'
     )
@@ -3128,7 +3132,7 @@ async def addwhitelist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     word = ' '.join(ctx.args).lower().strip()
     db.add_whitelist(ch.id, word)
     await update.message.reply_text(
-        f"✅ *Whitelisted:* `{word}`\n\n"
+        f"✅ *𝙒𝙝𝙞𝙩𝙚𝙡𝙞𝙨𝙩𝙚𝙙:* `{word}`\n\n"
         f"This word will bypass blacklist detection.",
         parse_mode='Markdown'
     )
@@ -3189,7 +3193,7 @@ async def sticker_delete_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         cur = g.get("sticker_delete_min")
         status = f"{ICON_ON} {cur} min" if cur else f"{ICON_OFF} OFF"
         return await update.message.reply_text(
-            f"🗑️ *Sticker / GIF Auto-Delete*\n"
+            f"🗑️ *𝙎𝙩𝙞𝙘𝙠𝙚𝙧 / 𝙂𝙄𝙁 𝘼𝙪𝙩𝙤-𝘿𝙚𝙡𝙚𝙩𝙚*\n"
             f"{'─'*14}\n\n"
             f"Status: {status}\n\n"
             f"Usage: `/sticker_delete 2` → enable (2 min)\n"
@@ -3236,7 +3240,7 @@ async def autodelete_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not ctx.args:
             status = f"🟢 {cur_global} min" if cur_global else "🔴 OFF"
             return await update.message.reply_text(
-                f"🌐 *Global Auto-Delete Default*\n"
+                f"🌐 *𝙂𝙡𝙤𝙗𝙖𝙡 𝘼𝙪𝙩𝙤-𝘿𝙚𝙡𝙚𝙩𝙚 𝘿𝙚𝙛𝙖𝙪𝙡𝙩*\n"
                 f"{'─'*14}\n\n"
                 f"Current: {status}\n\n"
                 f"Usage: `/autodelete 5` → set default 5 min for ALL groups\n"
@@ -3285,7 +3289,7 @@ async def autodelete_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             lines.append(f"🌐 Global default: *{global_val} min*")
         else:
             lines.append(f"🌐 Global default: _OFF_")
-        lines.append(f"⚡ *Active:* {'🟢 ' + str(effective) + ' min' if effective else '🔴 OFF'}")
+        lines.append(f"⚡ *𝘼𝙘𝙩𝙞𝙫𝙚:* {'🟢 ' + str(effective) + ' min' if effective else '🔴 OFF'}")
 
         return await update.message.reply_text(
             f"🗑️ *Auto-Delete — This Group*\n"
@@ -3342,7 +3346,7 @@ async def captcha_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         g = db.get_group(ch.id)
         status = f"{ICON_ON} ON" if g.get("captcha") else f"{ICON_OFF} OFF"
         return await update.message.reply_text(
-            f"🎭 *Captcha Verification*\n"
+            f"🎭 *𝗖𝗮𝗽𝘁𝗰𝗵𝗮 𝗩𝗲𝗿𝗶𝗳𝗶𝗰𝗮𝘁𝗶𝗼𝗻*\n"
             f"{'─'*14}\n\n"
             f"Status: {status}\n\n"
             f"Toggle: `/captcha on` or `/captcha off`",
@@ -3425,7 +3429,7 @@ async def testmute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text("🔒 Admins can't be muted.")
     if await do_mute(ctx, ch.id, tgt.id, 35):
         await update.message.reply_text(
-            f"🧪 *Test Mute Applied*\n\n"
+            f"🧪 *𝗧𝗲𝘀𝘁 𝗠𝘂𝘁𝗲 𝗔𝗽𝗽𝗹𝗶𝗲𝗱*\n\n"
             f"👤 {user_name(tgt)} — muted for *35 seconds*.",
             parse_mode='Markdown'
         )
@@ -3459,7 +3463,7 @@ async def mute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"⏱ Duration: *{sec} seconds*",
             parse_mode='Markdown',
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔊 Unmute", callback_data=f"unmute_{ch.id}_{tgt.id}")]
+                [InlineKeyboardButton("🔊 𝗨𝗻𝗺𝘂𝘁𝗲", callback_data=f"unmute_{ch.id}_{tgt.id}")]
             ])
         )
 
@@ -3475,7 +3479,7 @@ async def unmute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if await do_unmute(ctx, ch.id, tgt.id):
         db.reset_warnings(ch.id, tgt.id)
         await update.message.reply_text(
-            f"🔊 *Unmuted*\n\n👤 {user_name(tgt)} can send messages again.",
+            f"🔊 *𝗨𝗻𝗺𝘂𝘁𝗲𝗱*\n\n👤 {user_name(tgt)} can send messages again.",
             parse_mode='Markdown'
         )
 
@@ -3493,7 +3497,7 @@ async def ban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     reason = ' '.join(ctx.args) if ctx.args else "No reason provided"
     if await do_ban(ctx, ch.id, tgt.id):
         await update.message.reply_text(
-            f"🔨 *User Banned*\n"
+            f"🔨 *𝗨𝘀𝗲𝗿 𝗕𝗮𝗻𝗻𝗲𝗱*\n"
             f"{'─'*14}\n\n"
             f"👤 {user_name(tgt)}\n"
             f"📋 Reason: _{reason}_",
@@ -3580,7 +3584,7 @@ async def warnings_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     w = db.get_warnings(ch.id, tgt.id)
     bars = "🟥" * w + "⬜" * (4 - w)
     msg = await update.message.reply_text(
-        f"📊 *Warning Status*\n"
+        f"📊 *𝗪𝗮𝗿𝗻𝗶𝗻𝗴 𝗦𝘁𝗮𝘁𝘂𝘀*\n"
         f"{'─'*14}\n\n"
         f"👤 {user_name(tgt)}\n"
         f"Count: `{w}/4`\n"
@@ -3599,7 +3603,7 @@ async def reset_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     tgt = update.message.reply_to_message.from_user
     db.reset_warnings(ch.id, tgt.id)
     await update.message.reply_text(
-        f"✅ *Warnings reset*\n\n👤 {user_name(tgt)} now has 0 warnings.",
+        f"✅ *𝗪𝗮𝗿𝗻𝗶𝗻𝗴𝘀 𝗿𝗲𝘀𝗲𝘁*\n\n👤 {user_name(tgt)} now has 0 warnings.",
         parse_mode='Markdown'
     )
 
@@ -3643,7 +3647,7 @@ async def purge_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     msg = await ctx.bot.send_message(
         ch.id,
-        f"🧹 *Purge Complete*\n\n"
+        f"🧹 *𝗣𝘂𝗿𝗴𝗲 𝗖𝗼𝗺𝗽𝗹𝗲𝘁𝗲*\n\n"
         f"🗑️ Deleted: `{deleted}` messages\n"
         f"⚠️ Skipped: `{failed}` messages",
         parse_mode='Markdown'
@@ -3700,7 +3704,7 @@ async def broadcast_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except:
             f += 1
 
-    summary = f"📢 *Broadcast Complete*\n\n✅ Sent: `{s}`\n❌ Failed: `{f}`"
+    summary = f"📢 *𝗕𝗿𝗼𝗮𝗱𝗰𝗮𝘀𝘁 𝗖𝗼𝗺𝗽𝗹𝗲𝘁𝗲*\n\n✅ Sent: `{s}`\n❌ Failed: `{f}`"
     if delete_minutes:
         summary += f"\n🗑️ Auto-delete in: `{delete_minutes} min` (in every group it was sent to)"
     await update.message.reply_text(summary, parse_mode='Markdown')
@@ -3800,9 +3804,9 @@ def _build_groups_page(rows: list, page: int):
     buttons = []
     nav_row = []
     if page > 0:
-        nav_row.append(InlineKeyboardButton("◀️ Prev", callback_data=f"grppg_{page-1}"))
+        nav_row.append(InlineKeyboardButton("◀️ 𝗣𝗿𝗲𝘃", callback_data=f"grppg_{page-1}"))
     if page < total_pages - 1:
-        nav_row.append(InlineKeyboardButton("Next ▶️", callback_data=f"grppg_{page+1}"))
+        nav_row.append(InlineKeyboardButton("𝗡𝗲𝘅𝘁 ▶️", callback_data=f"grppg_{page+1}"))
     if nav_row:
         buttons.append(nav_row)
 
@@ -3961,10 +3965,10 @@ async def reputation_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if target_id is None or amount is None or chat_id is None:
         return await update.message.reply_text(
-            "⚙️ *Usage:*\n\n"
+            "⚙️ *𝙐𝙨𝙖𝙜𝙚:*\n\n"
             "*Via the bot's DM (global rep):*\n"
             "`/reputation <user_id> <amount>`\n\n"
-            "*In a group:*\n"
+            "*𝙄𝙣 𝙖 𝙜𝙧𝙤𝙪𝙥:*\n"
             "`/reputation <user_id> <amount>`\n"
             "_or by replying to a user:_ `/reputation <amount>`",
             parse_mode='Markdown'
@@ -3982,7 +3986,7 @@ async def reputation_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     is_global = chat_id == GLOBAL_REP_ID
     scope = "🌐 *Global* (given via DM)" if is_global else "in this group"
     await update.message.reply_text(
-        f"✅ *Reputation Updated*\n"
+        f"✅ *𝗥𝗲𝗽𝘂𝘁𝗮𝘁𝗶𝗼𝗻 𝗨𝗽𝗱𝗮𝘁𝗲𝗱*\n"
         f"{'─'*14}\n"
         f"👤 User: `{target_id}`\n"
         f"📈 `{abs(amount)}` points {action} {scope}\n"
@@ -3995,7 +3999,7 @@ async def globalmutes_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     mutes = db.get_all_gmutes()
     await update.message.reply_text(
-        f"🗓️ *Global Mutes:* `{len(mutes)}`",
+        f"🗓️ *𝙂𝙡𝙤𝙗𝙖𝙡 𝙈𝙪𝙩𝙚𝙨:* `{len(mutes)}`",
         parse_mode='Markdown'
     )
 
@@ -4026,7 +4030,7 @@ async def gblacklist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         words = db.get_gblacklist()
         if not words:
             return await update.message.reply_text(
-                "📋 *Global Blacklist* is empty.\n\n"
+                "📋 *𝗚𝗹𝗼𝗯𝗮𝗹 𝗕𝗹𝗮𝗰𝗸𝗹𝗶𝘀𝘁* is empty.\n\n"
                 "Usage:\n"
                 "`/gblacklist add <word>` — Add word\n"
                 "`/gblacklist remove <word>` — Remove word\n"
@@ -4035,7 +4039,7 @@ async def gblacklist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
         word_list = "\n".join(f"  • `{w}`" for w in words)
         return await update.message.reply_text(
-            f"🌐 *Global Blacklist* ({len(words)} words)\n"
+            f"🌐 *𝗚𝗹𝗼𝗯𝗮𝗹 𝗕𝗹𝗮𝗰𝗸𝗹𝗶𝘀𝘁* ({len(words)} words)\n"
             f"{'─'*14}\n\n"
             f"{word_list}\n\n"
             f"_These words are blocked in ALL groups._",
@@ -4050,7 +4054,7 @@ async def gblacklist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return await update.message.reply_text("📋 Global blacklist is empty.")
         word_list = "\n".join(f"  • `{w}`" for w in words)
         return await update.message.reply_text(
-            f"🌐 *Global Blacklist* ({len(words)} words)\n"
+            f"🌐 *𝗚𝗹𝗼𝗯𝗮𝗹 𝗕𝗹𝗮𝗰𝗸𝗹𝗶𝘀𝘁* ({len(words)} words)\n"
             f"{'─'*14}\n\n"
             f"{word_list}",
             parse_mode='Markdown'
@@ -4067,7 +4071,7 @@ async def gblacklist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if action == "add":
         db.add_gblacklist(word)
         await update.message.reply_text(
-            f"✅ *Added to Global Blacklist*\n\n"
+            f"✅ *𝗔𝗱𝗱𝗲𝗱 𝘁𝗼 𝗚𝗹𝗼𝗯𝗮𝗹 𝗕𝗹𝗮𝗰𝗸𝗹𝗶𝘀𝘁*\n\n"
             f"🚫 `{word}`\n\n"
             f"_This word is now blocked in ALL your groups._",
             parse_mode='Markdown'
@@ -4076,7 +4080,7 @@ async def gblacklist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif action == "remove":
         db.remove_gblacklist(word)
         await update.message.reply_text(
-            f"✅ *Removed from Global Blacklist*\n\n"
+            f"✅ *𝗥𝗲𝗺𝗼𝘃𝗲𝗱 𝗳𝗿𝗼𝗺 𝗚𝗹𝗼𝗯𝗮𝗹 𝗕𝗹𝗮𝗰𝗸𝗹𝗶𝘀𝘁*\n\n"
             f"🗑️ `{word}`",
             parse_mode='Markdown'
         )
@@ -4102,7 +4106,7 @@ async def gwhitelist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         words = db.get_gwhitelist()
         if not words:
             return await update.message.reply_text(
-                "📋 *Global Whitelist* is empty.\n\n"
+                "📋 *𝗚𝗹𝗼𝗯𝗮𝗹 𝗪𝗵𝗶𝘁𝗲𝗹𝗶𝘀𝘁* is empty.\n\n"
                 "Usage:\n"
                 "`/gwhitelist add <word>` — Allow word globally\n"
                 "`/gwhitelist remove <word>` — Remove\n"
@@ -4111,7 +4115,7 @@ async def gwhitelist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
         word_list = "\n".join(f"  • `{w}`" for w in words)
         return await update.message.reply_text(
-            f"🌐 *Global Whitelist* ({len(words)} words)\n"
+            f"🌐 *𝗚𝗹𝗼𝗯𝗮𝗹 𝗪𝗵𝗶𝘁𝗲𝗹𝗶𝘀𝘁* ({len(words)} words)\n"
             f"{'─'*14}\n\n"
             f"{word_list}\n\n"
             f"_These words are allowed even if in global blacklist._",
@@ -4126,7 +4130,7 @@ async def gwhitelist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return await update.message.reply_text("📋 Global whitelist is empty.")
         word_list = "\n".join(f"  • `{w}`" for w in words)
         return await update.message.reply_text(
-            f"🌐 *Global Whitelist* ({len(words)} words)\n"
+            f"🌐 *𝗚𝗹𝗼𝗯𝗮𝗹 𝗪𝗵𝗶𝘁𝗲𝗹𝗶𝘀𝘁* ({len(words)} words)\n"
             f"{'─'*14}\n\n"
             f"{word_list}",
             parse_mode='Markdown'
@@ -4143,7 +4147,7 @@ async def gwhitelist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if action == "add":
         db.add_gwhitelist(word)
         await update.message.reply_text(
-            f"✅ *Added to Global Whitelist*\n\n"
+            f"✅ *𝗔𝗱𝗱𝗲𝗱 𝘁𝗼 𝗚𝗹𝗼𝗯𝗮𝗹 𝗪𝗵𝗶𝘁𝗲𝗹𝗶𝘀𝘁*\n\n"
             f"✔️ `{word}`\n\n"
             f"_This word is now allowed in ALL groups._",
             parse_mode='Markdown'
@@ -4151,7 +4155,7 @@ async def gwhitelist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif action == "remove":
         db.remove_gwhitelist(word)
         await update.message.reply_text(
-            f"✅ *Removed from Global Whitelist*\n\n"
+            f"✅ *𝗥𝗲𝗺𝗼𝘃𝗲𝗱 𝗳𝗿𝗼𝗺 𝗚𝗹𝗼𝗯𝗮𝗹 𝗪𝗵𝗶𝘁𝗲𝗹𝗶𝘀𝘁*\n\n"
             f"🗑️ `{word}`",
             parse_mode='Markdown'
         )
@@ -4191,7 +4195,7 @@ async def power_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     db.add_powered(target_id)
     await update.message.reply_text(
-        f"⚡ *Power Granted*\n"
+        f"⚡ *𝗣𝗼𝘄𝗲𝗿 𝗚𝗿𝗮𝗻𝘁𝗲𝗱*\n"
         f"{'─'*14}\n\n"
         f"🆔 User `{target_id}` can now use `/fban` and `/gunban`.\n\n"
         f"Use `/unpower {target_id}` to revoke.",
@@ -4308,7 +4312,7 @@ async def fban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # Confirm silently to the caller only (no group notification)
     confirm_text = (
-        f"💀 *Global Ban Executed*\n"
+        f"💀 *𝗚𝗹𝗼𝗯𝗮𝗹 𝗕𝗮𝗻 𝗘𝘅𝗲𝗰𝘂𝘁𝗲𝗱*\n"
         f"{'─'*14}\n\n"
         f"👤 User: `{target_id}`"
         f"{f'  ({target_name})' if target_name else ''}\n"
@@ -4367,7 +4371,7 @@ async def gunban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await asyncio.sleep(0.05)
 
     await update.message.reply_text(
-        f"✅ *Global Unban Complete*\n"
+        f"✅ *𝗚𝗹𝗼𝗯𝗮𝗹 𝗨𝗻𝗯𝗮𝗻 𝗖𝗼𝗺𝗽𝗹𝗲𝘁𝗲*\n"
         f"{'─'*14}\n\n"
         f"👤 User `{target_id}` unbanned from `{unbanned_count}` groups.\n"
         f"_No notifications were sent to any group._",
@@ -4417,7 +4421,7 @@ async def gclearwarn_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     deleted = db.global_clear_warnings(target_id)
 
     await update.message.reply_text(
-        f"🧹 *Global Warnings Cleared*\n"
+        f"🧹 *𝗚𝗹𝗼𝗯𝗮𝗹 𝗪𝗮𝗿𝗻𝗶𝗻𝗴𝘀 𝗖𝗹𝗲𝗮𝗿𝗲𝗱*\n"
         f"{'─'*14}\n\n"
         f"👤 User: {target_name or f'`{target_id}`'}\n"
         f"🗑️ Removed: `{deleted}` warning record(s) across all groups\n\n"
@@ -4455,7 +4459,7 @@ async def aimod_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.args or ctx.args[0].lower() not in ('on', 'off'):
         status = "🟢 ON" if g.get("aimod", False) else "🔴 OFF"
         return await update.message.reply_text(
-            f"🤖 *AI Moderation*\n"
+            f"🤖 *𝗔𝗜 𝗠𝗼𝗱𝗲𝗿𝗮𝘁𝗶𝗼𝗻*\n"
             f"{'─'*14}\n\n"
             f"Status: {status}\n"
             f"Owner Approved: ✅\n\n"
@@ -4516,7 +4520,7 @@ async def missinganime_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         lines.append(f"  {i}. `{name}` — {count}x")
 
     text = (
-        f"📋 *Unanswered Requests*\n"
+        f"📋 *𝗨𝗻𝗮𝗻𝘀𝘄𝗲𝗿𝗲𝗱 𝗥𝗲𝗾𝘂𝗲𝘀𝘁𝘀*\n"
         f"{'─'*14}\n\n"
         + "\n".join(lines) +
         f"\n\n{'─'*14}\n"
@@ -4658,7 +4662,7 @@ async def aigroups_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
 
     await update.message.reply_text(
-        f"🤖 *AI Approved Groups* ({len(approved)})\n"
+        f"🤖 *𝗔𝗜 𝗔𝗽𝗽𝗿𝗼𝘃𝗲𝗱 𝗚𝗿𝗼𝘂𝗽𝘀* ({len(approved)})\n"
         f"{'─'*14}\n\n"
         + "\n".join(approved) +
         f"\n\n_Use `/airevoke <chat_id>` to remove._",
@@ -4703,10 +4707,10 @@ async def addteacher_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     db.add_teacher(ch.id, target_id)
     await update.message.reply_text(
-        f"📚 *Teacher Added*\n"
+        f"📚 *𝗧𝗲𝗮𝗰𝗵𝗲𝗿 𝗔𝗱𝗱𝗲𝗱*\n"
         f"{'─'*14}\n\n"
         f"👤 User: `{target_id}`{f'  ({target_name})' if target_name else ''}\n\n"
-        f"🛡️ *Special handling:*\n"
+        f"🛡️ *𝙎𝙥𝙚𝙘𝙞𝙖𝙡 𝙝𝙖𝙣𝙙𝙡𝙞𝙣𝙜:*\n"
         f"  • 1st promo → just a polite warning, no mute\n"
         f"  • 2nd promo → 🔇 10 min mute\n"
         f"  • 3rd promo → 🔇 40 min mute\n"
@@ -4789,7 +4793,7 @@ async def adexempt_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         exempts = db.get_all_ad_exempt()
         if not exempts:
             return await update.message.reply_text(
-                "📋 *Autodelete Exempt List* is empty.\n\n"
+                "📋 *𝗔𝘂𝘁𝗼𝗱𝗲𝗹𝗲𝘁𝗲 𝗘𝘅𝗲𝗺𝗽𝘁 𝗟𝗶𝘀𝘁* is empty.\n\n"
                 "Usage: `/adexempt <id | @username>` — add exempt\n"
                 "`/unadexempt <id>` — remove exempt\n"
                 "`/adexempt list` — show all",
@@ -4797,7 +4801,7 @@ async def adexempt_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
         lines = "\n".join(f"  • `{eid}`" for eid in exempts)
         return await update.message.reply_text(
-            f"🤖 *Autodelete Exempt* ({len(exempts)})\n"
+            f"🤖 *𝗔𝘂𝘁𝗼𝗱𝗲𝗹𝗲𝘁𝗲 𝗘𝘅𝗲𝗺𝗽𝘁* ({len(exempts)})\n"
             f"{'─'*14}\n\n"
             f"{lines}\n\n"
             f"_These bots/channels are NEVER auto-deleted._",
@@ -4829,7 +4833,7 @@ async def adexempt_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     db.add_ad_exempt(target_id)
     await update.message.reply_text(
-        f"✅ *Exemption Added*\n\n"
+        f"✅ *𝗘𝘅𝗲𝗺𝗽𝘁𝗶𝗼𝗻 𝗔𝗱𝗱𝗲𝗱*\n\n"
         f"🤖 ID `{target_id}` — messages will *never* be auto-deleted.\n"
         f"Use `/unadexempt {target_id}` to remove.",
         parse_mode='Markdown'
@@ -4956,7 +4960,7 @@ async def rep_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # ── Keyboard ──────────────────────────────────────────────
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🏆 Rep Leaderboard", callback_data=f"rep:board:{ch.id}")]
+        [InlineKeyboardButton("🏆 𝗥𝗲𝗽 𝗟𝗲𝗮𝗱𝗲𝗿𝗯𝗼𝗮𝗿𝗱", callback_data=f"rep:board:{ch.id}")]
     ])
 
     msg = await update.message.reply_text(text, parse_mode='Markdown', reply_markup=kb)
@@ -5015,11 +5019,11 @@ async def repboard_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     kb = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🔄 Refresh", callback_data=f"rep:board:{ch.id}"),
-            InlineKeyboardButton("⭐ My Profile", callback_data="rep:myprofile"),
+            InlineKeyboardButton("🔄 𝗥𝗲𝗳𝗿𝗲𝘀𝗵", callback_data=f"rep:board:{ch.id}"),
+            InlineKeyboardButton("⭐ 𝗠𝘆 𝗣𝗿𝗼𝗳𝗶𝗹𝗲", callback_data="rep:myprofile"),
         ],
         [
-            InlineKeyboardButton("🌐 Global Refresh", callback_data="rep:global:0"),
+            InlineKeyboardButton("🌐 𝗚𝗹𝗼𝗯𝗮𝗹 𝗥𝗲𝗳𝗿𝗲𝘀𝗵", callback_data="rep:global:0"),
         ]
     ])
 
@@ -5091,10 +5095,10 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
             kb_rows = [
                 [
-                    InlineKeyboardButton("🏆 Rep Board",   callback_data="menu_repboard"),
-                    InlineKeyboardButton("🌐 Global Rank", callback_data="rep:global:0"),
+                    InlineKeyboardButton("🏆 𝗥𝗲𝗽 𝗕𝗼𝗮𝗿𝗱",   callback_data="menu_repboard"),
+                    InlineKeyboardButton("🌐 𝗚𝗹𝗼𝗯𝗮𝗹 𝗥𝗮𝗻𝗸", callback_data="rep:global:0"),
                 ],
-                [InlineKeyboardButton("◀️ Back", callback_data="menu_main")],
+                [InlineKeyboardButton("◀️ 𝗕𝗮𝗰𝗸", callback_data="menu_main")],
             ]
             await query.edit_message_text(text, parse_mode='Markdown',
                 reply_markup=InlineKeyboardMarkup(kb_rows))
@@ -5118,14 +5122,14 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 text, parse_mode='Markdown',
                 reply_markup=InlineKeyboardMarkup([
                     [
-                        InlineKeyboardButton("🔄 Refresh",       callback_data=f"rep:board:{chat_id}"),
-                        InlineKeyboardButton("⭐ My Profile",    callback_data="rep:myprofile"),
+                        InlineKeyboardButton("🔄 𝗥𝗲𝗳𝗿𝗲𝘀𝗵",       callback_data=f"rep:board:{chat_id}"),
+                        InlineKeyboardButton("⭐ 𝗠𝘆 𝗣𝗿𝗼𝗳𝗶𝗹𝗲",    callback_data="rep:myprofile"),
                     ],
                     [
-                        InlineKeyboardButton("📊 Group Rank",   callback_data=f"rep:board:{chat_id}"),
-                        InlineKeyboardButton("🌐 Global Rank",  callback_data="rep:global:0"),
+                        InlineKeyboardButton("📊 𝗚𝗿𝗼𝘂𝗽 𝗥𝗮𝗻𝗸",   callback_data=f"rep:board:{chat_id}"),
+                        InlineKeyboardButton("🌐 𝗚𝗹𝗼𝗯𝗮𝗹 𝗥𝗮𝗻𝗸",  callback_data="rep:global:0"),
                     ],
-                    [InlineKeyboardButton("◀️ Back", callback_data="menu_main")],
+                    [InlineKeyboardButton("◀️ 𝗕𝗮𝗰𝗸", callback_data="menu_main")],
                 ])
             )
 
@@ -5145,12 +5149,12 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 text, parse_mode='Markdown',
                 reply_markup=InlineKeyboardMarkup([
                     [
-                        InlineKeyboardButton("🔄 Refresh",     callback_data="rep:global:0"),
-                        InlineKeyboardButton("⭐ My Profile",  callback_data="rep:myprofile"),
+                        InlineKeyboardButton("🔄 𝗥𝗲𝗳𝗿𝗲𝘀𝗵",     callback_data="rep:global:0"),
+                        InlineKeyboardButton("⭐ 𝗠𝘆 𝗣𝗿𝗼𝗳𝗶𝗹𝗲",  callback_data="rep:myprofile"),
                     ],
                     [
-                        InlineKeyboardButton("🏠 Group Rank",  callback_data=f"rep:board:{ch_id}"),
-                        InlineKeyboardButton("◀️ Back",        callback_data="menu_main"),
+                        InlineKeyboardButton("🏠 𝗚𝗿𝗼𝘂𝗽 𝗥𝗮𝗻𝗸",  callback_data=f"rep:board:{ch_id}"),
+                        InlineKeyboardButton("◀️ 𝗕𝗮𝗰𝗸",        callback_data="menu_main"),
                     ],
                 ])
             )
@@ -5290,7 +5294,7 @@ async def _delayed_ai_check(ctx, msg, ch, usr, txt_for_ai, is_reply_to_bot, g_se
             group_name = getattr(ch, 'title', str(ch.id))
             await ctx.bot.send_message(
                 OWNER_ID,
-                f"📋 *Unanswered Request*\n{'─'*14}\n\n"
+                f"📋 *𝗨𝗻𝗮𝗻𝘀𝘄𝗲𝗿𝗲𝗱 𝗥𝗲𝗾𝘂𝗲𝘀𝘁*\n{'─'*14}\n\n"
                 f"🔎 Item: `{anime_name}`\n"
                 f"👤 User: {user_name(usr)}\n"
                 f"💬 Group: {group_name} (`{ch.id}`)\n\n"
@@ -5555,7 +5559,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             group_name = getattr(ch, 'title', str(ch.id))
             await ctx.bot.send_message(
                 OWNER_ID,
-                f"📋 *Unanswered Request*\n"
+                f"📋 *𝗨𝗻𝗮𝗻𝘀𝘄𝗲𝗿𝗲𝗱 𝗥𝗲𝗾𝘂𝗲𝘀𝘁*\n"
                 f"{'─'*14}\n\n"
                 f"🔎 Item: `{anime_name}`\n"
                 f"👤 User: {user_name(usr)}\n"
@@ -5689,12 +5693,12 @@ async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"{'─'*14}\n\n"
                 f"⚡ *This group is now protected.*\n\n"
                 f"{'─'*14}\n"
-                f"📋 *Please grant these admin rights:*\n"
+                f"📋 *𝙋𝙡𝙚𝙖𝙨𝙚 𝙜𝙧𝙖𝙣𝙩 𝙩𝙝𝙚𝙨𝙚 𝙖𝙙𝙢𝙞𝙣 𝙧𝙞𝙜𝙝𝙩𝙨:*\n"
                 f"  ✅ Delete Messages\n"
                 f"  ✅ Restrict Members\n"
                 f"  ✅ Ban Members\n\n"
                 f"{'─'*14}\n"
-                f"🛡️ *Active by default:*\n"
+                f"🛡️ *𝘼𝙘𝙩𝙞𝙫𝙚 𝙗𝙮 𝙙𝙚𝙛𝙖𝙪𝙡𝙩:*\n"
                 f"  🤖 External bots & @mentions\n"
                 f"  🔗 Links & URLs\n"
                 f"  ↩️ Forwarded messages\n"
@@ -5727,7 +5731,7 @@ async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                         await do_ban(ctx, update.effective_chat.id, member.id)
                         await ctx.bot.unban_chat_member(update.effective_chat.id, member.id)  # ban→unban = clean kick
                         notice = await update.message.reply_text(
-                            f"🛑 *Spam bot removed*\n👤 {user_name(member)} was kicked _(bot filter)_.",
+                            f"🛑 *𝗦𝗽𝗮𝗺 𝗯𝗼𝘁 𝗿𝗲𝗺𝗼𝘃𝗲𝗱*\n👤 {user_name(member)} was kicked _(bot filter)_.",
                             parse_mode='Markdown'
                         )
                         asyncio.create_task(delete_after(ctx, update.effective_chat.id, notice.message_id, 20))
@@ -5822,30 +5826,30 @@ def kb_settings_main(chat_id):
     wl_count = len(db.get_whitelist(chat_id) or [])
     return [
         [
-            {"text": "📜 Rules", "callback_data": "cfg_rules", "style": "primary"},
-            {"text": f"🗑️ Sticker Del {ICON_ON if stk else ICON_OFF}", "callback_data": "cfg_stkdel",
+            {"text": "📜 𝗥𝘂𝗹𝗲𝘀", "callback_data": "cfg_rules", "style": "primary"},
+            {"text": f"🗑️ 𝗦𝘁𝗶𝗰𝗸𝗲𝗿 𝗗𝗲𝗹 {ICON_ON if stk else ICON_OFF}", "callback_data": "cfg_stkdel",
              "style": "success" if stk else "danger"},
         ],
         [
-            {"text": f"⏱️ Auto-Delete {ICON_ON if ad else ICON_OFF}", "callback_data": "cfg_autodel",
+            {"text": f"⏱️ 𝗔𝘂𝘁𝗼-𝗗𝗲𝗹𝗲𝘁𝗲 {ICON_ON if ad else ICON_OFF}", "callback_data": "cfg_autodel",
              "style": "success" if ad else "danger"},
-            {"text": "⚠️ Warn Durations", "callback_data": "cfg_warndur", "style": "primary"},
+            {"text": "⚠️ 𝗪𝗮𝗿𝗻 𝗗𝘂𝗿𝗮𝘁𝗶𝗼𝗻𝘀", "callback_data": "cfg_warndur", "style": "primary"},
         ],
         [
-            {"text": f"⛔ Blacklist {ICON_ON if bl_count else ICON_OFF}", "callback_data": "cfg_bl",
+            {"text": f"⛔ 𝗕𝗹𝗮𝗰𝗸𝗹𝗶𝘀𝘁 {ICON_ON if bl_count else ICON_OFF}", "callback_data": "cfg_bl",
              "style": "success" if bl_count else "danger"},
-            {"text": f"✅ Whitelist {ICON_ON if wl_count else ICON_OFF}", "callback_data": "cfg_wl",
+            {"text": f"✅ 𝗪𝗵𝗶𝘁𝗲𝗹𝗶𝘀𝘁 {ICON_ON if wl_count else ICON_OFF}", "callback_data": "cfg_wl",
              "style": "success" if wl_count else "danger"},
         ],
         [
-            {"text": f"🛡️ Filters ({_filters_status_line(chat_id)})", "callback_data": "cfg_filters", "style": "primary"},
+            {"text": f"🛡️ 𝗙𝗶𝗹𝘁𝗲𝗿𝘀 ({_filters_status_line(chat_id)})", "callback_data": "cfg_filters", "style": "primary"},
         ],
         [
-            {"text": f"🎭 Captcha {ICON_ON if captcha_on else ICON_OFF}", "callback_data": "cfg_captcha",
+            {"text": f"🎭 𝗖𝗮𝗽𝘁𝗰𝗵𝗮 {ICON_ON if captcha_on else ICON_OFF}", "callback_data": "cfg_captcha",
              "style": "success" if captcha_on else "danger"},
-            {"text": "🏆 Reputation", "callback_data": "menu_repboard", "style": "primary"},
+            {"text": "🏆 𝗥𝗲𝗽𝘂𝘁𝗮𝘁𝗶𝗼𝗻", "callback_data": "menu_repboard", "style": "primary"},
         ],
-        [{"text": "❌ Close", "callback_data": "close_menu", "style": "danger"}],
+        [{"text": "❌ 𝗖𝗹𝗼𝘀𝗲", "callback_data": "close_menu", "style": "danger"}],
     ]
 
 def _settings_overview_text(chat_id):
@@ -5860,7 +5864,7 @@ def _settings_overview_text(chat_id):
     return (
         f"*⚙️ 𝗚𝗥𝗢𝗨𝗣 𝗦𝗘𝗧𝗧𝗜𝗡𝗚𝗦 𝗣𝗔𝗡𝗘𝗟*\n"
         f"{'─'*14}\n\n"
-        f"📌 *Quick Status*\n"
+        f"📌 *𝙌𝙪𝙞𝙘𝙠 𝙎𝙩𝙖𝙩𝙪𝙨*\n"
         f"  🛡️ Filters: {_filters_status_line(chat_id)}\n"
         f"  🗑️ Sticker auto-del: {ICON_ON + ' ' + _sec_human(stk) if stk else ICON_OFF + ' Off'}\n"
         f"  ⏱️ Msg auto-del: {ICON_ON + ' ' + _sec_human(ad) if ad else ICON_OFF + ' Off'}\n"
@@ -5888,7 +5892,7 @@ async def settings_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     schedule_panel_autodelete(ctx, ch.id, msg_id, cmd_msg_id=update.message.message_id)
 
 def rows_back_cfg():
-    return [[{"text": "◀️ Back", "callback_data": "cfg_main", "style": "primary"}]]
+    return [[{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_main", "style": "primary"}]]
 
 def kb_back_cfg():
     """Fallback ke liye plain-markup version (legacy call-sites)."""
@@ -5907,7 +5911,7 @@ def kb_filters_grid(chat_id):
                 row.append({"text": f"{icon} {FILTER_LABELS[k]}", "callback_data": f"cfg_f_{k}",
                             "style": "success" if on else "danger"})
             rows.append(row)
-    rows.append([{"text": "◀️ Back", "callback_data": "cfg_main", "style": "primary"}])
+    rows.append([{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_main", "style": "primary"}])
     return rows
 
 def _filters_status_line(chat_id):
@@ -5973,8 +5977,8 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
             f"*📜 GROUP RULES*\n{'─'*14}\n\n{rules}\n\n"
             f"_To set a new rule, tap the button below and send your message._",
             [
-                [{"text": "✏️ Set New Rules", "callback_data": "cfg_rules_set", "style": "primary"}],
-                [{"text": "◀️ Back", "callback_data": "cfg_main", "style": "primary"}],
+                [{"text": "✏️ 𝗦𝗲𝘁 𝗡𝗲𝘄 𝗥𝘂𝗹𝗲𝘀", "callback_data": "cfg_rules_set", "style": "primary"}],
+                [{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_main", "style": "primary"}],
             ]
         )
         return
@@ -5994,10 +5998,10 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
             f"Status: {'🟢 ON — ' + str(stk) + ' min' if stk else '🔴 OFF'}\n\n"
             f"_Stickers/GIFs will auto-delete after this duration._",
             [
-                [{"text": "🔴 Turn OFF" if stk else "🟢 Turn ON", "callback_data": "cfg_stkdel_toggle",
+                [{"text": "🔴 𝗧𝘂𝗿𝗻 𝗢𝗙𝗙" if stk else "🟢 Turn ON", "callback_data": "cfg_stkdel_toggle",
                   "style": "danger" if stk else "success"}],
-                [{"text": "✏️ Set Minutes", "callback_data": "cfg_stkdel_set", "style": "primary"}],
-                [{"text": "◀️ Back", "callback_data": "cfg_main", "style": "primary"}],
+                [{"text": "✏️ 𝗦𝗲𝘁 𝗠𝗶𝗻𝘂𝘁𝗲𝘀", "callback_data": "cfg_stkdel_set", "style": "primary"}],
+                [{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_main", "style": "primary"}],
             ]
         )
         return
@@ -6030,10 +6034,10 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
             f"Status: {'🟢 ON — ' + str(ad) + ' min' if ad else '🔴 OFF'}\n\n"
             f"_Normal messages will auto-delete after this duration._",
             [
-                [{"text": "🔴 Turn OFF" if ad else "🟢 Turn ON", "callback_data": "cfg_autodel_toggle",
+                [{"text": "🔴 𝗧𝘂𝗿𝗻 𝗢𝗙𝗙" if ad else "🟢 Turn ON", "callback_data": "cfg_autodel_toggle",
                   "style": "danger" if ad else "success"}],
-                [{"text": "✏️ Set Minutes", "callback_data": "cfg_autodel_set", "style": "primary"}],
-                [{"text": "◀️ Back", "callback_data": "cfg_main", "style": "primary"}],
+                [{"text": "✏️ 𝗦𝗲𝘁 𝗠𝗶𝗻𝘂𝘁𝗲𝘀", "callback_data": "cfg_autodel_set", "style": "primary"}],
+                [{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_main", "style": "primary"}],
             ]
         )
         return
@@ -6069,14 +6073,14 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
             f"_Select a stage to edit:_",
             [
                 [
-                    {"text": "W1 ✏️", "callback_data": "cfg_wd_1", "style": "primary"},
-                    {"text": "W2 ✏️", "callback_data": "cfg_wd_2", "style": "primary"},
+                    {"text": "𝗪𝟭 ✏️", "callback_data": "cfg_wd_1", "style": "primary"},
+                    {"text": "𝗪𝟮 ✏️", "callback_data": "cfg_wd_2", "style": "primary"},
                 ],
                 [
-                    {"text": "W3 ✏️", "callback_data": "cfg_wd_3", "style": "primary"},
-                    {"text": "W4 ✏️", "callback_data": "cfg_wd_4", "style": "primary"},
+                    {"text": "𝗪𝟯 ✏️", "callback_data": "cfg_wd_3", "style": "primary"},
+                    {"text": "𝗪𝟰 ✏️", "callback_data": "cfg_wd_4", "style": "primary"},
                 ],
-                [{"text": "◀️ Back", "callback_data": "cfg_main", "style": "primary"}],
+                [{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_main", "style": "primary"}],
             ]
         )
         return
@@ -6098,11 +6102,11 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
             f"_You can also disable the owner's global blacklist words for this group._",
             [
                 [
-                    {"text": "➕ Add Word", "callback_data": "cfg_bl_add", "style": "success"},
-                    {"text": "➖ Remove Word", "callback_data": "cfg_bl_rem", "style": "danger"},
+                    {"text": "➕ 𝗔𝗱𝗱 𝗪𝗼𝗿𝗱", "callback_data": "cfg_bl_add", "style": "success"},
+                    {"text": "➖ 𝗥𝗲𝗺𝗼𝘃𝗲 𝗪𝗼𝗿𝗱", "callback_data": "cfg_bl_rem", "style": "danger"},
                 ],
-                [{"text": "🌐 Global Words (owner set)", "callback_data": "cfg_bl_g", "style": "primary"}],
-                [{"text": "◀️ Back", "callback_data": "cfg_main", "style": "primary"}],
+                [{"text": "🌐 𝗚𝗹𝗼𝗯𝗮𝗹 𝗪𝗼𝗿𝗱𝘀 (𝗼𝘄𝗻𝗲𝗿 𝘀𝗲𝘁)", "callback_data": "cfg_bl_g", "style": "primary"}],
+                [{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_main", "style": "primary"}],
             ]
         )
         return
@@ -6129,7 +6133,7 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
             icon = "🔴 OFF" if off else "🟢 ON"
             rows.append([{"text": f"{icon} — {w}", "callback_data": f"cfg_bl_gt_{w[:45]}",
                           "style": "danger" if off else "success"}])
-        rows.append([{"text": "◀️ Back", "callback_data": "cfg_bl", "style": "primary"}])
+        rows.append([{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_bl", "style": "primary"}])
         await _cfg_edit(
             query, ch.id,
             f"*🌐 GLOBAL BLACKLIST WORDS*\n{'─'*14}\n\n"
@@ -6159,11 +6163,11 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
             f"_You can also disable the owner's global whitelist words for this group._",
             [
                 [
-                    {"text": "➕ Add Word", "callback_data": "cfg_wl_add", "style": "success"},
-                    {"text": "➖ Remove Word", "callback_data": "cfg_wl_rem", "style": "danger"},
+                    {"text": "➕ 𝗔𝗱𝗱 𝗪𝗼𝗿𝗱", "callback_data": "cfg_wl_add", "style": "success"},
+                    {"text": "➖ 𝗥𝗲𝗺𝗼𝘃𝗲 𝗪𝗼𝗿𝗱", "callback_data": "cfg_wl_rem", "style": "danger"},
                 ],
-                [{"text": "🌐 Global Words (owner set)", "callback_data": "cfg_wl_g", "style": "primary"}],
-                [{"text": "◀️ Back", "callback_data": "cfg_main", "style": "primary"}],
+                [{"text": "🌐 𝗚𝗹𝗼𝗯𝗮𝗹 𝗪𝗼𝗿𝗱𝘀 (𝗼𝘄𝗻𝗲𝗿 𝘀𝗲𝘁)", "callback_data": "cfg_wl_g", "style": "primary"}],
+                [{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_main", "style": "primary"}],
             ]
         )
         return
@@ -6190,7 +6194,7 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
             icon = "🔴 OFF" if off else "🟢 ON"
             rows.append([{"text": f"{icon} — {w}", "callback_data": f"cfg_wl_gt_{w[:45]}",
                           "style": "danger" if off else "success"}])
-        rows.append([{"text": "◀️ Back", "callback_data": "cfg_wl", "style": "primary"}])
+        rows.append([{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_wl", "style": "primary"}])
         await _cfg_edit(
             query, ch.id,
             f"*🌐 GLOBAL WHITELIST WORDS*\n{'─'*14}\n\n"
@@ -6252,9 +6256,9 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
             f"Status: {ICON_ON + ' ON' if on else ICON_OFF + ' OFF'}\n\n"
             f"_New members must solve a math question to chat, until verified._",
             [
-                [{"text": f"{ICON_OFF} Turn OFF" if on else f"{ICON_ON} Turn ON", "callback_data": "cfg_captcha_toggle",
+                [{"text": f"{ICON_OFF} 𝗧𝘂𝗿𝗻 𝗢𝗙𝗙" if on else f"{ICON_ON} Turn ON", "callback_data": "cfg_captcha_toggle",
                   "style": "danger" if on else "success"}],
-                [{"text": "◀️ Back", "callback_data": "cfg_main", "style": "primary"}],
+                [{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_main", "style": "primary"}],
             ]
         )
         return
@@ -6339,7 +6343,7 @@ async def handle_settings_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE, 
         reply = "⚠️ Something went wrong — try /settings again."
 
     panel_msg_id = pending.get("panel_msg_id")
-    back_rows = [[{"text": "◀️ Back to Settings", "callback_data": "cfg_main", "style": "primary"}]]
+    back_rows = [[{"text": "◀️ 𝗕𝗮𝗰𝗸 𝘁𝗼 𝗦𝗲𝘁𝘁𝗶𝗻𝗴𝘀", "callback_data": "cfg_main", "style": "primary"}]]
 
     # Purana "type karke bhejo" prompt ab kaam ka nahi raha — usi message ko edit
     # karke confirmation dikhao, taaki ek fizool message group mein na reh jaaye.
