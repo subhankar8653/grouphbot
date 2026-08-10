@@ -1561,16 +1561,24 @@ async def check_username(text, wl_words, ctx, chat_id, members_only=False):
         if not members_only:
             return True  # Usernames not allowed at all in this group
 
-        # Premium mode: check if this @username is a member of the group
+        # Premium mode: check if this @username is a member of the group.
+        # NOTE: Telegram's getChatMember needs a numeric user_id — it can't
+        # take "@username" directly — so we first resolve the username to
+        # an ID via our seen-users index (same lookup /ban, /warn etc. use),
+        # then check that ID's membership status in THIS group.
         is_member = False
-        try:
-            member = await ctx.bot.get_chat_member(chat_id, f"@{uname}")
-            # Allow only active members
-            if member.status in ("member", "administrator", "creator", "restricted"):
-                is_member = True
-        except Exception:
-            # Exception = user not found in group → treat as outsider
-            is_member = False
+        uid = db.find_user_by_username(uname)
+        if uid is not None:
+            try:
+                member = await ctx.bot.get_chat_member(chat_id, uid)
+                # Allow only active members
+                if member.status in ("member", "administrator", "creator", "restricted"):
+                    is_member = True
+            except Exception:
+                # Exception = not found in this group (left/kicked/never joined) → outsider
+                is_member = False
+        # If we've never seen this username before, we have no ID to check —
+        # treat as outsider (can't confirm they're a member of this group).
 
         if not is_member:
             return True  # Block this message
