@@ -94,14 +94,14 @@ WARN_MSG = {
     3: (
         "🔴 *𝗪𝗔𝗥𝗡𝗜𝗡𝗚 𝟯/𝟰 — 𝗟𝗔𝗦𝗧 𝗖𝗛𝗔𝗡𝗖𝗘*\n"
         "──────────────\n"
-        "⚡ Next violation = *1 week mute, in every group.*\n"
+        "⚡ Next violation = *1 week mute in this group.*\n"
         "⏱ Muted for *120 seconds*\n\n"
         "_This is your final warning._"
     ),
     4: (
-        "💀 *𝗚𝗟𝗢𝗕𝗔𝗟 𝗠𝗨𝗧𝗘 𝗔𝗖𝗧𝗜𝗩𝗔𝗧𝗘𝗗*\n"
+        "💀 *𝗪𝗔𝗥𝗡𝗜𝗡𝗚 𝟰/𝟰 — 𝗠𝗔𝗫 𝗥𝗘𝗔𝗖𝗛𝗘𝗗*\n"
         "──────────────\n"
-        "🗓 *1 week* mute — applied in *every group*\n"
+        "🗓 *1 week* mute — applied in *this group*\n"
         "🔐 Only an admin can lift it.\n\n"
         "_The limit was reached._"
     ),
@@ -341,6 +341,10 @@ SHADOW_MSG_COUNT: dict[tuple, int] = {}         # (chat_id,user_id) -> msgs sinc
 SHADOW_FLOOD: dict[tuple, list] = {}            # (chat_id,user_id) -> [timestamps]
 SHADOW_FLOOD_LIMIT  = 10
 SHADOW_FLOOD_WINDOW = 60
+SHADOW_PUNISH_THRESHOLD = 5                     # after this many bio-blocked messages, switch
+                                                 # to the normal warn/mute escalation (same as a
+                                                 # normal link/blacklist violation) instead of
+                                                 # just silently deleting the message
 
 def bio_violation(bio: str, chat_id: int):
     """Check a bio string for a link or a blacklisted word.
@@ -394,6 +398,7 @@ class DB:
         self.gblacklist = self.db["global_blacklist"]
         self.fbans    = self.db["fbans"]          # fban list
         self.powered  = self.db["powered_users"]  # users with /fban power
+        self.communities = self.db["communities"]  # admin_id -> [group_id,...] (for /gban & scoped /unmute)
         self.ad_exempt = self.db["autodel_exempt"] # bots exempt from autodelete
         self.reputation = self.db["reputation"]   # group-wise reputation points (SEPARATE from leaderboard)
         self.activity  = self.db["activity"]      # daily message-count tracking (leaderboard source)
@@ -1047,6 +1052,21 @@ class DB:
     def is_powered(self, user_id):
         return self.powered.find_one({"_id": user_id}) is not None
 
+    # ── Community (per-admin group list) — used by /gban and by the
+    # scoped /unmute for non-owner admins. An admin can only add a group
+    # they're actually admin/owner of (checked at call site, not here). ──
+    def add_to_community(self, admin_id, group_id):
+        self.communities.update_one(
+            {"_id": admin_id}, {"$addToSet": {"groups": group_id}}, upsert=True
+        )
+
+    def remove_from_community(self, admin_id, group_id):
+        self.communities.update_one({"_id": admin_id}, {"$pull": {"groups": group_id}})
+
+    def get_community_groups(self, admin_id):
+        doc = self.communities.find_one({"_id": admin_id})
+        return doc.get("groups", []) if doc else []
+
     # ── Autodelete Exempt Bots (global) ──────────────────────
     def add_ad_exempt(self, bot_id):
         """Globally exempt a bot/user ID from autodelete."""
@@ -1621,6 +1641,92 @@ async def do_mute(ctx, chat_id, user_id, seconds=None):
         return True
     except:
         return False
+
+
+def format_duration(seconds):
+    """Human-friendly duration string for warn/mute messages."""
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    if seconds < 86400:
+        return f"{seconds // 3600}h"
+    if seconds < 604800:
+        return f"{seconds // 86400}d"
+    weeks = seconds // 604800
+    return f"{weeks}w" if weeks > 1 else "1 week"
+
+
+async def apply_warn_punishment(ctx, chat_id, usr, viol_txt, delete_delay=90):
+    """
+    The 'normal' escalating warn+mute punishment — same system every regular
+    filter violation (link, blacklist, etc.) gets: W1 → 35s, W2 → 1m,
+    W3 → 2m, W4 → 1 week — all of it scoped to THIS group only. Bio Guard
+    reuses this once a flagged user's shadow-blocked message count crosses
+    SHADOW_PUNISH_THRESHOLD, so repeated bio violations are punished exactly
+    like a normal violation instead of just being silently deleted forever.
+
+    NOTE: this never touches any group other than `chat_id` — there is no
+    automatic "mute everywhere" here anymore. A true cross-group mute is
+    only ever done by the owner-only `/gmute` DM command, or by a group
+    admin's own `/gban` across the groups in their own community.
+
+    Returns the warning count reached (1-4).
+    """
+    cnt = db.add_warning(chat_id, usr.id)
+
+    _wd = db.get_warn_durations(chat_id)
+    await do_mute(ctx, chat_id, usr.id, _wd[cnt])
+
+    bars = "🟥" * cnt + "⬜" * (4 - cnt)
+    mute_str = format_duration(_wd[cnt])
+    if cnt == 4:
+        next_str = "🔒 Max reached"
+    else:
+        next_str = f"W{cnt+1} ({format_duration(_wd[cnt+1])})"
+
+    warn_colors = {1: "🟡", 2: "🟠", 3: "🔴", 4: "💀"}
+    color = warn_colors.get(cnt, "⚠️")
+
+    # ── Auto-unmute captcha — aasan math sawaal jo galti se mute
+    # hue user khud solve karke apna mute + warning hata sake.
+    # Group admin ise /settings → Filters se on/off kar sakta hai. ──
+    warncaptcha_on = db.get_filters(chat_id).get("warncaptcha", True)
+    if warncaptcha_on:
+        cap_question, cap_answer, cap_options = generate_captcha()
+        MUTE_CAPTCHA_PENDING[f"{chat_id}_{usr.id}"] = {"answer": cap_answer}
+        captcha_block = (
+            f"\n🔐 Tap the right answer to unmute + clear warnings:\n"
+            f"      `{cap_question}`"
+        )
+        warn_kb = ckb_warn_captcha(chat_id, usr.id, cap_options)
+        warn_kb_plain = kb_warn_captcha(chat_id, usr.id, cap_options)
+    else:
+        captcha_block = ""
+        warn_kb = ckb_warn_actions(chat_id, usr.id)
+        warn_kb_plain = kb_warn_actions(chat_id, usr.id)
+
+    warn_text = (
+        f"*{color} WARNING {cnt}/4*\n"
+        f"👤 {user_mention(usr)}\n"
+        f"📌 _{viol_txt}_\n"
+        f"⏱ Muted: `{mute_str}` • Next: {next_str}\n"
+        f"Progress: {bars}"
+        f"{captcha_block}"
+    )
+    if warncaptcha_on:
+        asyncio.create_task(_cleanup_mute_captcha(chat_id, usr.id, delete_delay + 5))
+    warn_msg_id = await send_colored_message(chat_id, warn_text, warn_kb)
+    if warn_msg_id:
+        asyncio.create_task(delete_after(ctx, chat_id, warn_msg_id, delete_delay))
+    else:
+        notice = await ctx.bot.send_message(
+            chat_id, warn_text, parse_mode='Markdown',
+            reply_markup=warn_kb_plain
+        )
+        asyncio.create_task(delete_after(ctx, chat_id, notice.message_id, delete_delay))
+    return cnt
 
 
 async def do_unmute(ctx, chat_id, user_id):
@@ -2276,17 +2382,12 @@ async def mute_captcha_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # "verified" tap instantly instead of waiting for unmute+DB work.
         await query.answer("✅ Verified!")
 
-        # W1–W3 → mute was only local (this group), so unmute only here —
-        # fast, single API call. Only W4 (real gmute) needs the all-groups
-        # loop, since that's the only case where every group was muted.
-        was_gmuted = db.is_gmuted(user_id)
-        if was_gmuted:
-            await global_unmute_user(ctx, user_id)
-            scope_line = "🔊 Unmuted in *all groups* — you can send messages again."
-        else:
-            db.reset_warnings(chat_id, user_id)
-            await do_unmute(ctx, chat_id, user_id)
-            scope_line = "🔊 Unmuted in this group — you can send messages again."
+        # Every warn-mute (W1-W4) is scoped to this one group only now —
+        # a real cross-group gmute (owner's /gmute) can't be solved away
+        # by a captcha, so this always just unmutes here.
+        db.reset_warnings(chat_id, user_id)
+        await do_unmute(ctx, chat_id, user_id)
+        scope_line = "🔊 Unmuted in this group — you can send messages again."
 
         success_text = (
             f"✅ *Captcha Verified*\n"
@@ -2493,7 +2594,7 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             f"🔴 *W3* → 120 second mute\n"
             f"   ⏱ _Expires after 27 hours_\n\n"
             f"💀 *W4* → 1 week mute\n"
-            f"   🌐 _Applied across every group_\n"
+            f"   📍 _Applied in this group only_\n"
             f"   🔐 _Only an admin can lift it_\n\n"
             f"{'─'*14}\n"
             f"💡 *𝙏𝙞𝙥:* Reply with “thank you” to clear one warning.\n"
@@ -2734,8 +2835,9 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
                 c_id = int(parts[1])
                 u_id = int(parts[2])
                 if await is_adm(ctx, c_id, query.from_user.id) or query.from_user.id == OWNER_ID:
-                    await global_unmute_user(ctx, u_id)
-                    await query.answer("✅ User unmuted in all groups!", show_alert=True)
+                    db.reset_warnings(c_id, u_id)
+                    await do_unmute(ctx, c_id, u_id)
+                    await query.answer("✅ User unmuted in this group!", show_alert=True)
                     await query.message.edit_reply_markup(reply_markup=None)
                 else:
                     await query.answer("🔒 Admins only.", show_alert=True)
@@ -2823,6 +2925,8 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"⚡ *𝗠𝗢𝗗𝗘𝗥𝗔𝗧𝗜𝗢𝗡*\n\n"
             f"  💀 `/fban <id> [reason]` — Ban across all groups\n"
             f"  ✅ `/gunban <id>` — Reverse a global ban\n"
+            f"  🔇 `/gmute <id>` — Mute across all groups _(DM only)_\n"
+            f"  🔊 `/unmute <id>` — Unmute everywhere\n"
             f"  🧹 `/gclearwarn <id>` — Clear all warnings\n"
             f"  ⚡ `/power <id>` — Grant ban authority\n"
             f"  🔻 `/unpower <id>` — Revoke ban authority\n\n"
@@ -2952,7 +3056,14 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"📋 `/blacklist` · `/whitelist` — View word lists\n"
         f"📚 `/addteacher` — Grant teacher role\n"
         f"❌ `/removeteacher` — Remove teacher role\n"
-        f"📋 `/teachers` — List all teachers\n"
+        f"📋 `/teachers` — List all teachers\n\n"
+        f"{'─'*14}\n"
+        f"🌐 *𝗬𝗢𝗨𝗥 𝗖𝗢𝗠𝗠𝗨𝗡𝗜𝗧𝗬*\n\n"
+        f"➕ `/addcommunity` — Link this group to your community\n"
+        f"➖ `/removecommunity` — Unlink this group\n"
+        f"📋 `/mycommunity` — List your community's groups\n"
+        f"🔨 `/gban <id> [reason]` — Ban across your community\n"
+        f"_`/unmute` (yours) also covers your whole community._\n"
     )
 
     if is_owner:
@@ -2962,6 +3073,7 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"🌐 `/autodelete <min>` _(DM)_ — Set global default\n"
             f"💀 `/fban <id>` — Ban across all groups\n"
             f"✅ `/gunban <id>` — Reverse a global ban\n"
+            f"🔇 `/gmute <id>` — Mute across all groups _(DM only)_\n"
             f"🧹 `/gclearwarn <id>` — Clear all warnings\n"
             f"⚡ `/power <id>` · `/unpower <id>` — Ban authority\n"
             f"📢 `/broadcast <msg>` — Message every group\n"
@@ -3027,7 +3139,7 @@ async def rule_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"  🟡 1st → 35 sec mute\n"
             f"  🟠 2nd → 60 sec mute\n"
             f"  🔴 3rd → 120 sec mute\n"
-            f"  💀 4th → 1 week, in every group\n\n"
+            f"  💀 4th → 1 week, in this group\n\n"
             f"{'─'*14}\n"
             f"✅ _Follow the rules and enjoy your stay!_"
         )
@@ -3582,18 +3694,68 @@ async def mute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ─── /unmute ────────────────────────────────────────────────
 async def unmute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    ch = update.effective_chat
-    if ch.type == "private": return
-    if not await sender_is_admin(ctx, update): return
+    """
+    - Bot OWNER → true global unmute: every group the bot manages.
+    - Any other group admin → unmutes in the group they ran it in (if run
+      inside a group) PLUS every group in their own /addcommunity list.
+      Run from bot DM → only their community groups (no "current group").
+    """
+    ch  = update.effective_chat
+    usr = update.effective_user
+    is_owner = bool(usr) and usr.id == OWNER_ID
+
+    if ch.type != "private":
+        if not await sender_is_admin(ctx, update):
+            return
+    elif not is_owner and not db.get_community_groups(usr.id):
+        return await update.message.reply_text(
+            "🔒 Bot DM se `/unmute` sirf bot owner ke liye hai, ya un admins ke "
+            "liye jinki apni community bani hui hai — pehle group ke andar "
+            "`/addcommunity` chalao."
+        )
+
     tid, tobj, _, err = await resolve_target(
         update, ctx,
-        "↩️ Reply to a user, or use `/unmute <user_id | @username>`"
+        "↩️ Reply to a user (group ke andar), ya `/unmute <user_id | @username>` use karo"
     )
     if err:
         return await update.message.reply_text(err, parse_mode='Markdown')
-    await global_unmute_user(ctx, tid)
+
+    if is_owner:
+        await global_unmute_user(ctx, tid)
+        return await update.message.reply_text(
+            f"🔊 *𝗨𝗻𝗺𝘂𝘁𝗲𝗱*\n\n👤 {target_name(tobj, tid)} can send messages again — "
+            f"*saare groups* mein (bot-wide, owner unmute).",
+            parse_mode='Markdown'
+        )
+
+    groups = set(db.get_community_groups(usr.id))
+    current_group = ch.id if ch.type != "private" else None
+    if current_group:
+        groups.add(current_group)
+
+    if not groups:
+        return await update.message.reply_text(
+            "📭 Unmute karne ke liye koi group nahi mila.\n"
+            "Group ke andar chalao, ya pehle `/addcommunity` se apni community banao."
+        )
+
+    ok = 0
+    for gid in groups:
+        try:
+            db.reset_warnings(gid, tid)
+            if await do_unmute(ctx, gid, tid):
+                ok += 1
+            await asyncio.sleep(0.1)
+        except Exception:
+            pass
+
+    if groups == {current_group}:
+        scope = "this group"
+    else:
+        scope = f"`{ok}/{len(groups)}` group(s) — your community"
     await update.message.reply_text(
-        f"🔊 *𝗨𝗻𝗺𝘂𝘁𝗲𝗱*\n\n👤 {target_name(tobj, tid)} can send messages again — *saare groups* mein.",
+        f"🔊 *𝗨𝗻𝗺𝘂𝘁𝗲𝗱*\n\n👤 {target_name(tobj, tid)} can send messages again — {scope}.",
         parse_mode='Markdown'
     )
 
@@ -3662,9 +3824,6 @@ async def warn_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     rest_args = ctx.args[consumed:] if ctx.args else []
     reason = ' '.join(rest_args) if rest_args else "Rule violation"
     cnt = db.add_warning(ch.id, tid)
-    if cnt >= 4:
-        await global_mute_user(ctx, tid, target_name(tobj, tid))
-        return
     await do_mute(ctx, ch.id, tid, db.get_warn_durations(ch.id)[cnt])
 
     # Build warning bar
@@ -3772,15 +3931,16 @@ async def reset_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "ya unka user ID/@username seedhe use karo.",
             parse_mode='Markdown'
         )
-    await global_unmute_user(ctx, tid)
-    text = f"✅ *𝗪𝗮𝗿𝗻𝗶𝗻𝗴𝘀 𝗿𝗲𝘀𝗲𝘁*\n\n👤 {target_name(tobj, tid, escape=True)} now has 0 warnings — *saare groups* mein unmute ho gaya."
+    db.reset_warnings(ch.id, tid)
+    await do_unmute(ctx, ch.id, tid)
+    text = f"✅ *𝗪𝗮𝗿𝗻𝗶𝗻𝗴𝘀 𝗿𝗲𝘀𝗲𝘁*\n\n👤 {target_name(tobj, tid, escape=True)} now has 0 warnings — unmuted in this group."
     try:
         await update.message.reply_text(text, parse_mode='Markdown')
     except Exception:
         # Naam mein Markdown-breaking character ho sakta hai — plain text
         # fallback taaki confirmation kabhi bhi silently gayab na ho.
         await update.message.reply_text(
-            f"✅ Warnings reset\n\n👤 {target_name(tobj, tid, escape=False)} now has 0 warnings — unmuted in all groups."
+            f"✅ Warnings reset\n\n👤 {target_name(tobj, tid, escape=False)} now has 0 warnings — unmuted in this group."
         )
 
 
@@ -4531,6 +4691,165 @@ async def gunban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"{'─'*14}\n\n"
         f"👤 User `{target_id}` unbanned from `{unbanned_count}` groups.\n"
         f"_No notifications were sent to any group._",
+        parse_mode='Markdown'
+    )
+
+
+# ═══════════════════════════════════════════════════════════
+#  GLOBAL MUTE (owner-only, DM-only) — a true "every group the
+#  bot manages" mute, kept completely separate from the normal
+#  per-group warn/mute escalation (which never leaves its own group).
+# ═══════════════════════════════════════════════════════════
+# ─── /gmute ─────────────────────────────────────────────────
+async def gmute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Bot OWNER only, and only from the bot's own DM.
+    Mutes a user across EVERY group the bot manages.
+    Usage (in bot DM): /gmute <user_id | @username>
+    """
+    usr = update.effective_user
+    ch  = update.effective_chat
+    if not usr or usr.id != OWNER_ID:
+        return  # silent ignore
+    if ch.type != "private":
+        return await update.message.reply_text(
+            "🔒 `/gmute` sirf bot ke DM se chalta hai (server load bachane ke liye)."
+        )
+    tid, tobj, _, err = await resolve_target(
+        update, ctx,
+        "❌ Usage: `/gmute <user_id | @username>`"
+    )
+    if err:
+        return await update.message.reply_text(err, parse_mode='Markdown')
+    if tid == ctx.bot.id or tid == OWNER_ID:
+        return await update.message.reply_text("⚠️ This user can't be muted.")
+
+    await global_mute_user(ctx, tid, target_name(tobj, tid))
+    await update.message.reply_text(
+        f"💀 *𝗚𝗹𝗼𝗯𝗮𝗹 𝗠𝘂𝘁𝗲 𝗔𝗽𝗽𝗹𝗶𝗲𝗱*\n"
+        f"{'─'*14}\n\n"
+        f"👤 {target_name(tobj, tid)}\n"
+        f"🌐 Muted for *1 week* — across *every group* the bot manages.\n\n"
+        f"_Lift it early with `/unmute {tid}` from this DM._",
+        parse_mode='Markdown'
+    )
+
+
+# ═══════════════════════════════════════════════════════════
+#  COMMUNITY SYSTEM — lets any group admin/owner link their own
+#  group(s) together so they can /gban a user across just their
+#  own groups (not the entire bot), without needing owner power.
+# ═══════════════════════════════════════════════════════════
+# ─── /addcommunity ──────────────────────────────────────────
+async def addcommunity_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Run inside a group by that group's admin/owner — adds THIS group
+    to the caller's own community list."""
+    ch  = update.effective_chat
+    usr = update.effective_user
+    if ch.type == "private":
+        return await update.message.reply_text(
+            "⚠️ Yeh command us group ke andar chalao jise apni community mein add karna hai."
+        )
+    if not await sender_is_admin(ctx, update):
+        return await update.message.reply_text("🔒 Sirf is group ke admin/owner hi community mein add kar sakte hain.")
+    db.add_to_community(usr.id, ch.id)
+    n = len(db.get_community_groups(usr.id))
+    await update.message.reply_text(
+        f"✅ *{md_esc(ch.title or 'This group')}* aapki community mein add ho gaya\\.\n\n"
+        f"🌐 Total community groups: `{n}`\n\n"
+        f"_Ab `/gban` aur non\\-owner `/unmute` dono is group ko bhi cover karenge\\._",
+        parse_mode='MarkdownV2'
+    )
+
+
+# ─── /removecommunity ───────────────────────────────────────
+async def removecommunity_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Run inside a group — removes THIS group from the caller's community."""
+    ch  = update.effective_chat
+    usr = update.effective_user
+    if ch.type == "private":
+        return await update.message.reply_text(
+            "⚠️ Yeh command us group ke andar chalao jise community se hatana hai."
+        )
+    if not await sender_is_admin(ctx, update):
+        return await update.message.reply_text("🔒 Sirf is group ke admin/owner hi community se hata sakte hain.")
+    db.remove_from_community(usr.id, ch.id)
+    await update.message.reply_text(
+        f"✅ *{md_esc(ch.title or 'This group')}* aapki community se hata diya gaya.",
+        parse_mode='Markdown'
+    )
+
+
+# ─── /mycommunity ───────────────────────────────────────────
+async def mycommunity_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Lists the groups in the caller's own community (works in DM or group)."""
+    usr = update.effective_user
+    groups = db.get_community_groups(usr.id)
+    if not groups:
+        return await update.message.reply_text(
+            "📭 Aapki community abhi khaali hai.\n\n"
+            "Jis bhi group mein aap admin/owner ho, wahan `/addcommunity` chalao — "
+            "wo group aapki community mein add ho jayega."
+        )
+    lines = []
+    for gid in groups:
+        try:
+            chat = await ctx.bot.get_chat(gid)
+            lines.append(f"• {chat.title}")
+        except Exception:
+            lines.append(f"• `{gid}`")
+    await update.message.reply_text(
+        f"🌐 *𝗬𝗼𝘂𝗿 𝗖𝗼𝗺𝗺𝘂𝗻𝗶𝘁𝘆* — `{len(groups)}` group(s)\n"
+        f"{'─'*14}\n\n" + "\n".join(lines) +
+        f"\n\n_`/gban` aur `/unmute` (jab aap DM ya kisi group se chalao) in sab groups ko cover karenge._",
+        parse_mode='Markdown'
+    )
+
+
+# ─── /gban ───────────────────────────────────────────────────
+async def gban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Any admin who has built a community via /addcommunity — bans a user
+    across ONLY the groups in their own community (not the whole bot).
+    Usable from bot DM or from any group.
+    """
+    usr = update.effective_user
+    groups = db.get_community_groups(usr.id)
+    if not groups:
+        return await update.message.reply_text(
+            "📭 Aapki community mein koi group nahi hai.\n"
+            "Pehle apne group(s) ke andar (jahan aap admin/owner ho) `/addcommunity` chalao."
+        )
+
+    tid, tobj, consumed, err = await resolve_target(
+        update, ctx,
+        "↩️ Reply to a user (group ke andar), ya `/gban <user_id | @username> [reason]` use karo"
+    )
+    if err:
+        return await update.message.reply_text(err, parse_mode='Markdown')
+    if tid == ctx.bot.id or tid == OWNER_ID:
+        return await update.message.reply_text("⚠️ This user can't be banned.")
+
+    rest_args = ctx.args[consumed:] if ctx.args else []
+    reason = ' '.join(rest_args) if rest_args else "No reason provided"
+
+    banned = 0
+    for gid in groups:
+        try:
+            if await is_adm(ctx, gid, tid):
+                continue  # community ke kisi group ka admin ban nahi hoga
+            if await do_ban(ctx, gid, tid):
+                banned += 1
+            await asyncio.sleep(0.1)
+        except Exception:
+            pass
+
+    await update.message.reply_text(
+        f"🔨 *𝗖𝗼𝗺𝗺𝘂𝗻𝗶𝘁𝘆 𝗕𝗮𝗻*\n"
+        f"{'─'*14}\n\n"
+        f"👤 {target_name(tobj, tid)}\n"
+        f"📋 Reason: _{reason}_\n"
+        f"🌐 Banned from `{banned}/{len(groups)}` community group(s).",
         parse_mode='Markdown'
     )
 
@@ -5344,10 +5663,6 @@ async def on_edited_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     asyncio.create_task(msg.delete())
 
     cnt = db.add_warning(ch.id, usr.id)
-    if cnt >= 4:
-        await global_mute_user(ctx, usr.id, user_name(usr))
-        return
-
     _wd = db.get_warn_durations(ch.id)
     await do_mute(ctx, ch.id, usr.id, _wd[cnt])
 
@@ -5356,8 +5671,7 @@ async def on_edited_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         viol_txt = f"⛔ Blacklisted word used: `{matched_word}` — please don't repeat this."
 
     bars = "🟥" * cnt + "⬜" * (4 - cnt)
-    mute_sec = _wd[cnt]
-    mute_str = f"{mute_sec}s" if mute_sec < 3600 else "1 week"
+    mute_str = format_duration(_wd[cnt])
 
     notice = await ctx.bot.send_message(
         ch.id,
@@ -5584,6 +5898,20 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             asyncio.create_task(msg.delete())
 
             SHADOW_MSG_COUNT[shadow_key] = SHADOW_MSG_COUNT.get(shadow_key, 0) + 1
+            hit_count = SHADOW_MSG_COUNT[shadow_key]
+
+            if hit_count >= SHADOW_PUNISH_THRESHOLD:
+                # 5th (and every) time they message with a bad bio — switch
+                # to the exact same escalating warn/mute punishment a normal
+                # link/blacklist violation gets, instead of just deleting
+                # the message forever with no real consequence.
+                kind = shadow.get("reason")
+                matched = shadow.get("matched")
+                what = "a link in your bio" if kind == "link" else f"the blacklisted word `{matched}` in your bio"
+                viol_txt = f"⛔ Repeated bio violation — {what}. Remove it to stop getting muted."
+                await apply_warn_punishment(ctx, ch.id, usr, viol_txt, delete_delay=90)
+                return
+
             if SHADOW_MSG_COUNT[shadow_key] % 3 == 1:
                 kind = shadow.get("reason")
                 matched = shadow.get("matched")
@@ -5591,17 +5919,21 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     what = "a *link*"
                 else:
                     what = f"the blacklisted word `{matched}`"
+                left = SHADOW_PUNISH_THRESHOLD - hit_count
                 notice = await ctx.bot.send_message(
                     ch.id,
                     f"🕵️ *𝗕𝗜𝗢 𝗚𝗨𝗔𝗥𝗗*\n\n"
                     f"👤 {user_mention(usr)}, your profile bio contains {what}.\n"
                     f"Your messages won't be visible until it's removed.\n\n"
-                    f"_Remove it from your bio, then send any message to be rechecked._",
+                    f"_Remove it from your bio, then send any message to be rechecked._\n\n"
+                    f"⚠️ _{left} more message(s) like this and you'll be muted._",
                     parse_mode='Markdown'
                 )
                 asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 60))
 
-            # Flood check for shadow-blacklisted user (10 msgs / 60s)
+            # Flood check for shadow-blacklisted user (10 msgs / 60s) — extra
+            # safety net in case they spam-flood fast before hitting the
+            # SHADOW_PUNISH_THRESHOLD count above
             now = time.time()
             times = [t for t in SHADOW_FLOOD.get(shadow_key, []) if now - t < SHADOW_FLOOD_WINDOW]
             times.append(now)
@@ -5685,65 +6017,13 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 90))
                 return
 
-        cnt = db.add_warning(ch.id, usr.id)
-
-        if cnt >= 4:
-            await global_mute_user(ctx, usr.id, user_name(usr))
-            return
-
-        _wd = db.get_warn_durations(ch.id)
-        await do_mute(ctx, ch.id, usr.id, _wd[cnt])
         viol_txt = VIOLATION_MSG.get(violation, "Rule violation!")
         if violation == "blacklist" and matched_word:
             viol_txt = f"⛔ Blacklisted word used: `{matched_word}` — please don't repeat this."
-        bars = "🟥" * cnt + "⬜" * (4 - cnt)
-        mute_sec = _wd[cnt]
-        mute_str = f"{mute_sec}s" if mute_sec < 3600 else "1 week"
-        next_str = "💀 1 week ban 🌐" if cnt == 3 else f"W{cnt+1}"
-
-        warn_colors = {1: "🟡", 2: "🟠", 3: "🔴", 4: "💀"}
-        color = warn_colors.get(cnt, "⚠️")
-
-        # ── Auto-unmute captcha — aasan math sawaal jo galti se mute
-        # hue user khud solve karke apna mute + warning hata sake.
-        # Group admin ise /settings → Filters se on/off kar sakta hai. ──
-        warncaptcha_on = db.get_filters(ch.id).get("warncaptcha", True)
-        if warncaptcha_on:
-            cap_question, cap_answer, cap_options = generate_captcha()
-            MUTE_CAPTCHA_PENDING[f"{ch.id}_{usr.id}"] = {"answer": cap_answer}
-            captcha_block = (
-                f"\n🔐 Tap the right answer to unmute + clear warnings:\n"
-                f"      `{cap_question}`"
-            )
-            warn_kb = ckb_warn_captcha(ch.id, usr.id, cap_options)
-            warn_kb_plain = kb_warn_captcha(ch.id, usr.id, cap_options)
-        else:
-            captcha_block = ""
-            warn_kb = ckb_warn_actions(ch.id, usr.id)
-            warn_kb_plain = kb_warn_actions(ch.id, usr.id)
-
-        warn_text = (
-            f"*{color} WARNING {cnt}/4*\n"
-            f"👤 {user_mention(usr)}\n"
-            f"📌 _{viol_txt}_\n"
-            f"⏱ Muted: `{mute_str}` • Next: {next_str}\n"
-            f"Progress: {bars}"
-            f"{captcha_block}"
-        )
         # Blacklist-word notices should clear out fast (within 1 min) so the
         # group doesn't stay cluttered with "which word" call-outs.
         warn_delete_delay = 60 if violation == "blacklist" else 90
-        if warncaptcha_on:
-            asyncio.create_task(_cleanup_mute_captcha(ch.id, usr.id, warn_delete_delay + 5))
-        warn_msg_id = await send_colored_message(ch.id, warn_text, warn_kb)
-        if warn_msg_id:
-            asyncio.create_task(delete_after(ctx, ch.id, warn_msg_id, warn_delete_delay))
-        else:
-            notice = await ctx.bot.send_message(
-                ch.id, warn_text, parse_mode='Markdown',
-                reply_markup=warn_kb_plain
-            )
-            asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, warn_delete_delay))
+        await apply_warn_punishment(ctx, ch.id, usr, viol_txt, delete_delay=warn_delete_delay)
         return
 
     # ── AI REPLY — question/help/confusion ──
@@ -5947,6 +6227,9 @@ def kb_settings_main(chat_id):
             {"text": f"💎 𝗣𝗿𝗲𝗺𝗶𝘂𝗺 {ICON_ON if prem_on else ICON_OFF}", "callback_data": "cfg_premium",
              "style": "success" if prem_on else "danger"},
         ],
+        [
+            {"text": "🌐 𝗖𝗼𝗺𝗺𝘂𝗻𝗶𝘁𝘆", "callback_data": "cfg_community", "style": "primary"},
+        ],
         [{"text": "❌ 𝗖𝗹𝗼𝘀𝗲", "callback_data": "close_menu", "style": "danger"}],
     ]
 
@@ -6130,6 +6413,79 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
             return
         db.update_group(ch.id, {"allow_member_usernames": not bool(g.get("allow_member_usernames", False))})
         await cfg_callback_reroute(update, ctx, "cfg_premium")
+        return
+
+    # ── Community ──
+    if data == "cfg_community":
+        groups = db.get_community_groups(u.id)
+        in_community = ch.id in groups
+        text = (
+            f"*🌐 𝗬𝗢𝗨𝗥 𝗖𝗢𝗠𝗠𝗨𝗡𝗜𝗧𝗬*\n"
+            f"{'─'*14}\n\n"
+            f"Link groups you admin together, so you can ban a "
+            f"troublemaker from *all of them at once* — or unmute "
+            f"someone across all of them at once — without needing "
+            f"the bot owner.\n\n"
+            f"{'─'*14}\n"
+            f"This group: {'🟢 *In your community*' if in_community else '🔴 *Not in your community*'}\n"
+            f"Total groups in your community: `{len(groups)}`\n"
+        )
+        rows = [
+            [{"text": "➖ 𝗥𝗲𝗺𝗼𝘃𝗲 𝗧𝗵𝗶𝘀 𝗚𝗿𝗼𝘂𝗽" if in_community else "➕ 𝗔𝗱𝗱 𝗧𝗵𝗶𝘀 𝗚𝗿𝗼𝘂𝗽",
+              "callback_data": "cfg_community_toggle",
+              "style": "danger" if in_community else "success"}],
+            [{"text": "📋 𝗟𝗶𝘀𝘁 𝗠𝘆 𝗖𝗼𝗺𝗺𝘂𝗻𝗶𝘁𝘆", "callback_data": "cfg_community_list", "style": "primary"}],
+            [{"text": "🔨 𝗕𝗮𝗻 𝗨𝘀𝗲𝗿 𝗳𝗿𝗼𝗺 𝗖𝗼𝗺𝗺𝘂𝗻𝗶𝘁𝘆", "callback_data": "cfg_community_ban", "style": "danger"}],
+            [{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_main", "style": "primary"}],
+        ]
+        await _cfg_edit(query, ch.id, text, rows)
+        return
+
+    if data == "cfg_community_toggle":
+        groups = db.get_community_groups(u.id)
+        if ch.id in groups:
+            db.remove_from_community(u.id, ch.id)
+        else:
+            db.add_to_community(u.id, ch.id)
+        await cfg_callback_reroute(update, ctx, "cfg_community")
+        return
+
+    if data == "cfg_community_list":
+        groups = db.get_community_groups(u.id)
+        if not groups:
+            text = "📭 *Aapki community abhi khaali hai.*\n\nIs group ke settings mein wapas jaakar “➕ Add This Group” dabao."
+        else:
+            lines = []
+            for gid in groups:
+                try:
+                    chat = await ctx.bot.get_chat(gid)
+                    lines.append(f"• {chat.title}")
+                except Exception:
+                    lines.append(f"• `{gid}`")
+            text = (
+                f"🌐 *𝗬𝗼𝘂𝗿 𝗖𝗼𝗺𝗺𝘂𝗻𝗶𝘁𝘆* — `{len(groups)}` group(s)\n"
+                f"{'─'*14}\n\n" + "\n".join(lines)
+            )
+        await _cfg_edit(
+            query, ch.id, text,
+            [[{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_community", "style": "primary"}]]
+        )
+        return
+
+    if data == "cfg_community_ban":
+        groups = db.get_community_groups(u.id)
+        if not groups:
+            await query.answer("📭 Pehle kam se kam ek group apni community mein add karo.", show_alert=True)
+            return
+        SETTINGS_PENDING[(ch.id, u.id)] = {"action": "community_ban", "panel_msg_id": query.message.message_id}
+        await _cfg_edit(
+            query, ch.id,
+            f"🔨 *𝗕𝗮𝗻 𝗳𝗿𝗼𝗺 𝗖𝗼𝗺𝗺𝘂𝗻𝗶𝘁𝘆*\n{'─'*14}\n\n"
+            f"Target ka *user ID* ya *@username* type karo, chaho to reason "
+            f"ke saath — jaise: `123456789 spamming links`\n\n"
+            f"_Yeh unhe aapki community ke sabhi `{len(groups)}` group(s) se ban kar dega._",
+            rows_back_cfg()
+        )
         return
 
     if data == "cfg_main":
@@ -6390,7 +6746,8 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
             query, ch.id,
             f"*🛡️ FILTERS — {_filters_status_line(ch.id)}*\n{'─'*14}\n\n"
             f"✅ = ON     ▫️ = OFF\n"
-            f"_Tap any filter — it toggles ON/OFF instantly._",
+            f"_Tap any filter — it toggles ON/OFF instantly._\n\n"
+            f"🌐 _Multi-group ban/unmute? See 🏠 Settings → Community._",
             kb_filters_grid(ch.id)
         )
         return
@@ -6409,7 +6766,8 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
             query, ch.id,
             f"*🛡️ FILTERS — {_filters_status_line(ch.id)}*\n{'─'*14}\n\n"
             f"✅ = ON     ▫️ = OFF\n"
-            f"_Tap any filter — it toggles ON/OFF instantly._",
+            f"_Tap any filter — it toggles ON/OFF instantly._\n\n"
+            f"🌐 _Multi-group ban/unmute? See 🏠 Settings → Community._",
             kb_filters_grid(ch.id)
         )
         return
@@ -6505,6 +6863,52 @@ async def handle_settings_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE, 
         if text:
             db.remove_whitelist(ch_id, text.split()[0])
             reply = f"✅ *'{text.split()[0]}' removed from the whitelist.*"
+    elif action == "community_ban":
+        parts = text.split(maxsplit=1)
+        raw = parts[0] if parts else ""
+        reason = parts[1] if len(parts) > 1 else "No reason provided"
+        tid, tobj = None, None
+        if raw.startswith('@'):
+            uname = raw.lstrip('@')
+            uid = db.find_user_by_username(uname)
+            if uid:
+                tid = uid
+                tobj = db.get_user_info(uid) or SeenUser(uid, username=uname)
+            else:
+                try:
+                    chat_obj = await ctx.bot.get_chat(f"@{uname}")
+                    tid, tobj = chat_obj.id, chat_obj
+                except Exception:
+                    tid = None
+        elif raw:
+            try:
+                tid = int(raw)
+                tobj = db.get_user_info(tid)
+            except ValueError:
+                tid = None
+
+        if tid is None:
+            reply = f"❌ Can't find `{raw}`. Numeric user ID ya @username bhejo (jo bot ne pehle dekha ho)."
+        elif tid == ctx.bot.id or tid == OWNER_ID:
+            reply = "⚠️ This user can't be banned."
+        else:
+            groups = db.get_community_groups(user_id)
+            banned = 0
+            for gid in groups:
+                try:
+                    if await is_adm(ctx, gid, tid):
+                        continue
+                    if await do_ban(ctx, gid, tid):
+                        banned += 1
+                    await asyncio.sleep(0.1)
+                except Exception:
+                    pass
+            reply = (
+                f"🔨 *𝗖𝗼𝗺𝗺𝘂𝗻𝗶𝘁𝘆 𝗕𝗮𝗻 𝗖𝗼𝗺𝗽𝗹𝗲𝘁𝗲*\n\n"
+                f"👤 {target_name(tobj, tid)}\n"
+                f"📋 Reason: _{reason}_\n"
+                f"🌐 Banned from `{banned}/{len(groups)}` community group(s)."
+            )
 
     SETTINGS_PENDING.pop(key, None)
     if reply is None:
@@ -6638,6 +7042,11 @@ def main():
     app.add_handler(CommandHandler("unpower",          unpower_cmd))
     app.add_handler(CommandHandler("fban",             fban_cmd))
     app.add_handler(CommandHandler("gunban",           gunban_cmd))
+    app.add_handler(CommandHandler("gmute",            gmute_cmd))
+    app.add_handler(CommandHandler("addcommunity",     addcommunity_cmd))
+    app.add_handler(CommandHandler("removecommunity",  removecommunity_cmd))
+    app.add_handler(CommandHandler("mycommunity",      mycommunity_cmd))
+    app.add_handler(CommandHandler("gban",             gban_cmd))
     app.add_handler(CommandHandler("gclearwarn",       gclearwarn_cmd))
     app.add_handler(CommandHandler("adexempt",         adexempt_cmd))
     app.add_handler(CommandHandler("unadexempt",       unadexempt_cmd))
