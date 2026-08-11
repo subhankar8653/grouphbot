@@ -6311,32 +6311,29 @@ async def cfg_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data: str
     ch = update.effective_chat
     u = query.from_user
 
-    # Sabse pehle ACK karo — button ka loading-spinner turant hat jaata hai.
-    # Authorization checks iske BAAD hote hain (pehle is_adm() jaisi network
-    # call ke baad answer() karne se click ka reaction late lagta tha).
-    try:
-        await query.answer()
-    except Exception:
-        pass
-
+    # Authorization checks pehle — agar fail ho, to sirf clicker ko ek
+    # popup dikhana hai (query.answer show_alert), group mein KOI message
+    # nahi bhejna. Isliye yahan ACK nahi karte jab tak pata na chale ki
+    # authorized hai ya nahi (query.answer ek hi baar call ho sakta hai).
     if not _is_menu_owner(ch.id, query.message.message_id, u.id):
         try:
-            await ctx.bot.send_message(
-                ch.id, "🔒 This panel belongs to someone else — run your own /settings.",
-                reply_to_message_id=query.message.message_id
-            )
+            await query.answer("🔒 This panel belongs to someone else — run your own /settings.", show_alert=True)
         except Exception:
             pass
         return
 
     if not await _cfg_is_authorized(ctx, ch.id, u.id):
         try:
-            await ctx.bot.send_message(
-                ch.id, "🔒 Admins and the owner only.", reply_to_message_id=query.message.message_id
-            )
+            await query.answer("🔒 Admins and the owner only.", show_alert=True)
         except Exception:
             pass
         return
+
+    # Authorized — turant ACK karo taaki button ka loading-spinner turant hat jaaye.
+    try:
+        await query.answer()
+    except Exception:
+        pass
 
     try:
         await _cfg_callback_body(update, ctx, data, query, ch, u)
