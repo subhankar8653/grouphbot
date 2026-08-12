@@ -123,6 +123,8 @@ VIOLATION_MSG = {
     "hashtag":      "#️⃣ Hashtags aren't allowed here.",
     "voice":        "🎙️ Voice messages aren't allowed here.",
     "chinese":      "🈲 Chinese-language text isn't allowed here.",
+    "premium_emoji": "💎 Premium emojis with text aren't allowed here.",
+    "quote":        "❝ Quoting/forwarding content from other chats isn't allowed here.",
 }
 
 # Usernames that are always exempt from @mention filtering
@@ -160,6 +162,8 @@ DEFAULT_FILTERS = {
     "nohashtags":   False,  # hashtag-heavy messages block
     "novoice":      False,  # voice note messages block
     "nochinese":    False,  # Chinese-language text messages block
+    "nopremiumemoji": False,  # Telegram Premium (custom) emoji-with-text block — new + edited both
+    "noquotes":     False,  # cross-chat "Quote" (other channel quote-forward) block
     "nobots":       True,   # auto-kick bots added by non-admins
     "profanity":    True,   # built-in bad-words filter
     "blacklist":    True,   # group + global blacklist word enforcement
@@ -181,6 +185,8 @@ FILTER_LABELS = {
     "nohashtags":  "#️⃣ 𝗛𝗮𝘀𝗵𝘁𝗮𝗴𝘀 𝗙𝗶𝗹𝘁𝗲𝗿",
     "novoice":     "🎙️ 𝗩𝗼𝗶𝗰𝗲 𝗙𝗶𝗹𝘁𝗲𝗿",
     "nochinese":   "🈲 𝗖𝗵𝗶𝗻𝗲𝘀𝗲 𝗧𝗲𝘅𝘁 𝗙𝗶𝗹𝘁𝗲𝗿",
+    "nopremiumemoji": "💎 𝗣𝗿𝗲𝗺𝗶𝘂𝗺 𝗘𝗺𝗼𝗷𝗶 𝗙𝗶𝗹𝘁𝗲𝗿",
+    "noquotes":    "❝ 𝗤𝘂𝗼𝘁𝗲 𝗙𝗼𝗿𝘄𝗮𝗿𝗱 𝗙𝗶𝗹𝘁𝗲𝗿",
     "nobots":      "🛑 𝗔𝗱𝗱𝗶𝗻𝗴 𝗦𝗽𝗮𝗺𝗯𝗼𝘁𝘀",
     "profanity":   "🤬 𝗕𝗮𝗱 𝗪𝗼𝗿𝗱𝘀 𝗙𝗶𝗹𝘁𝗲𝗿",
     "blacklist":   "⛔ 𝗕𝗮𝗱 𝗗𝗼𝗺𝗮𝗶𝗻𝘀/𝗪𝗼𝗿𝗱𝘀",
@@ -192,7 +198,8 @@ FILTER_LABELS = {
 FILTER_GROUPS = [
     ("🛡️ 𝗖𝗼𝗿𝗲 𝗣𝗿𝗼𝘁𝗲𝗰𝘁𝗶𝗼𝗻", ["antispam", "antiflood", "nobots", "profanity"]),
     ("🚫 𝗖𝗼𝗻𝘁𝗲𝗻𝘁 𝗙𝗶𝗹𝘁𝗲𝗿𝘀", ["nolinks", "noforwards", "nolocations", "nocontacts",
-                             "nocommands", "nohashtags", "novoice", "nochinese", "imagefilter"]),
+                             "nocommands", "nohashtags", "novoice", "nochinese", "imagefilter",
+                             "nopremiumemoji", "noquotes"]),
     ("📋 𝗪𝗼𝗿𝗱 𝗟𝗶𝘀𝘁𝘀", ["blacklist", "whitelist"]),
     ("👥 𝗚𝗿𝗼𝘂𝗽 𝗕𝗲𝗵𝗮𝘃𝗶𝗼𝘂𝗿", ["noevents", "welcome", "warncaptcha"]),
 ]
@@ -301,6 +308,29 @@ def has_hidden_link(msg) -> bool:
             if ent.type == MessageEntity.TEXT_LINK:
                 return True
     return False
+
+# ─── Premium Emoji detection ─────────────────────────────────
+# Sirf Telegram Premium users hi "custom_emoji" entity type ke
+# animated/premium emoji bhej sakte hain — isi se pehchaante hain.
+def has_premium_emoji(msg) -> bool:
+    """Return True if message text/caption contains a Telegram Premium (custom) emoji."""
+    from telegram import MessageEntity
+    for entity_list in [msg.entities or [], msg.caption_entities or []]:
+        for ent in entity_list:
+            if ent.type == MessageEntity.CUSTOM_EMOJI:
+                return True
+    return False
+
+# ─── Cross-chat "Quote" detection ────────────────────────────
+# Jab koi kisi doosre channel/group ke message ka hissa "Quote"
+# karke yahan bhejta hai, Telegram us message par `external_reply`
+# field bharta hai (origin doosre chat ka hota hai). Same-chat
+# normal replies mein yah field nahi hota, isliye safe hai.
+# (Requires python-telegram-bot >= 20.8 — Bot API 7.0 field;
+# getattr fallback purane version par bhi crash nahi hone dega.)
+def has_external_quote(msg) -> bool:
+    """Return True if message quotes/replies to content from another chat/channel."""
+    return getattr(msg, "external_reply", None) is not None
 
 # Flood control
 FLOOD_DATA = {}
@@ -2151,6 +2181,12 @@ async def check_violations(msg, group_bots, ctx, chat_id):
 
     if filt.get("nochinese", False) and has_chinese_text(text):
         return "chinese", None
+
+    if filt.get("nopremiumemoji", False) and text and has_premium_emoji(msg):
+        return "premium_emoji", None
+
+    if filt.get("noquotes", False) and has_external_quote(msg):
+        return "quote", None
 
     # Everything below this line is part of the "antispam" master filter
     if not filt.get("antispam", True):
