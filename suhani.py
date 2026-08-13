@@ -443,6 +443,12 @@ class DB:
         # banate hain, taaki /ban, /mute, /warn waghera @username ya userid
         # se bhi reliably kaam karein (sirf reply pe depend na karna pade).
         self.user_index = self.db["user_index"]
+        # msg_log: per (chat_id,user_id) bounded list of recent message_ids —
+        # Telegram ka ban-time revoke_messages sirf pichhle 48 ghante ke
+        # messages delete karta hai (platform ki hard limit). Isse aage
+        # jaakar bhi /ban aur /warn par purane messages delete karne ke
+        # liye humein khud message_ids track karne padte hain.
+        self.msg_log  = self.db["msg_log"]
 
         if not self.stats_c.find_one({"_id": "global"}):
             self.stats_c.insert_one({"_id": "global", "warnings": 0, "mutes": 0, "scanned": 0, "gmutes": 0})
@@ -957,6 +963,29 @@ class DB:
         if display_name:
             update["$set"]["name"] = display_name
         self.activity.update_one({"_id": k}, update, upsert=True)
+
+    # ── Per-user message log (for /ban & /warn "delete all old messages") ──
+    # Telegram ka native ban revoke_messages sirf 48h purane messages delete
+    # karta hai — usse aage ke messages delete karne ka bot-level koi bulk
+    # API nahi hai, isliye khud ek bounded (max 500) list track karte hain.
+    MSG_LOG_CAP = 500
+
+    def log_message_id(self, chat_id, user_id, message_id):
+        k = f"{chat_id}_{user_id}"
+        self.msg_log.update_one(
+            {"_id": k},
+            {
+                "$push": {"ids": {"$each": [message_id], "$slice": -self.MSG_LOG_CAP}},
+                "$set": {"chat_id": chat_id, "user_id": user_id}
+            },
+            upsert=True
+        )
+
+    def pop_message_ids(self, chat_id, user_id):
+        """Fetch + clear this user's tracked message_ids for this chat."""
+        k = f"{chat_id}_{user_id}"
+        doc = self.msg_log.find_one_and_delete({"_id": k})
+        return doc.get("ids", []) if doc else []
 
     def add_immortal(self, chat_id, user_id):
         k = f"{chat_id}_{user_id}"
@@ -1775,12 +1804,30 @@ async def do_unmute(ctx, chat_id, user_id):
 
 async def do_ban(ctx, chat_id, user_id):
     try:
-        # revoke_messages=True — user ke us group mein bheje hue SAARE
-        # purane messages bhi automatically delete ho jaate hain ban ke saath.
+        # revoke_messages=True — Telegram khud is user ke pichhle 48 ghante
+        # ke messages delete kar deta hai (platform ki hard limit, isse
+        # zyada purane messages ke liye neeche purge_user_messages() dekhein).
         await ctx.bot.ban_chat_member(chat_id, user_id, revoke_messages=True)
+        asyncio.create_task(purge_user_messages(ctx, chat_id, user_id))
         return True
     except:
         return False
+
+
+async def purge_user_messages(ctx, chat_id, user_id):
+    """
+    User ke is group mein bheje hue TRACKED purane messages delete karta hai
+    (bounded to last MSG_LOG_CAP=500, jitna bhi hamare paas record hai) —
+    Telegram ka native revoke_messages sirf 48h cover karta hai, yeh usse
+    aage bhi chalta hai. /ban aur /warn dono commands ke saath use hota hai.
+    """
+    ids = db.pop_message_ids(chat_id, user_id)
+    for mid in ids:
+        try:
+            await ctx.bot.delete_message(chat_id, mid)
+        except:
+            pass
+        await asyncio.sleep(0.05)  # flood-limit se bachne ke liye halka gap
 
 
 async def do_unban(ctx, chat_id, user_id):
@@ -3863,6 +3910,7 @@ async def warn_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     reason = ' '.join(rest_args) if rest_args else "Rule violation"
     cnt = db.add_warning(ch.id, tid)
     await do_mute(ctx, ch.id, tid, db.get_warn_durations(ch.id)[cnt])
+    asyncio.create_task(purge_user_messages(ctx, ch.id, tid))
 
     # Build warning bar
     bars = "🟥" * cnt + "⬜" * (4 - cnt)
@@ -5646,6 +5694,7 @@ async def track_activity_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if usr.id == ANON_BOT_ID:
         return
     db.track_activity(ch.id, usr.id, user_name(usr, escape=False))
+    db.log_message_id(ch.id, usr.id, msg.message_id)
 
     # ── Auto-Reputation: har 100 messages pe 100 rep points ──────
     total_msgs = db.get_total_msg_count(ch.id, usr.id)
