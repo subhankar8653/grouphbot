@@ -1775,7 +1775,9 @@ async def do_unmute(ctx, chat_id, user_id):
 
 async def do_ban(ctx, chat_id, user_id):
     try:
-        await ctx.bot.ban_chat_member(chat_id, user_id)
+        # revoke_messages=True — user ke us group mein bheje hue SAARE
+        # purane messages bhi automatically delete ho jaate hain ban ke saath.
+        await ctx.bot.ban_chat_member(chat_id, user_id, revoke_messages=True)
         return True
     except:
         return False
@@ -5698,27 +5700,12 @@ async def on_edited_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     asyncio.create_task(msg.delete())
 
-    cnt = db.add_warning(ch.id, usr.id)
-    _wd = db.get_warn_durations(ch.id)
-    await do_mute(ctx, ch.id, usr.id, _wd[cnt])
-
     viol_txt = VIOLATION_MSG.get(violation, "Rule violation.")
     if violation == "blacklist" and matched_word:
         viol_txt = f"⛔ Blacklisted word used: `{matched_word}` — please don't repeat this."
+    viol_txt = f"✏️ Edited into a violation: {viol_txt}"
 
-    bars = "🟥" * cnt + "⬜" * (4 - cnt)
-    mute_str = format_duration(_wd[cnt])
-
-    notice = await ctx.bot.send_message(
-        ch.id,
-        f"✏️ *𝗘𝗗𝗜𝗧 𝗚𝗨𝗔𝗥𝗗 𝗧𝗥𝗜𝗚𝗚𝗘𝗥𝗘𝗗*\n\n"
-        f"👤 {user_mention(usr)} edited a message into a rule violation.\n"
-        f"📋 {viol_txt}\n\n"
-        f"Progress: {bars} `{cnt}/4`\n"
-        f"🔇 Muted for *{mute_str}*",
-        parse_mode='Markdown'
-    )
-    asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 60))
+    await apply_warn_punishment(ctx, ch.id, usr, viol_txt)
 
 
 # ═══════════════════════════════════════════════════════════
