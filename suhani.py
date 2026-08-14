@@ -1530,10 +1530,10 @@ async def resolve_target(update: Update, ctx, usage: str):
             except Exception:
                 return None, None, 1, (
                     f"❌ Can't find `@{uname}` yet.\n"
-                    f"Bot ne is user ka koi message ya join is group mein "
-                    f"track nahi kiya — isliye @username se resolve nahi ho paa raha.\n"
-                    f"Fix: unke kisi message par *reply* karke command bhejo, "
-                    f"ya unka *numeric user ID* use karo."
+                    f"The bot hasn't tracked any message or join from this user "
+                    f"in this group — so it can't resolve the @username.\n"
+                    f"Fix: *reply* to one of their messages with the command, "
+                    f"or use their *numeric user ID* instead."
                 )
 
         try:
@@ -1808,7 +1808,6 @@ async def do_ban(ctx, chat_id, user_id):
         # ke messages delete kar deta hai (platform ki hard limit, isse
         # zyada purane messages ke liye neeche purge_user_messages() dekhein).
         await ctx.bot.ban_chat_member(chat_id, user_id, revoke_messages=True)
-        asyncio.create_task(purge_user_messages(ctx, chat_id, user_id))
         return True
     except:
         return False
@@ -2452,13 +2451,13 @@ async def mute_captcha_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     if query.from_user.id != user_id:
-        await query.answer("🔒 Yeh captcha sirf muted user ke liye hai.", show_alert=True)
+        await query.answer("🔒 This captcha is only for the muted user.", show_alert=True)
         return
 
     key = f"{chat_id}_{user_id}"
     pending = MUTE_CAPTCHA_PENDING.get(key)
     if not pending:
-        await query.answer("⏰ Yeh captcha ab valid nahi hai.", show_alert=True)
+        await query.answer("⏰ This captcha is no longer valid.", show_alert=True)
         return
 
     if chosen == pending["answer"]:
@@ -3794,14 +3793,14 @@ async def unmute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
     elif not is_owner and not db.get_community_groups(usr.id):
         return await update.message.reply_text(
-            "🔒 Bot DM se `/unmute` sirf bot owner ke liye hai, ya un admins ke "
-            "liye jinki apni community bani hui hai — pehle group ke andar "
-            "`/addcommunity` chalao."
+            "🔒 `/unmute` from the bot's DM is only for the bot owner, or "
+            "admins who have a community set up — run "
+            "`/addcommunity` inside a group first."
         )
 
     tid, tobj, _, err = await resolve_target(
         update, ctx,
-        "↩️ Reply to a user (group ke andar), ya `/unmute <user_id | @username>` use karo"
+        "↩️ Reply to a user (inside the group), or use `/unmute <user_id | @username>`"
     )
     if err:
         return await update.message.reply_text(err, parse_mode='Markdown')
@@ -3810,7 +3809,7 @@ async def unmute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await global_unmute_user(ctx, tid)
         return await update.message.reply_text(
             f"🔊 *𝗨𝗻𝗺𝘂𝘁𝗲𝗱*\n\n👤 {target_name(tobj, tid)} can send messages again — "
-            f"*saare groups* mein (bot-wide, owner unmute).",
+            f"*in all groups* (bot-wide, owner unmute).",
             parse_mode='Markdown'
         )
 
@@ -3821,8 +3820,8 @@ async def unmute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if not groups:
         return await update.message.reply_text(
-            "📭 Unmute karne ke liye koi group nahi mila.\n"
-            "Group ke andar chalao, ya pehle `/addcommunity` se apni community banao."
+            "📭 No group found to unmute in.\n"
+            "Run this inside a group, or set up your community first with `/addcommunity`."
         )
 
     ok = 0
@@ -3860,6 +3859,12 @@ async def ban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text("🔒 Admins can't be banned.")
     rest_args = ctx.args[consumed:] if ctx.args else []
     reason = ' '.join(rest_args) if rest_args else "No reason provided"
+
+    # Reply karke /ban kiya to wahi replied message delete ho jaega —
+    # ye 100% reliable hai kyunki bot ko us message ka exact id pata hai.
+    if update.message.reply_to_message:
+        asyncio.create_task(update.message.reply_to_message.delete())
+
     if await do_ban(ctx, ch.id, tid):
         await update.message.reply_text(
             f"🔨 *𝗨𝘀𝗲𝗿 𝗕𝗮𝗻𝗻𝗲𝗱*\n"
@@ -3908,9 +3913,13 @@ async def warn_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text("🔒 Admins can't be warned.")
     rest_args = ctx.args[consumed:] if ctx.args else []
     reason = ' '.join(rest_args) if rest_args else "Rule violation"
+
+    # Reply karke /warn kiya to wahi replied message delete ho jaega.
+    if update.message.reply_to_message:
+        asyncio.create_task(update.message.reply_to_message.delete())
+
     cnt = db.add_warning(ch.id, tid)
     await do_mute(ctx, ch.id, tid, db.get_warn_durations(ch.id)[cnt])
-    asyncio.create_task(purge_user_messages(ctx, ch.id, tid))
 
     # Build warning bar
     bars = "🟥" * cnt + "⬜" * (4 - cnt)
@@ -3923,8 +3932,8 @@ async def warn_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         MUTE_CAPTCHA_PENDING[f"{ch.id}_{tid}"] = {"answer": cap_answer}
         captcha_block = (
             f"\n\n🔐 *𝗔𝘂𝘁𝗼-𝗨𝗻𝗺𝘂𝘁𝗲 𝗖𝗮𝗽𝘁𝗰𝗵𝗮*\n"
-            f"Neeche sahi jawab dabao — mute *turant* hatega\n"
-            f"aur *saari warnings bhi clear* ho jaayengi:\n\n"
+            f"Tap the right answer below — the mute lifts *instantly*\n"
+            f"and *all warnings get cleared* too:\n\n"
             f"      `{cap_question}`"
         )
         warn_kb_plain = kb_warn_captcha(ch.id, tid, cap_options)
@@ -4012,9 +4021,9 @@ async def reset_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text(err, parse_mode='Markdown')
     if tid == ANON_ADMIN_ID:
         return await update.message.reply_text(
-            "⚠️ Yeh ek *anonymous admin* message hai, isliye asli user pata nahi chal raha.\n"
-            "Us user ke apne (non-anonymous) message par reply karke dobara try karo, "
-            "ya unka user ID/@username seedhe use karo.",
+            "⚠️ This is an *anonymous admin* message, so the real user can't be identified.\n"
+            "Reply to that user's own (non-anonymous) message and try again, "
+            "or use their user ID/@username directly.",
             parse_mode='Markdown'
         )
     db.reset_warnings(ch.id, tid)
@@ -4799,7 +4808,7 @@ async def gmute_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return  # silent ignore
     if ch.type != "private":
         return await update.message.reply_text(
-            "🔒 `/gmute` sirf bot ke DM se chalta hai (server load bachane ke liye)."
+            "🔒 `/gmute` only works from the bot's own DM (to save server load)."
         )
     tid, tobj, _, err = await resolve_target(
         update, ctx,
@@ -4834,16 +4843,16 @@ async def addcommunity_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     usr = update.effective_user
     if ch.type == "private":
         return await update.message.reply_text(
-            "⚠️ Yeh command us group ke andar chalao jise apni community mein add karna hai."
+            "⚠️ Run this command inside the group you want to add to your community."
         )
     if not await sender_is_admin(ctx, update):
-        return await update.message.reply_text("🔒 Sirf is group ke admin/owner hi community mein add kar sakte hain.")
+        return await update.message.reply_text("🔒 Only this group's admin/owner can add it to a community.")
     db.add_to_community(usr.id, ch.id)
     n = len(db.get_community_groups(usr.id))
     await update.message.reply_text(
-        f"✅ *{md_esc(ch.title or 'This group')}* aapki community mein add ho gaya\\.\n\n"
+        f"✅ *{md_esc(ch.title or 'This group')}* has been added to your community\\.\n\n"
         f"🌐 Total community groups: `{n}`\n\n"
-        f"_Ab `/gban` aur non\\-owner `/unmute` dono is group ko bhi cover karenge\\._",
+        f"_`/gban` and non\\-owner `/unmute` will now cover this group too\\._",
         parse_mode='MarkdownV2'
     )
 
@@ -4855,13 +4864,13 @@ async def removecommunity_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     usr = update.effective_user
     if ch.type == "private":
         return await update.message.reply_text(
-            "⚠️ Yeh command us group ke andar chalao jise community se hatana hai."
+            "⚠️ Run this command inside the group you want to remove from your community."
         )
     if not await sender_is_admin(ctx, update):
-        return await update.message.reply_text("🔒 Sirf is group ke admin/owner hi community se hata sakte hain.")
+        return await update.message.reply_text("🔒 Only this group's admin/owner can remove it from a community.")
     db.remove_from_community(usr.id, ch.id)
     await update.message.reply_text(
-        f"✅ *{md_esc(ch.title or 'This group')}* aapki community se hata diya gaya.",
+        f"✅ *{md_esc(ch.title or 'This group')}* has been removed from your community.",
         parse_mode='Markdown'
     )
 
@@ -4873,9 +4882,9 @@ async def mycommunity_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     groups = db.get_community_groups(usr.id)
     if not groups:
         return await update.message.reply_text(
-            "📭 Aapki community abhi khaali hai.\n\n"
-            "Jis bhi group mein aap admin/owner ho, wahan `/addcommunity` chalao — "
-            "wo group aapki community mein add ho jayega."
+            "📭 Your community is empty right now.\n\n"
+            "Run `/addcommunity` in any group where you're admin/owner — "
+            "that group will be added to your community."
         )
     lines = []
     for gid in groups:
@@ -4887,7 +4896,7 @@ async def mycommunity_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"🌐 *𝗬𝗼𝘂𝗿 𝗖𝗼𝗺𝗺𝘂𝗻𝗶𝘁𝘆* — `{len(groups)}` group(s)\n"
         f"{'─'*14}\n\n" + "\n".join(lines) +
-        f"\n\n_`/gban` aur `/unmute` (jab aap DM ya kisi group se chalao) in sab groups ko cover karenge._",
+        f"\n\n_`/gban` and `/unmute` (when run from DM or any group) will cover all these groups._",
         parse_mode='Markdown'
     )
 
@@ -4903,13 +4912,13 @@ async def gban_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     groups = db.get_community_groups(usr.id)
     if not groups:
         return await update.message.reply_text(
-            "📭 Aapki community mein koi group nahi hai.\n"
-            "Pehle apne group(s) ke andar (jahan aap admin/owner ho) `/addcommunity` chalao."
+            "📭 You have no groups in your community.\n"
+            "First run `/addcommunity` inside your group(s) where you're admin/owner."
         )
 
     tid, tobj, consumed, err = await resolve_target(
         update, ctx,
-        "↩️ Reply to a user (group ke andar), ya `/gban <user_id | @username> [reason]` use karo"
+        "↩️ Reply to a user (inside the group), or use `/gban <user_id | @username> [reason]`"
     )
     if err:
         return await update.message.reply_text(err, parse_mode='Markdown')
@@ -5694,7 +5703,6 @@ async def track_activity_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if usr.id == ANON_BOT_ID:
         return
     db.track_activity(ch.id, usr.id, user_name(usr, escape=False))
-    db.log_message_id(ch.id, usr.id, msg.message_id)
 
     # ── Auto-Reputation: har 100 messages pe 100 rep points ──────
     total_msgs = db.get_total_msg_count(ch.id, usr.id)
@@ -5834,7 +5842,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         base_msg = (
             f"💖 {mv2_esc(user_name(usr, escape=False))} said thank you to {mv2_esc(user_name(target, escape=False))}\\!\n\n"
-            f"⭐ *\\+{REP_PER_THANK} Reputation Points* mil gaye\\!\n"
+            f"⭐ *\\+{REP_PER_THANK} Reputation Points* earned\\!\n"
             f"📊 This group's Rep: `{new_rep}` pts\n"
         )
         if warn_removed:
@@ -6443,10 +6451,10 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
             f"  🕵️ *Bio Guard* — members with a link or blacklisted word\n"
             f"       in their profile bio get shadow-blocked (their\n"
             f"       messages silently won't be visible to anyone)\n"
-            f"  👤 *Member Username Guard* — jab ON karo, sirf isi group ke\n"
-            f"       members hi apna @username yahan mention/send kar\n"
-            f"       sakte hain; kisi bhi bahar wale ka @username bhejte hi\n"
-            f"       message delete ho kar warning milegi\n"
+            f"  👤 *Member Username Guard* — when ON, only this group's own\n"
+            f"       members can mention/send an @username here; sending\n"
+            f"       any outsider's @username gets the message deleted\n"
+            f"       with a warning issued\n"
             f"  ⚡ Fast detection — bio changes and edits are scanned right away\n\n"
         )
         rows = []
@@ -6522,7 +6530,7 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
     if data == "cfg_community_list":
         groups = db.get_community_groups(u.id)
         if not groups:
-            text = "📭 *Aapki community abhi khaali hai.*\n\nIs group ke settings mein wapas jaakar “➕ Add This Group” dabao."
+            text = "📭 *Your community is empty right now.*\n\nGo back to this group's settings and tap “➕ Add This Group”."
         else:
             lines = []
             for gid in groups:
@@ -6544,15 +6552,15 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
     if data == "cfg_community_ban":
         groups = db.get_community_groups(u.id)
         if not groups:
-            await query.answer("📭 Pehle kam se kam ek group apni community mein add karo.", show_alert=True)
+            await query.answer("📭 First add at least one group to your community.", show_alert=True)
             return
         SETTINGS_PENDING[(ch.id, u.id)] = {"action": "community_ban", "panel_msg_id": query.message.message_id}
         await _cfg_edit(
             query, ch.id,
             f"🔨 *𝗕𝗮𝗻 𝗳𝗿𝗼𝗺 𝗖𝗼𝗺𝗺𝘂𝗻𝗶𝘁𝘆*\n{'─'*14}\n\n"
-            f"Target ka *user ID* ya *@username* type karo, chaho to reason "
-            f"ke saath — jaise: `123456789 spamming links`\n\n"
-            f"_Yeh unhe aapki community ke sabhi `{len(groups)}` group(s) se ban kar dega._",
+            f"Type the target's *user ID* or *@username*, with a reason "
+            f"if you want — e.g.: `123456789 spamming links`\n\n"
+            f"_This will ban them from all `{len(groups)}` group(s) in your community._",
             rows_back_cfg()
         )
         return
@@ -6957,7 +6965,7 @@ async def handle_settings_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE, 
                 tid = None
 
         if tid is None:
-            reply = f"❌ Can't find `{raw}`. Numeric user ID ya @username bhejo (jo bot ne pehle dekha ho)."
+            reply = f"❌ Can't find `{raw}`. Send a numeric user ID or @username (one the bot has seen before)."
         elif tid == ctx.bot.id or tid == OWNER_ID:
             reply = "⚠️ This user can't be banned."
         else:
