@@ -1510,8 +1510,24 @@ async def resolve_target(update: Update, ctx, usage: str):
     """
     msg = update.message
     if msg.reply_to_message and msg.reply_to_message.from_user:
-        u = msg.reply_to_message.from_user
-        return u.id, u, 0, None
+        ru = msg.reply_to_message.from_user
+        if ru.id == ctx.bot.id:
+            # Replied to one of the BOT'S OWN cards (e.g. the /warnings
+            # status card) — the real target isn't the bot itself. Recover
+            # it from an embedded tg://user?id= mention (text_mention
+            # entity) if the card included one, instead of wrongly
+            # treating the bot as the target (which used to falsely
+            # trigger "Admins can't be banned/warned", since the bot
+            # itself is an admin in the group).
+            entities = list(msg.reply_to_message.entities or []) + \
+                       list(msg.reply_to_message.caption_entities or [])
+            for ent in entities:
+                if ent.type == "text_mention" and ent.user:
+                    return ent.user.id, ent.user, 0, None
+            # No embedded mention found — fall through to ctx.args/usage
+            # below instead of silently targeting the bot.
+        else:
+            return ru.id, ru, 0, None
 
     if ctx.args:
         raw = ctx.args[0]
@@ -3986,7 +4002,7 @@ async def warnings_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = (
         f"📊 *𝗪𝗮𝗿𝗻𝗶𝗻𝗴 𝗦𝘁𝗮𝘁𝘂𝘀*\n"
         f"{'─'*14}\n\n"
-        f"👤 {user_name(tgt, escape=True)}\n"
+        f"👤 {user_mention(tgt)}\n"
         f"Count: `{w}/4`\n"
         f"Scale: {bars}"
     )
@@ -6310,7 +6326,10 @@ def kb_settings_main(chat_id):
         [
             {"text": "🌐 𝗖𝗼𝗺𝗺𝘂𝗻𝗶𝘁𝘆", "callback_data": "cfg_community", "style": "primary"},
         ],
-        [{"text": "❌ 𝗖𝗹𝗼𝘀𝗲", "callback_data": "close_menu", "style": "danger"}],
+        [
+            {"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "menu_main", "style": "primary"},
+            {"text": "❌ 𝗖𝗹𝗼𝘀𝗲", "callback_data": "close_menu", "style": "danger"},
+        ],
     ]
 
 def _settings_overview_text(chat_id):
