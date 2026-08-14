@@ -376,20 +376,87 @@ SHADOW_PUNISH_THRESHOLD = 5                     # after this many bio-blocked me
                                                  # normal link/blacklist violation) instead of
                                                  # just silently deleting the message
 
-def bio_violation(bio: str, chat_id: int):
-    """Check a bio string for a link or a blacklisted word.
-    Returns (kind, matched_word_or_none) — kind is 'link', 'blacklist', or None."""
+# ── Bio Guard: Username check — resolved-type cache ──
+# "users_only" mode has to tell a plain Telegram user's @username apart
+# from a channel/group/bot's @username, which needs a get_chat() call
+# per username. Cached briefly so re-scanning the same bio repeatedly
+# (BIO_RECHECK_SEC / SHADOW_RECHECK_SEC loop) doesn't re-resolve it
+# every single time.
+USERNAME_TYPE_CACHE: dict[str, tuple] = {}      # uname(lower) -> (is_plain_user_bool, checked_at)
+USERNAME_TYPE_CACHE_TTL = 300
+
+async def _username_is_plain_user(ctx, uname: str) -> bool:
+    """True if @uname resolves to an actual Telegram user (private chat) —
+    False for a channel, group/supergroup, or anything we can't resolve."""
+    cached = USERNAME_TYPE_CACHE.get(uname)
+    if cached and time.time() - cached[1] < USERNAME_TYPE_CACHE_TTL:
+        return cached[0]
+    is_user = False
+    try:
+        chat = await ctx.bot.get_chat(f"@{uname}")
+        is_user = (chat.type == "private")
+    except Exception:
+        # Can't resolve it (deleted/typo/bot has no access) — play it safe
+        # and don't treat it as a confirmed plain user.
+        is_user = False
+    USERNAME_TYPE_CACHE[uname] = (is_user, time.time())
+    return is_user
+
+
+def _bio_violation_what(kind: str, matched, in_bio: bool = False) -> str:
+    """Human-readable 'what' phrase for a bio-guard hit, shared by every
+    notice/punishment message so link/blacklist/username all read consistently."""
+    suffix = " in your bio" if in_bio else ""
+    if kind == "link":
+        return f"a *link*{suffix}"
+    if kind == "username":
+        return f"a username (`{matched}`){suffix}" if matched else f"a username{suffix}"
+    return f"the blacklisted word `{matched}`{suffix}"
+
+
+async def bio_violation(bio: str, chat_id: int, g: dict, ctx=None):
+    """Check a bio string for a link, a blacklisted word, or (Premium) an
+    @username — each check individually toggleable from the Premium panel.
+    Returns (kind, matched_word_or_none) — kind is 'link', 'blacklist',
+    'username', or None.
+
+    Bio Username Guard has two ON modes (g["bio_username_guard"]):
+      "full"       — ANY @username in the bio is blocked, no exceptions.
+      "users_only" — a @username is allowed only if it belongs to an
+                     actual Telegram user (private chat); any channel,
+                     group/supergroup, or unresolvable @username is
+                     still blocked.
+      "off"        — check disabled (default).
+    """
     if not bio:
         return None, None
-    if check_link(bio):
+
+    if g.get("bio_link_guard", True) and check_link(bio):
         return "link", None
-    words = list(set((db.get_blacklist(chat_id) or []) + (db.get_gblacklist() or [])))
-    if words:
-        r = build_blacklist_re(words)
-        if r:
-            m = r.search(bio)
-            if m:
-                return "blacklist", m.group(1)
+
+    if g.get("bio_blacklist_guard", True):
+        words = list(set((db.get_blacklist(chat_id) or []) + (db.get_gblacklist() or [])))
+        if words:
+            r = build_blacklist_re(words)
+            if r:
+                m = r.search(bio)
+                if m:
+                    return "blacklist", m.group(1)
+
+    uname_mode = g.get("bio_username_guard", "off")
+    if uname_mode in ("full", "users_only"):
+        for match in USERNAME_RE.findall(bio):
+            uname = match.lower()
+            if uname in EXEMPT_USERNAMES:
+                continue
+            if uname_mode == "full":
+                return "username", f"@{match}"
+            # users_only — allow it only if it's confirmed to be a plain
+            # Telegram user's @username, not a channel/group/bot.
+            if ctx is not None and await _username_is_plain_user(ctx, uname):
+                continue
+            return "username", f"@{match}"
+
     return None, None
 
 
@@ -525,6 +592,9 @@ class DB:
             "captcha": False,
             "premium": False,       # Owner-granted paid tier
             "allow_member_usernames": False,  # Premium: sirf group-members ke @username allow karo
+            "bio_link_guard": True,       # Premium Bio Guard: link check on/off
+            "bio_blacklist_guard": True,  # Premium Bio Guard: blacklisted-word check on/off
+            "bio_username_guard": "off",  # Premium Bio Guard: "off" | "users_only" | "full"
             "warn_durations": None,   # None = default MUTE_TIME use hoga
             "filters": {},            # per-group filter toggles (defaults merged at read time)
             "welcome_enabled": True,
@@ -5974,7 +6044,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     bio_fetch_ok = False
                     bio = ""
                 if bio_fetch_ok:
-                    kind, matched = bio_violation(bio, ch.id)
+                    kind, matched = await bio_violation(bio, ch.id, g_settings, ctx)
                     if not kind:
                         # Bio is clean now — clear shadow status and let this message through
                         db.shadow_blacklist_remove(ch.id, usr.id)
@@ -6003,7 +6073,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 # the message forever with no real consequence.
                 kind = shadow.get("reason")
                 matched = shadow.get("matched")
-                what = "a link in your bio" if kind == "link" else f"the blacklisted word `{matched}` in your bio"
+                what = _bio_violation_what(kind, matched, in_bio=True)
                 viol_txt = f"⛔ Repeated bio violation — {what}. Remove it to stop getting muted."
                 await apply_warn_punishment(ctx, ch.id, usr, viol_txt, delete_delay=90)
                 return
@@ -6011,10 +6081,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             if SHADOW_MSG_COUNT[shadow_key] % 3 == 1:
                 kind = shadow.get("reason")
                 matched = shadow.get("matched")
-                if kind == "link":
-                    what = "a *link*"
-                else:
-                    what = f"the blacklisted word `{matched}`"
+                what = _bio_violation_what(kind, matched)
                 left = SHADOW_PUNISH_THRESHOLD - hit_count
                 notice = await ctx.bot.send_message(
                     ch.id,
@@ -6051,12 +6118,12 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 bio = ""
 
-            kind, matched = bio_violation(bio, ch.id)
+            kind, matched = await bio_violation(bio, ch.id, g_settings, ctx)
             if kind:
                 db.shadow_blacklist_add(ch.id, usr.id, kind, matched)
                 asyncio.create_task(msg.delete())
                 SHADOW_MSG_COUNT[shadow_key] = 1
-                what = "a *link*" if kind == "link" else f"the blacklisted word `{matched}`"
+                what = _bio_violation_what(kind, matched)
                 notice = await ctx.bot.send_message(
                     ch.id,
                     f"🕵️ *𝗕𝗜𝗢 𝗚𝗨𝗔𝗥𝗗 𝗧𝗥𝗜𝗚𝗚𝗘𝗥𝗘𝗗*\n\n"
@@ -6459,6 +6526,9 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
         g = db.get_group(ch.id)
         prem_on = bool(g.get("premium", False))
         uname_on = bool(g.get("allow_member_usernames", False))
+        bio_link_on = bool(g.get("bio_link_guard", True))
+        bio_bl_on = bool(g.get("bio_blacklist_guard", True))
+        bio_uname_mode = g.get("bio_username_guard", "off")
         text = (
             f"*💎 𝗣𝗥𝗘𝗠𝗜𝗨𝗠 𝗣𝗥𝗢𝗧𝗘𝗖𝗧𝗜𝗢𝗡*\n"
             f"{'─'*14}\n\n"
@@ -6467,9 +6537,10 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
             f"*✨ 𝗣𝗿𝗲𝗺𝗶𝘂𝗺 𝗕𝗲𝗻𝗲𝗳𝗶𝘁𝘀:*\n"
             f"  ✏️ *Edit Guard* — if someone edits an old clean message\n"
             f"       into a link or blacklisted word, it's caught instantly\n"
-            f"  🕵️ *Bio Guard* — members with a link or blacklisted word\n"
-            f"       in their profile bio get shadow-blocked (their\n"
-            f"       messages silently won't be visible to anyone)\n"
+            f"  🕵️ *Bio Guard* — members with a link, blacklisted word, or\n"
+            f"       (if enabled) an @username in their profile bio get\n"
+            f"       shadow-blocked (their messages silently won't be\n"
+            f"       visible to anyone) — each check below is toggleable\n"
             f"  👤 *Member Username Guard* — when ON, only this group's own\n"
             f"       members can mention/send an @username here; sending\n"
             f"       any outsider's @username gets the message deleted\n"
@@ -6478,13 +6549,42 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
         )
         rows = []
         if prem_on:
+            uname_mode_label = {
+                "off": "🔴 OFF",
+                "users_only": "🟡 Users Only",
+                "full": "🟢 Full Block",
+            }[bio_uname_mode]
+            uname_mode_desc = {
+                "off": "_Usernames in bios aren't checked at all._",
+                "users_only": "_A plain Telegram user's @username is allowed in bios — but any channel's, group's, or other non-user @username still gets shadow-blocked._",
+                "full": "_ANY @username in a bio gets shadow-blocked — no exceptions._",
+            }[bio_uname_mode]
             text += (
                 f"{'─'*14}\n"
-                f"👤 *Allow Member Usernames:* {'🟢 ON' if uname_on else '🔴 OFF'}\n"
+                f"*🕵️ 𝗕𝗶𝗼 𝗚𝘂𝗮𝗿𝗱 𝗖𝗵𝗲𝗰𝗸𝘀:*\n"
+                f"🔗 Link check: {'🟢 ON' if bio_link_on else '🔴 OFF'}\n"
+                f"⛔ Blacklisted word check: {'🟢 ON' if bio_bl_on else '🔴 OFF'}\n"
+                f"👤 Username check: {uname_mode_label}\n"
+                f"{uname_mode_desc}\n\n"
+                f"{'─'*14}\n"
+                f"👤 *Allow Member Usernames (in messages):* {'🟢 ON' if uname_on else '🔴 OFF'}\n"
                 f"{'_Only this group’s members can send a @username. Everyone else’s @username gets blocked + warned._' if uname_on else '_All @username mentions are currently blocked in this group (default)._'}\n\n"
             )
             rows.append([
-                {"text": f"👤 𝗠𝗲𝗺𝗯𝗲𝗿 𝗨𝘀𝗲𝗿𝗻𝗮𝗺𝗲𝘀 {ICON_ON if uname_on else ICON_OFF}",
+                {"text": f"🔗 𝗕𝗶𝗼 𝗟𝗶𝗻𝗸 {ICON_ON if bio_link_on else ICON_OFF}",
+                 "callback_data": "cfg_premium_biolink_toggle",
+                 "style": "success" if bio_link_on else "danger"},
+                {"text": f"⛔ 𝗕𝗶𝗼 𝗪𝗼𝗿𝗱 {ICON_ON if bio_bl_on else ICON_OFF}",
+                 "callback_data": "cfg_premium_bioblacklist_toggle",
+                 "style": "success" if bio_bl_on else "danger"},
+            ])
+            rows.append([
+                {"text": f"👤 𝗕𝗶𝗼 𝗨𝘀𝗲𝗿𝗻𝗮𝗺𝗲: {uname_mode_label}",
+                 "callback_data": "cfg_premium_biouname_cycle",
+                 "style": "success" if bio_uname_mode == "full" else ("primary" if bio_uname_mode == "users_only" else "danger")}
+            ])
+            rows.append([
+                {"text": f"👤 𝗠𝗲𝗺𝗯𝗲𝗿 𝗨𝘀𝗲𝗿𝗻𝗮𝗺𝗲𝘀 (𝗺𝘀𝗴𝘀) {ICON_ON if uname_on else ICON_OFF}",
                  "callback_data": "cfg_premium_uname_toggle",
                  "style": "success" if uname_on else "danger"}
             ])
@@ -6508,6 +6608,35 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
             await query.answer("💎 This is a Premium-only feature. DM @Suhani_TG to get Premium.", show_alert=True)
             return
         db.update_group(ch.id, {"allow_member_usernames": not bool(g.get("allow_member_usernames", False))})
+        await cfg_callback_reroute(update, ctx, "cfg_premium")
+        return
+
+    if data == "cfg_premium_biolink_toggle":
+        g = db.get_group(ch.id)
+        if not bool(g.get("premium", False)):
+            await query.answer("💎 This is a Premium-only feature. DM @Suhani_TG to get Premium.", show_alert=True)
+            return
+        db.update_group(ch.id, {"bio_link_guard": not bool(g.get("bio_link_guard", True))})
+        await cfg_callback_reroute(update, ctx, "cfg_premium")
+        return
+
+    if data == "cfg_premium_bioblacklist_toggle":
+        g = db.get_group(ch.id)
+        if not bool(g.get("premium", False)):
+            await query.answer("💎 This is a Premium-only feature. DM @Suhani_TG to get Premium.", show_alert=True)
+            return
+        db.update_group(ch.id, {"bio_blacklist_guard": not bool(g.get("bio_blacklist_guard", True))})
+        await cfg_callback_reroute(update, ctx, "cfg_premium")
+        return
+
+    if data == "cfg_premium_biouname_cycle":
+        g = db.get_group(ch.id)
+        if not bool(g.get("premium", False)):
+            await query.answer("💎 This is a Premium-only feature. DM @Suhani_TG to get Premium.", show_alert=True)
+            return
+        cur = g.get("bio_username_guard", "off")
+        nxt = {"off": "users_only", "users_only": "full", "full": "off"}.get(cur, "off")
+        db.update_group(ch.id, {"bio_username_guard": nxt})
         await cfg_callback_reroute(update, ctx, "cfg_premium")
         return
 
