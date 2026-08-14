@@ -394,30 +394,37 @@ def _biorecheck_markup(chat_id: int, user_id: int) -> InlineKeyboardMarkup:
 
 
 # ── Bio Guard: Username check — resolved-type cache ──
-# "users_only" mode has to tell a plain Telegram user's @username apart
-# from a channel/group/bot's @username, which needs a get_chat() call
-# per username. Cached briefly so re-scanning the same bio repeatedly
-# (BIO_RECHECK_SEC / SHADOW_RECHECK_SEC loop) doesn't re-resolve it
-# every single time.
-USERNAME_TYPE_CACHE: dict[str, tuple] = {}      # uname(lower) -> (is_plain_user_bool, checked_at)
+# "users_only" mode has to tell a channel/group's @username apart from an
+# ordinary Telegram user's @username. IMPORTANT constraint: Telegram's
+# Bot API can only resolve a channel/group's @username reliably (public
+# entities are always look-up-able) — it generally CANNOT resolve an
+# arbitrary private user's @username unless the bot already has some
+# direct context on that user. So get_chat() failing is actually the
+# *common* case for a perfectly ordinary user, not a red flag — we must
+# fail OPEN (allow) when we can't resolve it, and only ever block when
+# we get positive confirmation it's a channel/group/supergroup. Failing
+# closed here was blocking real users' own usernames incorrectly.
+USERNAME_TYPE_CACHE: dict[str, tuple] = {}      # uname(lower) -> (is_blocked_type_bool, checked_at)
 USERNAME_TYPE_CACHE_TTL = 300
 
-async def _username_is_plain_user(ctx, uname: str) -> bool:
-    """True if @uname resolves to an actual Telegram user (private chat) —
-    False for a channel, group/supergroup, or anything we can't resolve."""
+async def _username_is_channel_or_group(ctx, uname: str) -> bool:
+    """True ONLY if @uname is confirmed to be a channel or group/supergroup
+    — the one case users_only mode should block. Anything else (a plain
+    user, a bot, or unresolvable) returns False, i.e. allowed."""
     cached = USERNAME_TYPE_CACHE.get(uname)
     if cached and time.time() - cached[1] < USERNAME_TYPE_CACHE_TTL:
         return cached[0]
-    is_user = False
+    is_blocked_type = False
     try:
         chat = await ctx.bot.get_chat(f"@{uname}")
-        is_user = (chat.type == "private")
+        is_blocked_type = chat.type in ("channel", "group", "supergroup")
     except Exception:
-        # Can't resolve it (deleted/typo/bot has no access) — play it safe
-        # and don't treat it as a confirmed plain user.
-        is_user = False
-    USERNAME_TYPE_CACHE[uname] = (is_user, time.time())
-    return is_user
+        # Can't resolve it — almost always means it's an ordinary user
+        # Telegram won't disclose to the bot without prior context, NOT
+        # a working channel/group link. Don't punish the user for that.
+        is_blocked_type = False
+    USERNAME_TYPE_CACHE[uname] = (is_blocked_type, time.time())
+    return is_blocked_type
 
 
 def _bio_violation_what(kind: str, matched, in_bio: bool = False) -> str:
@@ -439,10 +446,10 @@ async def bio_violation(bio: str, chat_id: int, g: dict, ctx=None):
 
     Bio Username Guard has two ON modes (g["bio_username_guard"]):
       "full"       — ANY @username in the bio is blocked, no exceptions.
-      "users_only" — a @username is allowed only if it belongs to an
-                     actual Telegram user (private chat); any channel,
-                     group/supergroup, or unresolvable @username is
-                     still blocked.
+      "users_only" — a @username is blocked only if it's CONFIRMED to be
+                     a channel or group/supergroup; an ordinary user's
+                     @username (or anything we can't resolve — which is
+                     the normal case for private users) is allowed.
       "off"        — check disabled (default).
     """
     if not bio:
@@ -468,11 +475,10 @@ async def bio_violation(bio: str, chat_id: int, g: dict, ctx=None):
                 continue
             if uname_mode == "full":
                 return "username", f"@{match}"
-            # users_only — allow it only if it's confirmed to be a plain
-            # Telegram user's @username, not a channel/group/bot.
-            if ctx is not None and await _username_is_plain_user(ctx, uname):
-                continue
-            return "username", f"@{match}"
+            # users_only — block only a CONFIRMED channel/group/supergroup
+            # username; everything else (a plain user, unresolvable) passes.
+            if ctx is not None and await _username_is_channel_or_group(ctx, uname):
+                return "username", f"@{match}"
 
     return None, None
 
@@ -6164,6 +6170,15 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                         )
                         asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 20))
                         shadow = None  # fall through to normal pipeline below
+                    else:
+                        # Still violating, but WHAT they're violating on may
+                        # have changed (e.g. swapped one @username for another,
+                        # or fixed the link but the bio still has a blacklisted
+                        # word) — refresh the stored record so every notice
+                        # after this always reflects the CURRENT bio, never a
+                        # stale one from the original hit.
+                        db.shadow_blacklist_add(ch.id, usr.id, kind, matched)
+                        shadow = db.shadow_blacklist_get(ch.id, usr.id)
 
         if shadow:
             # Still shadow-blacklisted — let it post, then vanish it
