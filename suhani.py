@@ -364,7 +364,7 @@ MUTE_CAPTCHA_PENDING = {}
 CLEAN_CHECK_CACHE: dict[tuple, float] = {}      # (chat_id,user_id) -> last scan while bio was clean
 FLAGGED_CHECK_CACHE: dict[tuple, float] = {}    # (chat_id,user_id) -> last recheck while shadow-flagged
 BIO_RECHECK_SEC = 20                            # clean user: how often we scan their bio for a new violation
-SHADOW_RECHECK_SEC = 8                          # flagged user: how often we recheck if they cleaned it up
+SHADOW_RECHECK_SEC = 5                          # flagged user: how often we recheck if they cleaned it up
                                                  # (both kept short — small cooldown just avoids hammering
                                                  # get_chat() if someone spams messages back to back)
 SHADOW_MSG_COUNT: dict[tuple, int] = {}         # (chat_id,user_id) -> msgs since last notice
@@ -375,6 +375,23 @@ SHADOW_PUNISH_THRESHOLD = 5                     # after this many bio-blocked me
                                                  # to the normal warn/mute escalation (same as a
                                                  # normal link/blacklist violation) instead of
                                                  # just silently deleting the message
+
+# ── Bio Guard: manual "🔄 Recheck" button ──
+# The automatic recheck (above) depends on the user sending a message,
+# which can be flaky: their message may get gated by SHADOW_RECHECK_SEC,
+# or Telegram's own servers can briefly serve a stale cached bio right
+# after it's edited. A button gives the user a direct, explicit way to
+# force a fresh get_chat() + re-scan on demand, instead of only ever
+# hoping a message triggers it. Small per-user cooldown just stops
+# someone from spam-tapping it.
+BIORECHECK_COOLDOWN: dict[tuple, float] = {}    # (chat_id,user_id) -> last manual recheck
+BIORECHECK_COOLDOWN_SEC = 4
+
+def _biorecheck_markup(chat_id: int, user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔄 𝗥𝗲𝗰𝗵𝗲𝗰𝗸 𝗠𝘆 𝗕𝗶𝗼 𝗡𝗼𝘄", callback_data=f"biorecheck_{chat_id}_{user_id}")
+    ]])
+
 
 # ── Bio Guard: Username check — resolved-type cache ──
 # "users_only" mode has to tell a plain Telegram user's @username apart
@@ -2571,6 +2588,95 @@ async def mute_captcha_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             pass
     else:
         await query.answer("❌ Wrong answer — try again!", show_alert=True)
+
+
+# ═══════════════════════════════════════════════════════════
+#  PREMIUM: Bio Guard — manual "🔄 Recheck" button
+# ═══════════════════════════════════════════════════════════
+async def bio_recheck_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """User taps '🔄 Recheck My Bio' on a Bio Guard notice. Forces an
+    immediate fresh get_chat() + re-scan, bypassing SHADOW_RECHECK_SEC —
+    a reliable, explicit alternative to waiting for the next message to
+    (maybe) trigger the automatic recheck."""
+    query = update.callback_query
+    data = query.data
+    parts = data.split("_")
+    if len(parts) < 3:
+        await query.answer()
+        return
+
+    try:
+        chat_id = int(parts[1])
+        user_id = int(parts[2])
+    except ValueError:
+        await query.answer()
+        return
+
+    if query.from_user.id != user_id:
+        await query.answer("🔒 Only the person named above can use this button.", show_alert=True)
+        return
+
+    key = (chat_id, user_id)
+    now = time.time()
+    last = BIORECHECK_COOLDOWN.get(key, 0)
+    if now - last < BIORECHECK_COOLDOWN_SEC:
+        await query.answer("⏳ Give it a couple seconds and try again.", show_alert=True)
+        return
+    BIORECHECK_COOLDOWN[key] = now
+
+    shadow = db.shadow_blacklist_get(chat_id, user_id)
+    if not shadow:
+        await query.answer("✅ You're already clear — nothing to recheck!", show_alert=True)
+        try:
+            await query.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        return
+
+    await query.answer("🔍 Rechecking your bio…")
+
+    try:
+        full = await ctx.bot.get_chat(user_id)
+        bio = getattr(full, "bio", None) or ""
+        bio_fetch_ok = True
+    except Exception:
+        bio = ""
+        bio_fetch_ok = False
+
+    if not bio_fetch_ok:
+        await query.answer("⚠️ Couldn't fetch your profile right now — try again in a moment.", show_alert=True)
+        return
+
+    g_settings = db.get_group(chat_id)
+    kind, matched = await bio_violation(bio, chat_id, g_settings, ctx)
+
+    if not kind:
+        # Clean — clear shadow status same as the automatic path does.
+        db.shadow_blacklist_remove(chat_id, user_id)
+        SHADOW_MSG_COUNT.pop(key, None)
+        SHADOW_FLOOD.pop(key, None)
+        FLAGGED_CHECK_CACHE.pop(key, None)
+        try:
+            await query.message.edit_text(
+                f"✅ {user_mention(query.from_user)}, your bio is clean now — you're all set. 🎉",
+                parse_mode='Markdown'
+            )
+        except Exception:
+            try:
+                notice = await ctx.bot.send_message(
+                    chat_id,
+                    f"✅ {user_mention(query.from_user)}, your bio is clean now — you're all set. 🎉",
+                    parse_mode='Markdown'
+                )
+                asyncio.create_task(delete_after(ctx, chat_id, notice.message_id, 20))
+            except Exception:
+                pass
+    else:
+        # Still violating — keep the shadow record (and its reason/matched)
+        # in sync in case what's left is different from the original hit.
+        db.shadow_blacklist_add(chat_id, user_id, kind, matched)
+        what = _bio_violation_what(kind, matched, in_bio=True)
+        await query.answer(f"❌ Still not clean — {what}. Remove it and tap again.", show_alert=True)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -6088,11 +6194,12 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     f"🕵️ *𝗕𝗜𝗢 𝗚𝗨𝗔𝗥𝗗*\n\n"
                     f"👤 {user_mention(usr)}, your profile bio contains {what}.\n"
                     f"Your messages won't be visible until it's removed.\n\n"
-                    f"_Remove it from your bio, then send any message to be rechecked._\n\n"
+                    f"_Remove it, then tap the button below (or send any message) to be rechecked._\n\n"
                     f"⚠️ _{left} more message(s) like this and you'll be muted._",
-                    parse_mode='Markdown'
+                    parse_mode='Markdown',
+                    reply_markup=_biorecheck_markup(ch.id, usr.id)
                 )
-                asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 60))
+                asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 90))
 
             # Flood check for shadow-blacklisted user (10 msgs / 60s) — extra
             # safety net in case they spam-flood fast before hitting the
@@ -6129,10 +6236,11 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     f"🕵️ *𝗕𝗜𝗢 𝗚𝗨𝗔𝗥𝗗 𝗧𝗥𝗜𝗚𝗚𝗘𝗥𝗘𝗗*\n\n"
                     f"👤 {user_mention(usr)}, your profile bio contains {what}.\n"
                     f"Your messages won't be visible until it's removed.\n\n"
-                    f"_Remove it from your bio, then send any message to be rechecked._",
-                    parse_mode='Markdown'
+                    f"_Remove it, then tap the button below (or send any message) to be rechecked._",
+                    parse_mode='Markdown',
+                    reply_markup=_biorecheck_markup(ch.id, usr.id)
                 )
-                asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 60))
+                asyncio.create_task(delete_after(ctx, ch.id, notice.message_id, 90))
                 return
 
     db.inc_stat("scanned")
@@ -7286,6 +7394,7 @@ def main():
     app.add_handler(CallbackQueryHandler(cfg_callback,        pattern=r"^cfg_"))
     app.add_handler(CallbackQueryHandler(captcha_callback,    pattern=r"^captcha_"))
     app.add_handler(CallbackQueryHandler(mute_captcha_callback, pattern=r"^wcap_"))
+    app.add_handler(CallbackQueryHandler(bio_recheck_callback, pattern=r"^biorecheck_"))
     app.add_handler(CallbackQueryHandler(menu_callback,       pattern=r"^(menu_|show_|unmute_|unban_|dismiss_|close_)"))
     app.add_handler(CallbackQueryHandler(rep_callback,        pattern=r"^rep:"))
     app.add_handler(CallbackQueryHandler(groups_page_callback, pattern=r"^grppg_"))
