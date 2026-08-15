@@ -2457,12 +2457,19 @@ async def _is_menu_owner(ctx, chat_id, message_id, user_id) -> bool:
             pass
         return False
     if owner == ANON_ADMIN_ID:
-        # The panel was opened by an anonymous admin. Telegram always reveals
-        # the clicker's REAL user id on a button tap — even for admins who are
-        # posting anonymously — so it can never match the recorded owner id
-        # here. Only an admin/owner can post anonymously in the first place,
-        # so it's safe to allow the click through rather than lock everyone out.
-        return True
+        # Panel ek anonymous admin ne khola tha ('Remain Anonymous' ON).
+        # Telegram button-tap pe hamesha clicker ka REAL user id bhejta hai
+        # (chahe woh anonymously post kar raha ho), isliye yeh kabhi seedhe
+        # user_id == owner se match nahi hoga. Isका yeh matlab NAHI ki koi
+        # bhi (normal member bhi) is panel ko access kar sake — sirf koi
+        # bhi ADMIN/OWNER hi le sakta hai, kyunki sirf woh anonymously post
+        # kar sakte the. Pehle yahan seedha True return ho raha tha, jisse
+        # group ka har member is panel (Close/navigation sab) use kar
+        # sakta tha — ab sirf admins/owner allowed hain.
+        try:
+            return user_id == OWNER_ID or await is_adm(ctx, chat_id, user_id)
+        except Exception:
+            return False
     return owner == user_id
 
 
@@ -3735,6 +3742,21 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Group me /start → unified panel (same layout as DM)
     if ch.type != "private":
         is_admin_here = (u.id == OWNER_ID) or await is_adm(ctx, ch.id, u.id)
+
+        # Admin/owner ke liye /start seedha Settings control panel kholta
+        # hai — normal 5-button intro panel unke liye dikhane ka koi
+        # matlab nahi, unhe seedha kaam ki cheez chahiye.
+        if is_admin_here:
+            text = _settings_overview_text(ch.id)
+            rows = kb_settings_main(ch.id)
+            msg_id = await send_colored_message(ch.id, text, rows, parse_mode='Markdown')
+            if not msg_id:
+                sent = await update.message.reply_text(text, parse_mode='Markdown', reply_markup=_rows_to_markup(rows))
+                msg_id = sent.message_id
+            _remember_menu_owner(ch.id, msg_id, u.id)
+            schedule_panel_autodelete(ctx, ch.id, msg_id, cmd_msg_id=update.message.message_id)
+            return
+
         start_text = build_start_text(True, is_admin_here)
         rows = await kb_start_panel(ctx, True)
         msg_id = await send_colored_message(ch.id, start_text, rows)
