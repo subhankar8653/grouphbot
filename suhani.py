@@ -1499,6 +1499,58 @@ class DB:
         except Exception:
             pass
 
+    # ── Free Trial (Premium) ────────────────────────────────────
+    TRIAL_SECONDS = 3600  # 1 ghanta
+
+    def trial_status(self, chat_id):
+        """Returns a dict describing the group's trial/premium state:
+          active  -> real (owner-granted) premium hai, koi trial involved nahi
+          trial   -> abhi trial chal raha hai, 'remaining' seconds bacha hai
+          cooldown-> aaj ka trial already use ho chuka, kal try karo
+          ready   -> trial start karne ke liye eligible hai
+        """
+        g = self.get_group(chat_id)
+        if g.get("premium", False) and g.get("premium_source") != "trial":
+            return {"state": "active"}
+        now = time.time()
+        expires = g.get("trial_expires_at", 0)
+        if g.get("premium_source") == "trial" and expires > now:
+            return {"state": "trial", "remaining": int(expires - now)}
+        today = datetime.utcnow().date().isoformat()
+        if g.get("trial_last_date") == today:
+            return {"state": "cooldown"}
+        return {"state": "ready"}
+
+    def start_trial(self, chat_id):
+        expires = time.time() + self.TRIAL_SECONDS
+        today = datetime.utcnow().date().isoformat()
+        self.update_group(chat_id, {
+            "premium": True,
+            "premium_source": "trial",
+            "trial_expires_at": expires,
+            "trial_last_date": today,
+        })
+        return expires
+
+    def end_trial_if_still_trial(self, chat_id):
+        """Sirf tab premium off karta hai jab woh abhi bhi trial-granted ho —
+        agar beech mein owner ne real Premium de diya (premium_source ban
+        gaya 'owner'), toh yeh kabhi usse nahi chhedta."""
+        g = self.get_group(chat_id)
+        if g.get("premium_source") == "trial":
+            self.update_group(chat_id, {"premium": False, "premium_source": None})
+            return True
+        return False
+
+    def get_active_trial_groups(self):
+        """Har group jiska abhi trial chal raha hai (background sweep ke
+        liye — bot restart hone par bhi expired trials sahi se revert ho
+        saken, in-memory one-shot timer pe hi depend na karna pade)."""
+        try:
+            return list(self.groups.find({"premium_source": "trial"}))
+        except Exception:
+            return []
+
     # ── Teacher system ────────────────────────────────────────
     def add_teacher(self, chat_id, user_id):
         """Mark a user as teacher in a group (exempt from promo-mute, gets polite warning instead)."""
@@ -6203,7 +6255,7 @@ async def premium_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return await update.message.reply_text("⚠️ That doesn't look like a valid chat ID.")
         state = args[1].lower() == "on"
 
-    db.update_group(target_chat_id, {"premium": state})
+    db.update_group(target_chat_id, {"premium": state, "premium_source": "owner" if state else None})
 
     if state:
         await update.message.reply_text(
@@ -7432,14 +7484,21 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
     if data == "cfg_premium":
         g = db.get_group(ch.id)
         prem_on = bool(g.get("premium", False))
+        trial = db.trial_status(ch.id)
         uname_on = bool(g.get("allow_member_usernames", False))
         bio_link_mode = _bio_link_mode(g)
         bio_bl_on = bool(g.get("bio_blacklist_guard", True))
         bio_uname_mode = g.get("bio_username_guard", "off")
+        if trial["state"] == "trial":
+            status_line = f"🟢 *Active in this group* _(🎁 Free Trial — {format_duration(trial['remaining'])} left)_\n\n"
+        elif prem_on:
+            status_line = "🟢 *Active in this group*\n\n"
+        else:
+            status_line = "🔴 *Not active in this group*\n\n"
         text = (
             f"*💎 𝗣𝗥𝗘𝗠𝗜𝗨𝗠 𝗣𝗥𝗢𝗧𝗘𝗖𝗧𝗜𝗢𝗡*\n"
             f"{'─'*14}\n\n"
-            f"Status: {'🟢 *Active in this group*' if prem_on else '🔴 *Not active in this group*'}\n\n"
+            f"Status: {status_line}"
             f"{'─'*14}\n"
             f"*✨ 𝗣𝗿𝗲𝗺𝗶𝘂𝗺 𝗕𝗲𝗻𝗲𝗳𝗶𝘁𝘀:*\n"
             f"  ✏️ *Edit Guard* — if someone edits an old clean message\n"
@@ -7540,9 +7599,41 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
             f"{'─'*14}\n"
             f"📩 To get Premium, DM `@Suhani_TG`!"
         )
+        if trial["state"] == "ready":
+            text += (
+                f"\n\n{'─'*14}\n"
+                f"🎁 *𝗙𝗿𝗲𝗲 𝗧𝗿𝗶𝗮𝗹 𝗔𝘃𝗮𝗶𝗹𝗮𝗯𝗹𝗲!*\n"
+                f"_Try full Premium free for 1 hour — once per day._"
+            )
+            rows.append([{"text": "🎁 𝗦𝘁𝗮𝗿𝘁 𝗙𝗿𝗲𝗲 𝗧𝗿𝗶𝗮𝗹 (𝟭 𝗛𝗿)", "callback_data": "cfg_premium_trial", "style": "success"}])
+        elif trial["state"] == "cooldown":
+            text += (
+                f"\n\n{'─'*14}\n"
+                f"🎁 _Today's free trial already used — come back tomorrow!_"
+            )
         rows.append([{"text": "📩 𝗗𝗠 @Suhani_TG", "url": "https://t.me/Suhani_TG"}])
         rows.append([{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_main", "style": "primary"}])
         await _cfg_edit(query, ch.id, text, rows)
+        return
+
+    if data == "cfg_premium_trial":
+        trial = db.trial_status(ch.id)
+        if trial["state"] == "active":
+            await query.answer("💎 This group already has full Premium — no need for a trial!", show_alert=True)
+            return
+        if trial["state"] == "trial":
+            await query.answer(
+                f"🎁 Trial already running — {format_duration(trial['remaining'])} left today.",
+                show_alert=True
+            )
+            return
+        if trial["state"] == "cooldown":
+            await query.answer("⏳ Today's free trial is already used. Try again tomorrow!", show_alert=True)
+            return
+        expires = db.start_trial(ch.id)
+        asyncio.create_task(_trial_expiry_watcher(ctx, ch.id, expires))
+        await query.answer("🎁 Free Trial started — Premium is active for the next 1 hour!", show_alert=True)
+        await cfg_callback_reroute(update, ctx, "cfg_premium")
         return
 
     if data == "cfg_premium_uname_toggle":
@@ -8364,10 +8455,56 @@ async def _send_weekly_digests(app):
                 pass  # admin ne DM start nahi kiya bot se — skip
 
 
+async def _trial_expiry_watcher(ctx, chat_id, expires_at):
+    """1-ghante ke Free Trial ke turant baad Premium wapas off kar deta
+    hai — lekin SIRF agar woh abhi bhi trial-granted hai (agar beech mein
+    owner ne real Premium de diya, toh yeh usse kabhi nahi chhedta).
+    Background sweep (_background_maintenance_loop) isi kaam ka safety-net
+    hai agar bot beech mein restart ho jaye aur yeh in-memory task khatam
+    ho jaaye."""
+    wait = max(0, expires_at - time.time()) + 2
+    await asyncio.sleep(wait)
+    if db.end_trial_if_still_trial(chat_id):
+        try:
+            msg = await ctx.bot.send_message(
+                chat_id,
+                "🎁 *𝗙𝗿𝗲𝗲 𝗧𝗿𝗶𝗮𝗹 𝗘𝗻𝗱𝗲𝗱*\n\n"
+                "Your 1-hour Premium trial has ended for today.\n"
+                "_Come back tomorrow for another free hour, or DM_ `@Suhani_TG` _for full Premium._",
+                parse_mode='Markdown'
+            )
+            asyncio.create_task(delete_after(ctx, chat_id, msg.message_id, 300))
+        except Exception:
+            pass
+
+
+async def _sweep_expired_trials(app):
+    """Safety-net — har maintenance pass mein un groups ko dhundo jinka
+    trial khatam ho chuka hai lekin (bot restart ki wajah se) unka
+    in-memory watcher task kho chuka tha."""
+    now = time.time()
+    for g in db.get_active_trial_groups():
+        if g.get("trial_expires_at", 0) <= now:
+            chat_id = g.get("_id")
+            if db.end_trial_if_still_trial(chat_id):
+                try:
+                    msg = await app.bot.send_message(
+                        chat_id,
+                        "🎁 *𝗙𝗿𝗲𝗲 𝗧𝗿𝗶𝗮𝗹 𝗘𝗻𝗱𝗲𝗱*\n\n"
+                        "Your 1-hour Premium trial has ended for today.\n"
+                        "_Come back tomorrow for another free hour, or DM_ `@Suhani_TG` _for full Premium._",
+                        parse_mode='Markdown'
+                    )
+                    asyncio.create_task(delete_after(app, chat_id, msg.message_id, 300))
+                except Exception:
+                    pass
+
+
 async def _background_maintenance_loop(app):
     while True:
         try:
             _cleanup_stale_caches()
+            await _sweep_expired_trials(app)
             last_digest = db.get_meta("last_digest_ts", 0)
             now = time.time()
             if last_digest == 0:
