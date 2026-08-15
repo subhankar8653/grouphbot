@@ -204,6 +204,40 @@ FILTER_GROUPS = [
     ("👥 𝗚𝗿𝗼𝘂𝗽 𝗕𝗲𝗵𝗮𝘃𝗶𝗼𝘂𝗿", ["noevents", "welcome", "warncaptcha"]),
 ]
 
+# ═══════════════════════════════════════════════════════════
+#  AUTO-RULES — /rules ka default text seedha in filter toggles se
+#  banta hai. Admin jo bhi /settings → Filters me ON karega, wahi
+#  line yahan rule ban ke user ko dikhegi — alag se kahin maintain
+#  nahi karna padta. (Sirf tab use hota hai jab /setrules se koi
+#  custom rules text set na ho.)
+# ═══════════════════════════════════════════════════════════
+# key -> rule line shown when that filter is ON. Order below = display order.
+FILTER_RULE_LINES = [
+    ("nolinks",        "🔗 Sharing links, URLs or hidden links"),
+    ("noforwards",     "↩️ Forwarding messages _(linked channel is exempt)_"),
+    ("blacklist",      "⛔ Using blacklisted words"),
+    ("profanity",      "🗣️ Abusive or adult language"),
+    ("nocontacts",     "📇 Sharing contact cards"),
+    ("nolocations",    "📍 Sharing live location / venues"),
+    ("nohashtags",     "#️⃣ Hashtag spam"),
+    ("novoice",        "🎙️ Voice messages & video notes"),
+    ("nochinese",      "🈲 Chinese-language text"),
+    ("nopremiumemoji", "💎 Premium emoji used with text"),
+    ("noquotes",       "❝ Quote-forwarding from other chats"),
+    ("nocommands",     "🤖 Other bots' commands"),
+    ("nobots",         "🛑 Adding other bots to the group"),
+    ("antiflood",      "🌊 Flooding / spamming messages quickly"),
+    ("imagefilter",    "🖼️ Sending unsafe / NSFW images"),
+]
+# These have no dedicated toggle but are always enforced together with the
+# "antispam" master filter, so they only appear in /rules when antispam is ON.
+ANTISPAM_ALWAYS_RULES = [
+    "🔞 Adult emojis (2 or more in one message)",
+    "🎨 Stylish / fancy unicode fonts",
+    "🤖 Unapproved external bot @usernames",
+    "📛 Random @username tagging of unrelated people",
+]
+
 GMUTE_DURATION = 604800   # 1 week — global mute ki duration (seconds)
 # Warning expiry times (seconds). 4th warning (jo gmute trigger karta hai) ki
 # expiry GMUTE_DURATION ke barabar honi chahiye — None NAHI, warna woh warning
@@ -3579,6 +3613,45 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 # ─── /rule ──────────────────────────────────────────────────
+def build_auto_rules_text(chat_id) -> str:
+    """/settings → Filters me jo bhi ON hai, unhi se /rules ka 'NOT ALLOWED'
+    list banta hai — admin ko kahin do jagah maintain nahi karna padta.
+    Warn penalties bhi is group ke actual (custom ho sakti hain) warn
+    durations se aate hain, hardcoded nahi."""
+    filt = db.get_filters(chat_id)
+
+    lines = [line for key, line in FILTER_RULE_LINES if filt.get(key)]
+    if filt.get("antispam", True):
+        lines.extend(ANTISPAM_ALWAYS_RULES)
+
+    if lines:
+        not_allowed = "🚫 *𝗡𝗢𝗧 𝗔𝗟𝗟𝗢𝗪𝗘𝗗*\n\n" + "\n".join(
+            f"  {i}️⃣  {line}" if i <= 9 else f"  {i}.  {line}"
+            for i, line in enumerate(lines, start=1)
+        )
+    else:
+        not_allowed = "🚫 *𝗡𝗢𝗧 𝗔𝗟𝗟𝗢𝗪𝗘𝗗*\n\n  _No content filters are currently active in this group._"
+
+    wd = db.get_warn_durations(chat_id)
+    penalties = (
+        f"⚠️ *𝗣𝗘𝗡𝗔𝗟𝗧𝗜𝗘𝗦*\n"
+        f"  🟡 1st → {format_duration(wd[1])} mute\n"
+        f"  🟠 2nd → {format_duration(wd[2])} mute\n"
+        f"  🔴 3rd → {format_duration(wd[3])} mute\n"
+        f"  💀 4th → {format_duration(wd[4])} mute, in this group\n"
+    )
+
+    return (
+        f"📜 *𝗚𝗥𝗢𝗨𝗣 𝗥𝗨𝗟𝗘𝗦*\n"
+        f"{'─'*14}\n\n"
+        f"{not_allowed}\n\n"
+        f"{'─'*14}\n\n"
+        f"{penalties}\n"
+        f"{'─'*14}\n"
+        f"✅ _Follow the rules and enjoy your stay!_"
+    )
+
+
 async def rule_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     custom = db.get_rules(chat_id)
@@ -3592,27 +3665,7 @@ async def rule_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"_Please follow the rules to avoid penalties._"
         )
     else:
-        text = (
-            f"📜 *𝗚𝗥𝗢𝗨𝗣 𝗥𝗨𝗟𝗘𝗦*\n"
-            f"{'─'*14}\n\n"
-            f"🚫 *𝗡𝗢𝗧 𝗔𝗟𝗟𝗢𝗪𝗘𝗗*\n\n"
-            f"  1️⃣  🤖 External bot usernames\n"
-            f"  2️⃣  🔗 Links & URLs\n"
-            f"  3️⃣  ↩️ Forwarded messages\n"
-            f"       ✅ _Linked channel is exempt_\n"
-            f"  4️⃣  🔞 Adult emojis (2+)\n"
-            f"  5️⃣  🗣️ Abusive language\n"
-            f"  6️⃣  ⛔ Blacklisted words\n"
-            f"  7️⃣  🌊 Spamming or flooding\n\n"
-            f"{'─'*14}\n\n"
-            f"⚠️ *𝗣𝗘𝗡𝗔𝗟𝗧𝗜𝗘𝗦*\n"
-            f"  🟡 1st → 35 sec mute\n"
-            f"  🟠 2nd → 60 sec mute\n"
-            f"  🔴 3rd → 120 sec mute\n"
-            f"  💀 4th → 1 week, in this group\n\n"
-            f"{'─'*14}\n"
-            f"✅ _Follow the rules and enjoy your stay!_"
-        )
+        text = build_auto_rules_text(chat_id)
 
     sent = await update.message.reply_text(
         text,
@@ -6843,16 +6896,15 @@ def kb_settings_main(chat_id):
     bl_count = len(db.get_blacklist(chat_id) or [])
     wl_count = len(db.get_whitelist(chat_id) or [])
     prem_on = bool(g.get("premium", False))
+    # Order = the flow an admin actually thinks in when setting up a group:
+    #  1) What gets enforced (Filters drive /rules automatically, then word lists)
+    #  2) What happens on a violation (Warn Durations, Captcha)
+    #  3) Cleanup / housekeeping (Sticker & Auto-delete)
+    #  4) Extras (Reputation, Premium, Community)
     return [
         [
+            {"text": f"🛡️ 𝗙𝗶𝗹𝘁𝗲𝗿𝘀 ({_filters_status_line(chat_id)})", "callback_data": "cfg_filters", "style": "primary"},
             {"text": "📜 𝗥𝘂𝗹𝗲𝘀", "callback_data": "cfg_rules", "style": "primary"},
-            {"text": f"🗑️ 𝗦𝘁𝗶𝗰𝗸𝗲𝗿 𝗗𝗲𝗹 {ICON_ON if stk else ICON_OFF}", "callback_data": "cfg_stkdel",
-             "style": "success" if stk else "danger"},
-        ],
-        [
-            {"text": f"⏱️ 𝗔𝘂𝘁𝗼-𝗗𝗲𝗹𝗲𝘁𝗲 {ICON_ON if ad else ICON_OFF}", "callback_data": "cfg_autodel",
-             "style": "success" if ad else "danger"},
-            {"text": "⚠️ 𝗪𝗮𝗿𝗻 𝗗𝘂𝗿𝗮𝘁𝗶𝗼𝗻𝘀", "callback_data": "cfg_warndur", "style": "primary"},
         ],
         [
             {"text": f"⛔ 𝗕𝗹𝗮𝗰𝗸𝗹𝗶𝘀𝘁 {ICON_ON if bl_count else ICON_OFF}", "callback_data": "cfg_bl",
@@ -6861,14 +6913,18 @@ def kb_settings_main(chat_id):
              "style": "success" if wl_count else "danger"},
         ],
         [
-            {"text": f"🛡️ 𝗙𝗶𝗹𝘁𝗲𝗿𝘀 ({_filters_status_line(chat_id)})", "callback_data": "cfg_filters", "style": "primary"},
-        ],
-        [
+            {"text": "⚠️ 𝗪𝗮𝗿𝗻 𝗗𝘂𝗿𝗮𝘁𝗶𝗼𝗻𝘀", "callback_data": "cfg_warndur", "style": "primary"},
             {"text": f"🎭 𝗖𝗮𝗽𝘁𝗰𝗵𝗮 {ICON_ON if captcha_on else ICON_OFF}", "callback_data": "cfg_captcha",
              "style": "success" if captcha_on else "danger"},
-            {"text": "🏆 𝗥𝗲𝗽𝘂𝘁𝗮𝘁𝗶𝗼𝗻", "callback_data": "menu_repboard", "style": "primary"},
         ],
         [
+            {"text": f"🗑️ 𝗦𝘁𝗶𝗰𝗸𝗲𝗿 𝗗𝗲𝗹 {ICON_ON if stk else ICON_OFF}", "callback_data": "cfg_stkdel",
+             "style": "success" if stk else "danger"},
+            {"text": f"⏱️ 𝗔𝘂𝘁𝗼-𝗗𝗲𝗹𝗲𝘁𝗲 {ICON_ON if ad else ICON_OFF}", "callback_data": "cfg_autodel",
+             "style": "success" if ad else "danger"},
+        ],
+        [
+            {"text": "🏆 𝗥𝗲𝗽𝘂𝘁𝗮𝘁𝗶𝗼𝗻", "callback_data": "menu_repboard", "style": "primary"},
             {"text": f"💎 𝗣𝗿𝗲𝗺𝗶𝘂𝗺 {ICON_ON if prem_on else ICON_OFF}", "callback_data": "cfg_premium",
              "style": "success" if prem_on else "danger"},
         ],
@@ -6896,12 +6952,13 @@ def _settings_overview_text(chat_id):
         f"{'─'*14}\n\n"
         f"📌 *𝙌𝙪𝙞𝙘𝙠 𝙎𝙩𝙖𝙩𝙪𝙨*\n"
         f"  🛡️ Filters: {_filters_status_line(chat_id)}\n"
+        f"  ⛔ Blacklist words: {bl_count}  •  ✅ Whitelist: {wl_count}\n"
+        f"  🎭 Captcha: {ICON_ON + ' On' if captcha_on else ICON_OFF + ' Off'}\n"
         f"  🗑️ Sticker auto-del: {ICON_ON + ' ' + _sec_human(stk) if stk else ICON_OFF + ' Off'}\n"
         f"  ⏱️ Msg auto-del: {ICON_ON + ' ' + _sec_human(ad) if ad else ICON_OFF + ' Off'}\n"
-        f"  🎭 Captcha: {ICON_ON + ' On' if captcha_on else ICON_OFF + ' Off'}\n"
-        f"  ⛔ Blacklist words: {bl_count}  •  ✅ Whitelist: {wl_count}\n"
         f"  💎 Premium: {ICON_ON + ' Active' if prem_on else ICON_OFF + ' Not active'}\n"
         f"{'─'*14}\n\n"
+        f"💡 _/rules updates itself automatically from whatever you turn ON in_ 🛡️ Filters\n"
         f"Tap a button below to view or change a setting 👇\n"
         f"_Admins and the owner only — this panel closes automatically when idle._"
     )
@@ -7369,16 +7426,28 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
 
     # ── Rules ──
     if data == "cfg_rules":
-        rules = db.get_rules(ch.id) or "_(using default rules)_"
-        await _cfg_edit(
-            query, ch.id,
-            f"*📜 GROUP RULES*\n{'─'*14}\n\n{rules}\n\n"
-            f"_To set a new rule, tap the button below and send your message._",
-            [
-                [{"text": "✏️ 𝗦𝗲𝘁 𝗡𝗲𝘄 𝗥𝘂𝗹𝗲𝘀", "callback_data": "cfg_rules_set", "style": "primary"}],
-                [{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_main", "style": "primary"}],
-            ]
-        )
+        custom_rules = db.get_rules(ch.id)
+        if custom_rules:
+            body = f"*📜 GROUP RULES*  _(custom)_\n{'─'*14}\n\n{custom_rules}"
+            extra_row = [{"text": "♻️ 𝗥𝗲𝘃𝗲𝗿𝘁 𝘁𝗼 𝗔𝘂𝘁𝗼 𝗥𝘂𝗹𝗲𝘀", "callback_data": "cfg_rules_reset", "style": "danger"}]
+        else:
+            body = (
+                f"*📜 GROUP RULES*  _(auto — built from your Filters)_\n{'─'*14}\n\n"
+                f"{build_auto_rules_text(ch.id)}\n\n"
+                f"_Turn filters on/off from 🛡️ Filters and this list updates automatically._"
+            )
+            extra_row = None
+        rows = [[{"text": "✏️ 𝗦𝗲𝘁 𝗖𝘂𝘀𝘁𝗼𝗺 𝗥𝘂𝗹𝗲𝘀", "callback_data": "cfg_rules_set", "style": "primary"}]]
+        if extra_row:
+            rows.append(extra_row)
+        rows.append([{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_main", "style": "primary"}])
+        await _cfg_edit(query, ch.id, body, rows)
+        return
+
+    if data == "cfg_rules_reset":
+        db.set_rules(ch.id, None)
+        await query.answer("✅ Reverted to auto rules (built from your active Filters)")
+        await cfg_callback_reroute(update, ctx, "cfg_rules")
         return
 
     if data == "cfg_rules_set":
@@ -7621,6 +7690,7 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
             f"*🛡️ FILTERS — {_filters_status_line(ch.id)}*\n{'─'*14}\n\n"
             f"✅ = ON     ▫️ = OFF\n"
             f"_Tap any filter — it toggles ON/OFF instantly._\n\n"
+            f"📜 _Whatever you turn ON here shows up automatically in /rules._\n"
             f"🌐 _Multi-group ban/unmute? See 🏠 Settings → Community._",
             kb_filters_grid(ch.id)
         )
