@@ -2247,11 +2247,21 @@ def _remember_menu_owner(chat_id, message_id, user_id):
         MENU_OWNER.clear()
     MENU_OWNER[(chat_id, message_id)] = user_id
 
-def _is_menu_owner(chat_id, message_id, user_id) -> bool:
+async def _is_menu_owner(ctx, chat_id, message_id, user_id) -> bool:
     owner = MENU_OWNER.get((chat_id, message_id))
     if owner is None:
-        # Old/untracked message (from before a restart) — don't block it.
-        return True
+        # Old/untracked message — most commonly this happens after a bot
+        # restart, since MENU_OWNER lives only in memory. Earlier this
+        # blindly returned True (anyone could grab the panel, including
+        # the Close button) — now only an actual admin/owner may take
+        # over an untracked panel; everyone else stays locked out.
+        try:
+            if user_id == OWNER_ID or await is_adm(ctx, chat_id, user_id):
+                _remember_menu_owner(chat_id, message_id, user_id)
+                return True
+        except Exception:
+            pass
+        return False
     if owner == ANON_ADMIN_ID:
         # The panel was opened by an anonymous admin. Telegram always reveals
         # the clicker's REAL user id on a button tap — even for admins who are
@@ -2923,7 +2933,7 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     is_owner_click = True
     if chat and chat.type != "private" and data and not data.startswith(("unmute_", "unban_", "dismiss_warn")):
-        is_owner_click = _is_menu_owner(chat.id, query.message.message_id, query.from_user.id)
+        is_owner_click = await _is_menu_owner(ctx, chat.id, query.message.message_id, query.from_user.id)
 
     await _menu_callback_dispatch(update, ctx)
 
@@ -2950,7 +2960,7 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
     # should only work for the user who ran /start (or help/welcome).
     # unmute_ / unban_ / dismiss_warn are admin-action buttons, so exclude them.
     if chat and chat.type != "private" and not data.startswith(("unmute_", "unban_", "dismiss_warn")):
-        if not _is_menu_owner(chat.id, query.message.message_id, query.from_user.id):
+        if not await _is_menu_owner(ctx, chat.id, query.message.message_id, query.from_user.id):
             await query.answer(
                 "🔒 This menu can only be used by whoever opened it!\n"
                 "Open your own menu with /start.",
@@ -6100,7 +6110,7 @@ async def rep_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     chat  = update.effective_chat
     if chat and chat.type != "private":
-        if not _is_menu_owner(chat.id, query.message.message_id, query.from_user.id):
+        if not await _is_menu_owner(ctx, chat.id, query.message.message_id, query.from_user.id):
             await query.answer(
                 "🔒 This menu can only be used by whoever opened it!\n"
                 "Open your own menu with /start.",
@@ -6890,7 +6900,7 @@ def kb_settings_main(chat_id):
     #  4) Extras (Reputation, Premium, Community)
     return [
         [
-            {"text": f"🛡️ 𝗙𝗶𝗹𝘁𝗲𝗿𝘀 ({_filters_status_line(chat_id)})", "callback_data": "cfg_filters", "style": "primary"},
+            {"text": f"🛡️ 𝗙𝗲𝗮𝘁𝘂𝗿𝗲𝘀 ({_filters_status_line(chat_id)})", "callback_data": "cfg_filters", "style": "primary"},
             {"text": "📜 𝗥𝘂𝗹𝗲𝘀", "callback_data": "cfg_rules", "style": "primary"},
         ],
         [
@@ -6938,14 +6948,14 @@ def _settings_overview_text(chat_id):
         f"*⚙️ 𝗚𝗥𝗢𝗨𝗣 𝗦𝗘𝗧𝗧𝗜𝗡𝗚𝗦 𝗣𝗔𝗡𝗘𝗟*\n"
         f"{'─'*14}\n\n"
         f"📌 *𝙌𝙪𝙞𝙘𝙠 𝙎𝙩𝙖𝙩𝙪𝙨*\n"
-        f"  🛡️ Filters: {_filters_status_line(chat_id)}\n"
+        f"  🛡️ Features: {_filters_status_line(chat_id)}\n"
         f"  ⛔ Blacklist words: {bl_count}  •  ✅ Whitelist: {wl_count}\n"
         f"  🎭 Captcha: {ICON_ON + ' On' if captcha_on else ICON_OFF + ' Off'}\n"
         f"  🗑️ Sticker auto-del: {ICON_ON + ' ' + _sec_human(stk) if stk else ICON_OFF + ' Off'}\n"
         f"  ⏱️ Msg auto-del: {ICON_ON + ' ' + _sec_human(ad) if ad else ICON_OFF + ' Off'}\n"
         f"  💎 Premium: {ICON_ON + ' Active' if prem_on else ICON_OFF + ' Not active'}\n"
         f"{'─'*14}\n\n"
-        f"💡 _/rules updates itself automatically from whatever you turn ON in_ 🛡️ Filters\n"
+        f"💡 _/rules updates itself automatically from whatever you turn ON in_ 🛡️ Features\n"
         f"Tap a button below to view or change a setting 👇\n"
         f"_Admins and the owner only — this panel closes automatically when idle._"
     )
@@ -7007,7 +7017,7 @@ async def cfg_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data: str
     # popup dikhana hai (query.answer show_alert), group mein KOI message
     # nahi bhejna. Isliye yahan ACK nahi karte jab tak pata na chale ki
     # authorized hai ya nahi (query.answer ek hi baar call ho sakta hai).
-    if not _is_menu_owner(ch.id, query.message.message_id, u.id):
+    if not await _is_menu_owner(ctx, ch.id, query.message.message_id, u.id):
         try:
             await query.answer("🔒 This panel belongs to someone else — run your own /settings.", show_alert=True)
         except Exception:
@@ -7419,9 +7429,9 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
             extra_row = [{"text": "♻️ 𝗥𝗲𝘃𝗲𝗿𝘁 𝘁𝗼 𝗔𝘂𝘁𝗼 𝗥𝘂𝗹𝗲𝘀", "callback_data": "cfg_rules_reset", "style": "danger"}]
         else:
             body = (
-                f"*📜 GROUP RULES*  _(auto — built from your Filters)_\n{'─'*14}\n\n"
+                f"*📜 GROUP RULES*  _(auto — built from your Features)_\n{'─'*14}\n\n"
                 f"{build_auto_rules_text(ch.id)}\n\n"
-                f"_Turn filters on/off from 🛡️ Filters and this list updates automatically._"
+                f"_Turn features on/off from 🛡️ Features and this list updates automatically._"
             )
             extra_row = None
         rows = [[{"text": "✏️ 𝗦𝗲𝘁 𝗖𝘂𝘀𝘁𝗼𝗺 𝗥𝘂𝗹𝗲𝘀", "callback_data": "cfg_rules_set", "style": "primary"}]]
@@ -7433,7 +7443,7 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
 
     if data == "cfg_rules_reset":
         db.set_rules(ch.id, None)
-        await query.answer("✅ Reverted to auto rules (built from your active Filters)")
+        await query.answer("✅ Reverted to auto rules (built from your active Features)")
         await cfg_callback_reroute(update, ctx, "cfg_rules")
         return
 
@@ -7674,9 +7684,9 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
     if data == "cfg_filters":
         await _cfg_edit(
             query, ch.id,
-            f"*🛡️ FILTERS — {_filters_status_line(ch.id)}*\n{'─'*14}\n\n"
+            f"*🛡️ FEATURES — {_filters_status_line(ch.id)}*\n{'─'*14}\n\n"
             f"✅ = ON     ▫️ = OFF\n"
-            f"_Tap any filter — it toggles ON/OFF instantly._\n\n"
+            f"_Tap any feature — it toggles ON/OFF instantly._\n\n"
             f"📜 _Whatever you turn ON here shows up automatically in /rules._\n"
             f"🌐 _Multi-group ban/unmute? See 🏠 Settings → Community._",
             kb_filters_grid(ch.id)
@@ -7695,9 +7705,9 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
                 pass
         await _cfg_edit(
             query, ch.id,
-            f"*🛡️ FILTERS — {_filters_status_line(ch.id)}*\n{'─'*14}\n\n"
+            f"*🛡️ FEATURES — {_filters_status_line(ch.id)}*\n{'─'*14}\n\n"
             f"✅ = ON     ▫️ = OFF\n"
-            f"_Tap any filter — it toggles ON/OFF instantly._\n\n"
+            f"_Tap any feature — it toggles ON/OFF instantly._\n\n"
             f"🌐 _Multi-group ban/unmute? See 🏠 Settings → Community._",
             kb_filters_grid(ch.id)
         )
