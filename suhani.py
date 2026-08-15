@@ -671,6 +671,19 @@ class DB:
         # jaakar bhi /ban aur /warn par purane messages delete karne ke
         # liye humein khud message_ids track karne padte hain.
         self.msg_log  = self.db["msg_log"]
+        # menu_owner: (chat_id, message_id) -> user_id, jo panel/menu khola.
+        # Pehle sirf ek in-process Python dict (MENU_OWNER) mein rehta tha,
+        # isliye bot restart hote hi (ya agar kabhi 2 processes chal rahe
+        # ho, jaisa free-hosting pe deploy/redeploy ke waqt hota hai) yeh
+        # yaad hi nahi rehta ki panel kisne khola tha — aur asli opener
+        # khud bhi "locked" ho jaata tha apne hi panel pe. Ab Mongo mein
+        # bhi likha jaata hai taaki restart ke baad bhi sahi user ko
+        # pehchana ja sake. TTL index se purane entries khud saaf ho jaate.
+        self.menu_owner = self.db["menu_owner"]
+        try:
+            self.menu_owner.create_index("ts", expireAfterSeconds=6 * 3600)
+        except Exception:
+            pass
 
         if not self.stats_c.find_one({"_id": "global"}):
             self.stats_c.insert_one({"_id": "global", "warnings": 0, "mutes": 0, "scanned": 0, "gmutes": 0})
@@ -1424,6 +1437,24 @@ class DB:
 
     def get_rules(self, chat_id):
         return self.get_group(chat_id).get("rules")
+
+    # ── Menu/panel ownership (persistent — see self.menu_owner above) ──
+    def set_menu_owner(self, chat_id, message_id, user_id):
+        try:
+            self.menu_owner.update_one(
+                {"_id": f"{chat_id}:{message_id}"},
+                {"$set": {"user_id": user_id, "ts": datetime.utcnow()}},
+                upsert=True
+            )
+        except Exception:
+            pass
+
+    def get_menu_owner(self, chat_id, message_id):
+        try:
+            doc = self.menu_owner.find_one({"_id": f"{chat_id}:{message_id}"})
+            return doc["user_id"] if doc else None
+        except Exception:
+            return None
 
     # ── Teacher system ────────────────────────────────────────
     def add_teacher(self, chat_id, user_id):
@@ -2336,15 +2367,30 @@ def _remember_menu_owner(chat_id, message_id, user_id):
     if len(MENU_OWNER) > 4000:
         MENU_OWNER.clear()
     MENU_OWNER[(chat_id, message_id)] = user_id
+    # Mongo mein bhi likho — isse restart ya multiple processes ke case
+    # mein bhi asli owner pehchana jaata rahega (sirf RAM pe depend nahi).
+    try:
+        db.set_menu_owner(chat_id, message_id, user_id)
+    except Exception:
+        pass
 
 async def _is_menu_owner(ctx, chat_id, message_id, user_id) -> bool:
     owner = MENU_OWNER.get((chat_id, message_id))
     if owner is None:
-        # Old/untracked message — most commonly this happens after a bot
-        # restart, since MENU_OWNER lives only in memory. Earlier this
-        # blindly returned True (anyone could grab the panel, including
-        # the Close button) — now only an actual admin/owner may take
-        # over an untracked panel; everyone else stays locked out.
+        # Pehle RAM mein nahi mila — Mongo mein check karo (ho sakta hai
+        # yeh entry kisi doosre process ne likhi thi, ya is process ne
+        # beech mein restart khaaya ho). Milte hi RAM cache bhi bhar do.
+        try:
+            db_owner = db.get_menu_owner(chat_id, message_id)
+        except Exception:
+            db_owner = None
+        if db_owner is not None:
+            MENU_OWNER[(chat_id, message_id)] = db_owner
+            owner = db_owner
+    if owner is None:
+        # Sach me kabhi track hi nahi hua (ya TTL se expire ho gaya) —
+        # sirf ek actual admin/owner is untracked panel ko le sakta hai;
+        # baaki sab locked rehte hain.
         try:
             if user_id == OWNER_ID or await is_adm(ctx, chat_id, user_id):
                 _remember_menu_owner(chat_id, message_id, user_id)
@@ -8224,7 +8270,7 @@ def main():
     app.add_handler(CallbackQueryHandler(captcha_callback,    pattern=r"^captcha_"))
     app.add_handler(CallbackQueryHandler(mute_captcha_callback, pattern=r"^wcap_"))
     app.add_handler(CallbackQueryHandler(bio_recheck_callback, pattern=r"^biorecheck_"))
-    app.add_handler(CallbackQueryHandler(menu_callback,       pattern=r"^(menu_|show_|unmute_|unban_|dismiss_|close_)"))
+    app.add_handler(CallbackQueryHandler(menu_callback,       pattern=r"^(menu_|show_|unmute_|unban_|dismiss_|close_|start_)"))
     app.add_handler(CallbackQueryHandler(rep_callback,        pattern=r"^rep:"))
     app.add_handler(CallbackQueryHandler(groups_page_callback, pattern=r"^grppg_"))
     app.add_handler(CallbackQueryHandler(premium_list_page_callback, pattern=r"^premlistpg_"))
