@@ -22,7 +22,7 @@
 
 import re, os, asyncio, time, random, string, json, html
 from datetime import datetime, timedelta, time as dtime
-from telegram import Update, ChatPermissions, ChatMember, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, ChatPermissions, ChatMember, InlineKeyboardButton, InlineKeyboardMarkup, ForceReply
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from threading import Thread
 from flask import Flask
@@ -391,6 +391,74 @@ def _biorecheck_markup(chat_id: int, user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[
         InlineKeyboardButton("🔄 𝗥𝗲𝗰𝗵𝗲𝗰𝗸 𝗠𝘆 𝗕𝗶𝗼 𝗡𝗼𝘄", callback_data=f"biorecheck_{chat_id}_{user_id}")
     ]])
+
+
+# ── Premium Panel: "➕ Add" buttons for Bio Domains / Bio Words ──
+# Button click sends a ForceReply prompt (unique marker text); a small,
+# narrowly-filtered MessageHandler catches the admin's reply to THAT
+# specific message and adds it — no separate typed command needed.
+BIODOMAIN_ADD_MARKER = "🌐 𝗥𝗲𝗽𝗹𝘆 𝘁𝗼 𝗔𝗱𝗱 𝗕𝗶𝗼 𝗗𝗼𝗺𝗮𝗶𝗻"
+BIOWORD_ADD_MARKER   = "🕵️ 𝗥𝗲𝗽𝗹𝘆 𝘁𝗼 𝗔𝗱𝗱 𝗕𝗶𝗼 𝗪𝗼𝗿𝗱"
+
+class _BioAddReplyFilter(filters.MessageFilter):
+    """Matches ONLY a text reply to one of our own ForceReply prompts
+    above — deliberately narrow so it never intercepts normal group
+    chat (which still needs to reach check_msg for moderation)."""
+    def filter(self, message):
+        r = message.reply_to_message
+        if not r or not r.from_user or not r.from_user.is_bot:
+            return False
+        txt = r.text or r.caption or ""
+        return txt.startswith(BIODOMAIN_ADD_MARKER) or txt.startswith(BIOWORD_ADD_MARKER)
+
+BIO_ADD_REPLY_FILTER = _BioAddReplyFilter()
+
+
+async def bio_add_reply_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Handles the admin's reply to a '➕ Add Domain/Word' ForceReply prompt."""
+    msg = update.message
+    ch = update.effective_chat
+    replied = msg.reply_to_message
+    prompt_text = replied.text or replied.caption or ""
+
+    if not await sender_is_admin(ctx, update):
+        warn = await msg.reply_text("🔒 Admins only can do this.")
+        asyncio.create_task(delete_after(ctx, ch.id, warn.message_id, 10))
+        asyncio.create_task(msg.delete())
+        return
+
+    value_raw = (msg.text or "").strip()
+    if not value_raw:
+        return
+
+    if prompt_text.startswith(BIODOMAIN_ADD_MARKER):
+        domain = extract_domain(value_raw)
+        if not domain:
+            reply = await msg.reply_text(
+                "❌ That doesn't look like a valid domain — try again (e.g. `instagram.com`).",
+                parse_mode='Markdown'
+            )
+            asyncio.create_task(delete_after(ctx, ch.id, reply.message_id, 15))
+            return
+        g = db.get_group(ch.id)
+        if g.get("bio_link_domains") is None:
+            db.update_group(ch.id, {"bio_link_domains": DEFAULT_BIO_LINK_DOMAINS.copy()})
+        db.add_bio_domain(ch.id, domain)
+        confirm = await msg.reply_text(f"🌐 Added to Bio Link Domains: `{domain}`", parse_mode='Markdown')
+        asyncio.create_task(delete_after(ctx, ch.id, confirm.message_id, 15))
+
+    elif prompt_text.startswith(BIOWORD_ADD_MARKER):
+        word = value_raw.lower()
+        if db.get_biowords(ch.id) is None:
+            db.set_biowords(ch.id, list(set((db.get_blacklist(ch.id) or []) + (db.get_gblacklist() or []))))
+        db.add_bioword(ch.id, word)
+        confirm = await msg.reply_text(f"🕵️ Added to Bio Words: `{word}`", parse_mode='Markdown')
+        asyncio.create_task(delete_after(ctx, ch.id, confirm.message_id, 15))
+    else:
+        return
+
+    asyncio.create_task(replied.delete())
+    asyncio.create_task(msg.delete())
 
 
 # ── Bio Guard: Username check — resolved-type cache ──
@@ -6989,10 +7057,12 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
                 "full": "_ANY @username in a bio gets shadow-blocked — no exceptions._",
             }[bio_uname_mode]
             bio_words_custom = db.get_biowords(ch.id)
+            bio_words_count = len(bio_words_custom) if bio_words_custom is not None else \
+                len(set((db.get_blacklist(ch.id) or []) + (db.get_gblacklist() or [])))
             bio_words_desc = (
-                f"_Custom list, independent from `/blacklist`. Manage with `/addbioword`, `/removebioword`, `/biowords`._"
+                f"_Custom list, independent from `/blacklist`. Manage with the button below, or `/addbioword`, `/removebioword`._"
                 if bio_words_custom is not None else
-                f"_Mirrors your main `/blacklist` + global blacklist until you customize it with `/addbioword` or `/removebioword`._"
+                f"_Mirrors your main `/blacklist` + global blacklist until you customize it below (or with `/addbioword`)._"
             )
             text += (
                 f"{'─'*14}\n"
@@ -7012,10 +7082,19 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
                  "callback_data": "cfg_premium_biolink_cycle",
                  "style": "success" if bio_link_mode == "all" else ("primary" if bio_link_mode == "blacklist" else "danger")}
             ])
+            if bio_link_mode == "blacklist":
+                rows.append([
+                    {"text": f"🌐 𝗠𝗮𝗻𝗮𝗴𝗲 𝗗𝗼𝗺𝗮𝗶𝗻𝘀 ({len(domains)})",
+                     "callback_data": "cfg_premium_biodomains", "style": "primary"}
+                ])
             rows.append([
                 {"text": f"⛔ 𝗕𝗶𝗼 𝗪𝗼𝗿𝗱 {ICON_ON if bio_bl_on else ICON_OFF}",
                  "callback_data": "cfg_premium_bioblacklist_toggle",
                  "style": "success" if bio_bl_on else "danger"}
+            ])
+            rows.append([
+                {"text": f"📝 𝗠𝗮𝗻𝗮𝗴𝗲 𝗕𝗶𝗼 𝗪𝗼𝗿𝗱𝘀 ({bio_words_count})",
+                 "callback_data": "cfg_premium_biowords", "style": "primary"}
             ])
             rows.append([
                 {"text": f"👤 𝗕𝗶𝗼 𝗨𝘀𝗲𝗿𝗻𝗮𝗺𝗲: {uname_mode_label}",
@@ -7082,6 +7161,132 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
         nxt = {"off": "users_only", "users_only": "full", "full": "off"}.get(cur, "off")
         db.update_group(ch.id, {"bio_username_guard": nxt})
         await cfg_callback_reroute(update, ctx, "cfg_premium")
+        return
+
+    # ── Premium Bio Guard: manage Bio Link Domains (add/remove via buttons) ──
+    if data == "cfg_premium_biodomains":
+        g = db.get_group(ch.id)
+        if not bool(g.get("premium", False)):
+            await query.answer("💎 This is a Premium-only feature. DM @Suhani_TG to get Premium.", show_alert=True)
+            return
+        domains = g.get("bio_link_domains")
+        if domains is None:
+            domains = DEFAULT_BIO_LINK_DOMAINS
+        text = (
+            f"*🌐 𝗕𝗜𝗢 𝗟𝗜𝗡𝗞 𝗗𝗢𝗠𝗔𝗜𝗡𝗦*\n{'─'*14}\n\n"
+            f"Used only when Bio Link mode is 🟡 *Domains Only*. A bio link\n"
+            f"trips the guard only if its domain matches one of these:\n\n"
+        )
+        rows = []
+        if domains:
+            for i, d in enumerate(domains):
+                rows.append([{"text": f"❌ {d}", "callback_data": f"cfg_biodomain_rm_{i}"}])
+        else:
+            text += "_No domains set — Domains Only mode won't trigger on anything until you add one._\n\n"
+        rows.append([{"text": "➕ 𝗔𝗱𝗱 𝗗𝗼𝗺𝗮𝗶𝗻", "callback_data": "cfg_biodomain_add", "style": "success"}])
+        rows.append([{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_premium", "style": "primary"}])
+        await _cfg_edit(query, ch.id, text, rows)
+        return
+
+    if data.startswith("cfg_biodomain_rm_"):
+        g = db.get_group(ch.id)
+        if not bool(g.get("premium", False)):
+            await query.answer("💎 This is a Premium-only feature. DM @Suhani_TG to get Premium.", show_alert=True)
+            return
+        try:
+            idx = int(data[len("cfg_biodomain_rm_"):])
+        except ValueError:
+            await query.answer()
+            return
+        domains = g.get("bio_link_domains")
+        if domains is None:
+            domains = DEFAULT_BIO_LINK_DOMAINS
+        if 0 <= idx < len(domains):
+            removed = domains[idx]
+            if g.get("bio_link_domains") is None:
+                db.update_group(ch.id, {"bio_link_domains": DEFAULT_BIO_LINK_DOMAINS.copy()})
+            db.remove_bio_domain(ch.id, removed)
+            await query.answer(f"✅ Removed {removed}")
+        await cfg_callback_reroute(update, ctx, "cfg_premium_biodomains")
+        return
+
+    if data == "cfg_biodomain_add":
+        g = db.get_group(ch.id)
+        if not bool(g.get("premium", False)):
+            await query.answer("💎 This is a Premium-only feature. DM @Suhani_TG to get Premium.", show_alert=True)
+            return
+        prompt = await ctx.bot.send_message(
+            ch.id,
+            f"{BIODOMAIN_ADD_MARKER}\n\nReply to *this* message with the domain to blacklist — e.g. `instagram.com`.",
+            parse_mode='Markdown',
+            reply_markup=ForceReply(selective=True, input_field_placeholder="e.g. instagram.com")
+        )
+        asyncio.create_task(delete_after(ctx, ch.id, prompt.message_id, 120))
+        return
+
+    # ── Premium Bio Guard: manage Bio Words (add/remove via buttons) ──
+    if data == "cfg_premium_biowords":
+        g = db.get_group(ch.id)
+        if not bool(g.get("premium", False)):
+            await query.answer("💎 This is a Premium-only feature. DM @Suhani_TG to get Premium.", show_alert=True)
+            return
+        custom = db.get_biowords(ch.id)
+        if custom is None:
+            words = list(set((db.get_blacklist(ch.id) or []) + (db.get_gblacklist() or [])))
+            note = "_Not customized yet — currently mirrors your main `/blacklist` + global blacklist. Adding/removing here forks it into its own independent list._"
+        else:
+            words = custom
+            note = "_Custom list — independent from your main `/blacklist`._"
+        SHOWN = 15
+        text = f"*🕵️ 𝗕𝗜𝗢 𝗪𝗢𝗥𝗗𝗦* ({len(words)})\n{'─'*14}\n\n{note}\n\n"
+        rows = []
+        if words:
+            for i, w in enumerate(words[:SHOWN]):
+                rows.append([{"text": f"❌ {w}", "callback_data": f"cfg_bioword_rm_{i}"}])
+            if len(words) > SHOWN:
+                text += f"_+{len(words) - SHOWN} more — use `/biowords` to see the full list, `/removebioword <word>` to remove any of them._\n\n"
+        else:
+            text += "_No Bio Words set._\n\n"
+        rows.append([{"text": "➕ 𝗔𝗱𝗱 𝗪𝗼𝗿𝗱", "callback_data": "cfg_bioword_add", "style": "success"}])
+        rows.append([{"text": "◀️ 𝗕𝗮𝗰𝗸", "callback_data": "cfg_premium", "style": "primary"}])
+        await _cfg_edit(query, ch.id, text, rows)
+        return
+
+    if data.startswith("cfg_bioword_rm_"):
+        g = db.get_group(ch.id)
+        if not bool(g.get("premium", False)):
+            await query.answer("💎 This is a Premium-only feature. DM @Suhani_TG to get Premium.", show_alert=True)
+            return
+        try:
+            idx = int(data[len("cfg_bioword_rm_"):])
+        except ValueError:
+            await query.answer()
+            return
+        custom = db.get_biowords(ch.id)
+        words = custom if custom is not None else list(set((db.get_blacklist(ch.id) or []) + (db.get_gblacklist() or [])))
+        if 0 <= idx < len(words):
+            removed = words[idx]
+            if custom is None:
+                # First edit — fork from the combined default before removing,
+                # so the main /blacklist is never touched.
+                db.set_biowords(ch.id, words)
+            db.remove_bioword(ch.id, removed)
+            await query.answer(f"✅ Removed {removed}")
+        await cfg_callback_reroute(update, ctx, "cfg_premium_biowords")
+        return
+
+    if data == "cfg_bioword_add":
+        g = db.get_group(ch.id)
+        if not bool(g.get("premium", False)):
+            await query.answer("💎 This is a Premium-only feature. DM @Suhani_TG to get Premium.", show_alert=True)
+            return
+        prompt = await ctx.bot.send_message(
+            ch.id,
+            f"{BIOWORD_ADD_MARKER}\n\nReply to *this* message with the word/phrase to add.",
+            parse_mode='Markdown',
+            reply_markup=ForceReply(selective=True, input_field_placeholder="word or phrase")
+        )
+        asyncio.create_task(delete_after(ctx, ch.id, prompt.message_id, 120))
         return
 
     # ── Community ──
@@ -7755,6 +7960,15 @@ def main():
         filters.ALL & filters.ChatType.GROUPS,
         track_bot_reply
     ), group=0)
+    # ── PREMIUM: Bio Guard — capture reply to "➕ Add Domain/Word" prompt ──
+    # Registered in the SAME group (1) as the main message handler, and
+    # BEFORE it, so PTB picks this narrowly-filtered handler first for a
+    # matching reply and never runs check_msg on it (avoiding the admin's
+    # domain/word text getting treated as chat content to moderate).
+    app.add_handler(MessageHandler(
+        filters.TEXT & filters.ChatType.GROUPS & BIO_ADD_REPLY_FILTER,
+        bio_add_reply_handler
+    ), group=1)
     # Main message handler
     app.add_handler(MessageHandler(
         filters.ALL & filters.ChatType.GROUPS & ~filters.COMMAND,
