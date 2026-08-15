@@ -23,7 +23,7 @@
 import re, os, asyncio, time, random, string, json, html
 from datetime import datetime, timedelta, time as dtime
 from telegram import Update, ChatPermissions, ChatMember, InlineKeyboardButton, InlineKeyboardMarkup, ForceReply
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ChatMemberHandler, filters, ContextTypes
 from threading import Thread
 from flask import Flask
 from pymongo import MongoClient
@@ -684,6 +684,11 @@ class DB:
             self.menu_owner.create_index("ts", expireAfterSeconds=6 * 3600)
         except Exception:
             pass
+
+        # Per-group violation counters (weekly digest ke liye) + bot-wide
+        # settings jaise promo footer (owner /setpromo se on/off karta hai).
+        self.group_stats = self.db["group_stats"]
+        self.bot_meta    = self.db["bot_meta"]
 
         if not self.stats_c.find_one({"_id": "global"}):
             self.stats_c.insert_one({"_id": "global", "warnings": 0, "mutes": 0, "scanned": 0, "gmutes": 0})
@@ -1456,6 +1461,44 @@ class DB:
         except Exception:
             return None
 
+    # ── Per-group violation counters (weekly admin digest) ─────
+    def inc_group_stat(self, chat_id, field):
+        try:
+            self.group_stats.update_one(
+                {"_id": chat_id}, {"$inc": {field: 1}}, upsert=True
+            )
+        except Exception:
+            pass
+
+    def get_and_reset_group_stat(self, chat_id):
+        try:
+            doc = self.group_stats.find_one_and_delete({"_id": chat_id})
+            return doc or {}
+        except Exception:
+            return {}
+
+    def get_all_group_stats(self):
+        try:
+            return list(self.group_stats.find())
+        except Exception:
+            return []
+
+    # ── Bot-wide settings (owner-controlled) ────────────────────
+    def get_meta(self, key, default=None):
+        try:
+            doc = self.bot_meta.find_one({"_id": key})
+            return doc["value"] if doc else default
+        except Exception:
+            return default
+
+    def set_meta(self, key, value):
+        try:
+            self.bot_meta.update_one(
+                {"_id": key}, {"$set": {"value": value}}, upsert=True
+            )
+        except Exception:
+            pass
+
     # ── Teacher system ────────────────────────────────────────
     def add_teacher(self, chat_id, user_id):
         """Mark a user as teacher in a group (exempt from promo-mute, gets polite warning instead)."""
@@ -1667,6 +1710,20 @@ async def is_adm(ctx, chat_id, user_id):
             # blacklist, edit guard) skip ho jaate the. Moderation ke liye
             # "safe" hamesha "restrict karo", "chhod do" nahi hota.
             return False
+
+
+async def on_chat_member_change(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Jab kisi member ka status (promote/demote) badalta hai, uska
+    is_adm() CACHE entry turant clear karo — nahi toh kisi demoted admin
+    ko bot agle 10 min tak bhi galti se admin power deta reh sakta tha,
+    aur naye-promote admin ko 10 min tak bot 'non-admin' maanta reh sakta
+    tha (jaise unke apne /start panel pe locked ho jaana)."""
+    cmu = update.chat_member
+    if not cmu:
+        return
+    chat_id = cmu.chat.id
+    user_id = cmu.new_chat_member.user.id
+    CACHE.pop(f"adm_{chat_id}_{user_id}", None)
 
 
 def get_sender_id(update: Update) -> int:
@@ -2109,6 +2166,7 @@ async def apply_warn_punishment(ctx, chat_id, usr, viol_txt, delete_delay=90):
     Returns the warning count reached (1-4).
     """
     cnt = db.add_warning(chat_id, usr.id)
+    db.inc_group_stat(chat_id, "violations_blocked")
 
     _wd = db.get_warn_durations(chat_id)
     await do_mute(ctx, chat_id, usr.id, _wd[cnt])
@@ -2129,7 +2187,7 @@ async def apply_warn_punishment(ctx, chat_id, usr, viol_txt, delete_delay=90):
     warncaptcha_on = db.get_filters(chat_id).get("warncaptcha", True)
     if warncaptcha_on:
         cap_question, cap_answer, cap_options = generate_captcha()
-        MUTE_CAPTCHA_PENDING[f"{chat_id}_{usr.id}"] = {"answer": cap_answer}
+        MUTE_CAPTCHA_PENDING[f"{chat_id}_{usr.id}"] = {"answer": cap_answer, "ts": time.time()}
         captcha_block = (
             f"\n🔐 Tap the right answer to unmute + clear warnings:\n"
             f"      `{cap_question}`"
@@ -2684,7 +2742,7 @@ def build_start_text(is_group: bool, is_admin_here: bool = False, user_first_nam
         )
         if is_admin_here:
             text += f"\n⚙️ _Admins — open /settings for the control panel._"
-        return text
+        return text + _promo_footer()
     return (
         f"🛡️ *𝗚𝗨𝗔𝗥𝗗𝗜𝗔𝗡 — 𝗚𝗿𝗼𝘂𝗽 𝗣𝗿𝗼𝘁𝗲𝗰𝘁𝗶𝗼𝗻 𝗕𝗼𝘁*\n"
         f"_Security · Moderation · Automation_\n"
@@ -2693,7 +2751,19 @@ def build_start_text(is_group: bool, is_admin_here: bool = False, user_first_nam
         f"I keep groups safe, clean, and spam-free —\n"
         f"around the clock, with zero effort from admins. 🔥\n\n"
         f"_Tap a button below to get started._"
-    )
+    ) + _promo_footer()
+
+
+def _promo_footer() -> str:
+    """Owner /setpromo <text> se ek chhoti si promo line on/off kar sakta
+    hai — /start panel ke neeche dikhti hai, taaki naye groups organically
+    is bot ko discover kar sakein. Default off (khaali) rehta hai jab tak
+    owner khud set na kare."""
+    try:
+        txt = db.get_meta("promo_footer", "")
+    except Exception:
+        txt = ""
+    return f"\n\n{'─'*14}\n{txt}" if txt else ""
 
 
 async def kb_start_panel(ctx, is_group: bool):
@@ -2890,6 +2960,7 @@ async def captcha_timeout(ctx, chat_id, user_id, msg_id, expire):
             await ctx.bot.ban_chat_member(chat_id, user_id)
             await asyncio.sleep(1)
             await ctx.bot.unban_chat_member(chat_id, user_id)
+            db.inc_group_stat(chat_id, "captcha_failed")
             await ctx.bot.delete_message(chat_id, msg_id)
             msg = await ctx.bot.send_message(
                 chat_id,
@@ -4786,7 +4857,7 @@ async def warn_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     warncaptcha_on = db.get_filters(ch.id).get("warncaptcha", True)
     if warncaptcha_on:
         cap_question, cap_answer, cap_options = generate_captcha()
-        MUTE_CAPTCHA_PENDING[f"{ch.id}_{tid}"] = {"answer": cap_answer}
+        MUTE_CAPTCHA_PENDING[f"{ch.id}_{tid}"] = {"answer": cap_answer, "ts": time.time()}
         captcha_block = (
             f"\n\n🔐 *𝗔𝘂𝘁𝗼-𝗨𝗻𝗺𝘂𝘁𝗲 𝗖𝗮𝗽𝘁𝗰𝗵𝗮*\n"
             f"Tap the right answer below — the mute lifts *instantly*\n"
@@ -4996,6 +5067,26 @@ async def broadcast_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if delete_minutes:
         summary += f"\n🗑️ Auto-delete in: `{delete_minutes} min` (in every group it was sent to)"
     await update.message.reply_text(summary, parse_mode='Markdown')
+
+
+async def setpromo_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Owner-only: /start panel ke neeche dikhne wali chhoti promo line
+    on/off karta hai. Growth ke liye — jaise 'Apne group mein add karo'."""
+    if update.effective_user.id != OWNER_ID:
+        return
+    text = ' '.join(ctx.args) if ctx.args else ""
+    if not text or text.lower() == "off":
+        db.set_meta("promo_footer", "")
+        return await update.message.reply_text(
+            "✅ Promo footer *off* kar diya — /start panel ab plain dikhega.",
+            parse_mode='Markdown'
+        )
+    db.set_meta("promo_footer", text)
+    await update.message.reply_text(
+        f"✅ Promo footer *set* ho gaya — ab har /start panel ke neeche yeh dikhega:\n\n{text}\n\n"
+        f"_Hatane ke liye:_ `/setpromo off`",
+        parse_mode='Markdown'
+    )
 
 
 GROUPS_PER_PAGE = 25
@@ -6951,6 +7042,7 @@ async def check_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 mute_min = base_min + extra_min
                 mute_sec = mute_min * 60
                 await do_mute(ctx, ch.id, usr.id, mute_sec)
+                db.inc_group_stat(ch.id, "violations_blocked")
                 notice = await ctx.bot.send_message(
                     ch.id,
                     f"📚 {user_mention(usr)},\n\n"
@@ -8172,6 +8264,102 @@ def run_web():
 
 
 # ═══════════════════════════════════════════════════════════
+#  BACKGROUND MAINTENANCE — stale RAM caches clean karo +
+#  har hafte group-admins ko unke group ka activity digest bhejo
+# ═══════════════════════════════════════════════════════════
+MAINTENANCE_INTERVAL = 600          # 10 min — cleanup pass
+DIGEST_INTERVAL       = 7 * 86400   # 7 din — weekly digest
+
+def _cleanup_stale_caches():
+    """FLOOD_DATA / CAPTCHA_PENDING / MUTE_CAPTCHA_PENDING — sab RAM-only
+    dicts hain jo kabhi khud se saaf nahi hote the (dheere-dheere memory
+    leak ban jaate the, khaaskar bahut groups wale bade bots mein)."""
+    now = time.time()
+
+    # FLOOD_DATA[chat][user] = [timestamps...] — jo purane ho chuke unhe hatao
+    for chat_id in list(FLOOD_DATA.keys()):
+        per_user = FLOOD_DATA.get(chat_id, {})
+        for uid in list(per_user.keys()):
+            per_user[uid] = [t for t in per_user[uid] if now - t < FLOOD_WINDOW]
+            if not per_user[uid]:
+                per_user.pop(uid, None)
+        if not per_user:
+            FLOOD_DATA.pop(chat_id, None)
+
+    # CAPTCHA_PENDING — "expire" field already hai; jinka time nikal chuka
+    # (aur unka apna timeout-task kisi wajah se fail/crash ho gaya) unhe
+    # safety-net ke taur pe yahan se saaf karo.
+    for chat_id in list(CAPTCHA_PENDING.keys()):
+        per_user = CAPTCHA_PENDING.get(chat_id, {})
+        for uid in list(per_user.keys()):
+            if now > per_user[uid].get("expire", 0) + 300:
+                per_user.pop(uid, None)
+        if not per_user:
+            CAPTCHA_PENDING.pop(chat_id, None)
+
+    # MUTE_CAPTCHA_PENDING — "ts" field ab set hota hai; 24h se purani
+    # bina-solve hui entries ka koi matlab nahi (mute already khatam ho
+    # chuka hoga), unhe hata do.
+    for key in list(MUTE_CAPTCHA_PENDING.keys()):
+        entry = MUTE_CAPTCHA_PENDING.get(key) or {}
+        if now - entry.get("ts", now) > 86400:
+            MUTE_CAPTCHA_PENDING.pop(key, None)
+
+
+async def _send_weekly_digests(app):
+    """Har group ke actual admins ko DM mein us group ka pichhle hafte ka
+    chhota activity report bhejta hai (kitne violations block hue, kitne
+    captcha fail hue). Agar admin ne bot se DM start nahi kiya, toh woh
+    DM chup-chaap skip ho jaata hai (Telegram ka hi restriction hai)."""
+    for gid in db.get_all_groups():
+        stats = db.get_and_reset_group_stat(gid)
+        blocked = stats.get("violations_blocked", 0)
+        captcha_failed = stats.get("captcha_failed", 0)
+        if blocked == 0 and captcha_failed == 0:
+            continue  # kuch hua hi nahi is group mein — digest bhejne ka koi matlab nahi
+        try:
+            chat = await app.bot.get_chat(gid)
+            title = chat.title or "your group"
+        except Exception:
+            title = "your group"
+        try:
+            admins = await app.bot.get_chat_administrators(gid)
+        except Exception:
+            continue
+        text = (
+            f"📊 *𝗪𝗲𝗲𝗸𝗹𝘆 𝗥𝗲𝗽𝗼𝗿𝘁 — {title}*\n\n"
+            f"🛡️ Violations blocked: `{blocked}`\n"
+            f"🔐 Captcha failures: `{captcha_failed}`\n\n"
+            f"_Guardian is keeping this group clean — auto-generated, sent only to admins._"
+        )
+        for a in admins:
+            if a.user.is_bot:
+                continue
+            try:
+                await app.bot.send_message(a.user.id, text, parse_mode='Markdown')
+                await asyncio.sleep(0.1)
+            except Exception:
+                pass  # admin ne DM start nahi kiya bot se — skip
+
+
+async def _background_maintenance_loop(app):
+    while True:
+        try:
+            _cleanup_stale_caches()
+            last_digest = db.get_meta("last_digest_ts", 0)
+            now = time.time()
+            if last_digest == 0:
+                # Pehli baar — baseline set karo, turant digest mat bhejo
+                db.set_meta("last_digest_ts", now)
+            elif now - last_digest >= DIGEST_INTERVAL:
+                await _send_weekly_digests(app)
+                db.set_meta("last_digest_ts", now)
+        except Exception as e:
+            print(f"⚠️ Background maintenance error: {e}")
+        await asyncio.sleep(MAINTENANCE_INTERVAL)
+
+
+# ═══════════════════════════════════════════════════════════
 #  MAIN
 # ═══════════════════════════════════════════════════════════
 def main():
@@ -8236,6 +8424,7 @@ def main():
     app.add_handler(CommandHandler("autodelete",       autodelete_cmd))
     app.add_handler(CommandHandler("captcha",          captcha_cmd))
     app.add_handler(CommandHandler("broadcast",        broadcast_cmd))
+    app.add_handler(CommandHandler("setpromo",          setpromo_cmd))
     app.add_handler(CommandHandler("groups",           groups_cmd))
     app.add_handler(CommandHandler("regroup",          regroup_cmd))
     app.add_handler(CommandHandler("globalmutes",      globalmutes_cmd))
@@ -8314,13 +8503,24 @@ def main():
     ), group=3)
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_join))
     app.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER,  on_leave))
+    # Promote/demote hote hi admin-cache turant refresh (see on_chat_member_change)
+    app.add_handler(ChatMemberHandler(on_chat_member_change, ChatMemberHandler.CHAT_MEMBER))
+
+    # ── Background maintenance: stale in-memory caches saaf karo + har
+    # hafte group-admins ko unke group ka activity digest bhejo ──
+    async def _post_init(app):
+        asyncio.create_task(_background_maintenance_loop(app))
+    app.post_init = _post_init
 
     # NOTE: daily_global_winner_job (activity-leaderboard #1 ko free rep dena)
     # DISABLED — yeh /rankings activity-tracking data pe depend karta tha,
     # jo ab scan hi nahi hota.
 
     print("✅ Bot Started! Polling...")
-    app.run_polling(drop_pending_updates=True)
+    # allowed_updates mein "chat_member" bhi chahiye, warna Telegram
+    # promote/demote events kabhi bhejega hi nahi (on_chat_member_change
+    # ka koi fayda nahi hoga bina isske).
+    app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
