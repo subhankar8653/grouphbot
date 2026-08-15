@@ -432,7 +432,7 @@ def _bio_violation_what(kind: str, matched, in_bio: bool = False) -> str:
     notice/punishment message so link/blacklist/username all read consistently."""
     suffix = " in your bio" if in_bio else ""
     if kind == "link":
-        return f"a *link*{suffix}"
+        return f"a *link* (`{matched}`){suffix}" if matched else f"a *link*{suffix}"
     if kind == "username":
         return f"a username (`{matched}`){suffix}" if matched else f"a username{suffix}"
     return f"the blacklisted word `{matched}`{suffix}"
@@ -443,6 +443,20 @@ async def bio_violation(bio: str, chat_id: int, g: dict, ctx=None):
     @username — each check individually toggleable from the Premium panel.
     Returns (kind, matched_word_or_none) — kind is 'link', 'blacklist',
     'username', or None.
+
+    Bio Link Guard has three modes (g["bio_link_guard"]):
+      "off"       — link check disabled.
+      "blacklist" — only trips if the link's DOMAIN is on this group's
+                    Bio Link Domains list (g["bio_link_domains"],
+                    defaults to t.me + telegram.me). A link to a domain
+                    NOT on that list (e.g. instagram.com) is ignored.
+      "all"       — ANY link at all trips it (default — old behaviour).
+
+    Bio Words (g/db "bio_words") are a list fully independent from the
+    group's main /blacklist: until an admin customizes it via
+    /addbioword or /removebioword it just mirrors the main blacklist +
+    global blacklist, but any edit from then on only ever affects this
+    bio-only list — never the main one.
 
     Bio Username Guard has two ON modes (g["bio_username_guard"]):
       "full"       — ANY @username in the bio is blocked, no exceptions.
@@ -455,13 +469,27 @@ async def bio_violation(bio: str, chat_id: int, g: dict, ctx=None):
     if not bio:
         return None, None
 
-    if g.get("bio_link_guard", True) and check_link(bio):
-        return "link", None
+    link_mode = _bio_link_mode(g)
+    if link_mode == "all":
+        if check_link(bio):
+            return "link", None
+    elif link_mode == "blacklist":
+        domains = g.get("bio_link_domains")
+        if domains is None:
+            domains = DEFAULT_BIO_LINK_DOMAINS
+        dom = check_link_domain(bio, domains)
+        if dom:
+            return "link", dom
+    # link_mode == "off" -> skip link check entirely
 
     if g.get("bio_blacklist_guard", True):
-        words = list(set((db.get_blacklist(chat_id) or []) + (db.get_gblacklist() or [])))
-        if words:
-            r = build_blacklist_re(words)
+        bio_words = db.get_biowords(chat_id)
+        if bio_words is None:
+            bio_words = list(set((db.get_blacklist(chat_id) or []) + (db.get_gblacklist() or [])))
+        else:
+            bio_words = list(set(bio_words))
+        if bio_words:
+            r = build_blacklist_re(bio_words)
             if r:
                 m = r.search(bio)
                 if m:
@@ -615,7 +643,8 @@ class DB:
             "captcha": False,
             "premium": False,       # Owner-granted paid tier
             "allow_member_usernames": False,  # Premium: sirf group-members ke @username allow karo
-            "bio_link_guard": True,       # Premium Bio Guard: link check on/off
+            "bio_link_guard": "all",      # Premium Bio Guard link check: "off" | "blacklist" | "all"
+            "bio_link_domains": DEFAULT_BIO_LINK_DOMAINS.copy(),  # used only when bio_link_guard == "blacklist"
             "bio_blacklist_guard": True,  # Premium Bio Guard: blacklisted-word check on/off
             "bio_username_guard": "off",  # Premium Bio Guard: "off" | "users_only" | "full"
             "warn_durations": None,   # None = default MUTE_TIME use hoga
@@ -1137,6 +1166,46 @@ class DB:
     def get_gblacklist(self):
         doc = self.gblacklist.find_one({"_id": "global"})
         return doc.get("words", []) if doc else []
+
+    # ── Bio Words (Premium Bio Guard) — independent from the main
+    # /blacklist. None = not customized yet (caller falls back to
+    # main blacklist + global blacklist); a list (even empty) means an
+    # admin has customized it via /addbioword or /removebioword, and
+    # from then on it's fully separate — edits here never touch the
+    # main blacklist, and vice versa. ──
+    def add_bioword(self, chat_id, word):
+        self.blacklist.update_one(
+            {"_id": chat_id},
+            {"$addToSet": {"bio_words": word.lower()}},
+            upsert=True
+        )
+
+    def remove_bioword(self, chat_id, word):
+        self.blacklist.update_one({"_id": chat_id}, {"$pull": {"bio_words": word.lower()}})
+
+    def set_biowords(self, chat_id, words):
+        self.blacklist.update_one(
+            {"_id": chat_id},
+            {"$set": {"bio_words": [w.lower() for w in words]}},
+            upsert=True
+        )
+
+    def get_biowords(self, chat_id):
+        doc = self.blacklist.find_one({"_id": chat_id})
+        if not doc or "bio_words" not in doc:
+            return None  # not customized — caller should fall back
+        return doc.get("bio_words") or []
+
+    # ── Bio Link Domains (Premium Bio Guard, "Domains Only" mode) ──
+    def add_bio_domain(self, chat_id, domain):
+        self.groups.update_one(
+            {"_id": chat_id},
+            {"$addToSet": {"bio_link_domains": domain.lower()}},
+            upsert=True
+        )
+
+    def remove_bio_domain(self, chat_id, domain):
+        self.groups.update_one({"_id": chat_id}, {"$pull": {"bio_link_domains": domain.lower()}})
 
     # ── Per-group: disable specific GLOBAL blacklist/whitelist words ──
     # (owner ka global word admin ke group par apply NAHI hoga agar disable kiya)
@@ -1718,6 +1787,57 @@ def check_link(text):
             continue
         return True
     return False
+
+
+# ── Bio Guard: domain-blacklist link mode ──
+# "blacklist" mode only cares whether a link's DOMAIN is on the group's
+# Bio Link Domains list (default: t.me, telegram.me) — e.g. a
+# t.me/whatever link trips it, but an instagram.com link doesn't unless
+# instagram.com was explicitly added too.
+DEFAULT_BIO_LINK_DOMAINS = ["t.me", "telegram.me"]
+
+def extract_domain(url: str) -> str:
+    """host-only, lowercased, no scheme/www/path — 'https://www.T.ME/x?y'  -> 't.me'"""
+    u = url.strip()
+    if not u:
+        return ""
+    u = re.sub(r'^https?://', '', u, flags=re.I)
+    u = re.sub(r'^www\.', '', u, flags=re.I)
+    u = u.split('/')[0].split('?')[0].split('#')[0].split(':')[0]
+    return u.lower()
+
+def check_link_domain(text: str, domains) -> str | None:
+    """Scan text for a URL whose domain matches (or is a subdomain of) one
+    of `domains`. Returns the matched domain, or None if nothing hit."""
+    dom_set = {d.lower().strip().lstrip('.') for d in (domains or []) if d}
+    if not dom_set:
+        return None
+    for match in URL_RE.findall(text):
+        m = match if isinstance(match, str) else (match[0] if match[0] else '')
+        if not m or len(m) < 4:
+            continue
+        if re.match(r'^[\d.]+$', m):
+            continue
+        host = extract_domain(m)
+        if not host:
+            continue
+        for d in dom_set:
+            if host == d or host.endswith('.' + d):
+                return d
+    return None
+
+def _bio_link_mode(g: dict) -> str:
+    """Normalizes bio_link_guard — handles the old boolean values that
+    existing groups may still have stored (True meant 'check all links')
+    as well as the new 3-state string."""
+    v = g.get("bio_link_guard", "all")
+    if v is True:
+        return "all"
+    if v is False:
+        return "off"
+    if v in ("off", "blacklist", "all"):
+        return v
+    return "all"
 
 
 async def check_username(text, wl_words, ctx, chat_id, members_only=False):
@@ -3610,6 +3730,177 @@ async def blacklist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"⛔ *𝗕𝗟𝗔𝗖𝗞𝗟𝗜𝗦𝗧𝗘𝗗 𝗪𝗢𝗥𝗗𝗦* ({len(words)})\n"
         f"{'─'*14}\n\n"
         + "\n".join(f"  • `{w}`" for w in words),
+        parse_mode='Markdown'
+    )
+
+
+# ═══════════════════════════════════════════════════════════
+#  PREMIUM: Bio Guard — Bio Words (independent from /blacklist)
+# ═══════════════════════════════════════════════════════════
+# ─── /addbioword ──────────────────────────────────────────
+async def addbioword_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ch = update.effective_chat
+    if ch.type == "private":
+        return await update.message.reply_text("⚠️ This command only works in a group.")
+    if not await sender_is_admin(ctx, update):
+        return await update.message.reply_text("🔒 Admins only.")
+    g = db.get_group(ch.id)
+    if not bool(g.get("premium", False)):
+        return await update.message.reply_text("💎 This is a Premium-only feature. DM @Suhani_TG to get Premium.")
+    if not ctx.args:
+        return await update.message.reply_text(
+            "❌ Usage: `/addbioword <word>`",
+            parse_mode='Markdown'
+        )
+    word = ' '.join(ctx.args).lower().strip()
+    if db.get_biowords(ch.id) is None:
+        # First customization — fork from the current combined blacklist
+        # (group + global) so Bio Words starts out with everything that's
+        # already protected. From here on, edits only ever touch this
+        # bio-only list — never the main /blacklist.
+        db.set_biowords(ch.id, list(set((db.get_blacklist(ch.id) or []) + (db.get_gblacklist() or []))))
+    db.add_bioword(ch.id, word)
+    await update.message.reply_text(
+        f"🕵️ *𝗔𝗱𝗱𝗲𝗱 𝘁𝗼 𝗕𝗶𝗼 𝗪𝗼𝗿𝗱𝘀:* `{word}`\n\n"
+        f"_This only affects the Bio Guard check — your main `/blacklist` is unchanged._",
+        parse_mode='Markdown'
+    )
+
+
+# ─── /removebioword ───────────────────────────────────────
+async def removebioword_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ch = update.effective_chat
+    if ch.type == "private":
+        return await update.message.reply_text("⚠️ This command only works in a group.")
+    if not await sender_is_admin(ctx, update):
+        return await update.message.reply_text("🔒 Admins only.")
+    g = db.get_group(ch.id)
+    if not bool(g.get("premium", False)):
+        return await update.message.reply_text("💎 This is a Premium-only feature. DM @Suhani_TG to get Premium.")
+    if not ctx.args:
+        return await update.message.reply_text(
+            "❌ Usage: `/removebioword <word>`",
+            parse_mode='Markdown'
+        )
+    word = ' '.join(ctx.args).lower().strip()
+    if db.get_biowords(ch.id) is None:
+        # Same fork-first rule — removing a word that only lives in the
+        # main /blacklist must NOT touch that main list.
+        db.set_biowords(ch.id, list(set((db.get_blacklist(ch.id) or []) + (db.get_gblacklist() or []))))
+    db.remove_bioword(ch.id, word)
+    await update.message.reply_text(
+        f"✅ Removed from Bio Words: `{word}`\n\n"
+        f"_Your main `/blacklist` is untouched — this only affects the Bio Guard check._",
+        parse_mode='Markdown'
+    )
+
+
+# ─── /biowords ────────────────────────────────────────────
+async def biowords_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ch = update.effective_chat
+    if ch.type == "private":
+        return await update.message.reply_text("⚠️ This command only works in a group.")
+    if not await sender_is_admin(ctx, update):
+        return await update.message.reply_text("🔒 Admins only.")
+
+    custom = db.get_biowords(ch.id)
+    if custom is None:
+        words = list(set((db.get_blacklist(ch.id) or []) + (db.get_gblacklist() or [])))
+        note = "_Not customized yet — currently mirrors your main `/blacklist` + global blacklist._"
+    else:
+        words = custom
+        note = "_Custom list — independent from your main `/blacklist`._"
+
+    if not words:
+        return await update.message.reply_text(
+            f"🕵️ No Bio Words set.\n\n{note}\n\nUse `/addbioword <word>` to add one.",
+            parse_mode='Markdown'
+        )
+    await update.message.reply_text(
+        f"🕵️ *𝗕𝗜𝗢 𝗪𝗢𝗥𝗗𝗦* ({len(words)})\n{'─'*14}\n\n"
+        + "\n".join(f"  • `{w}`" for w in words)
+        + f"\n\n{note}",
+        parse_mode='Markdown'
+    )
+
+
+# ═══════════════════════════════════════════════════════════
+#  PREMIUM: Bio Guard — Bio Link Domains ("Domains Only" mode)
+# ═══════════════════════════════════════════════════════════
+# ─── /addbiodomain ────────────────────────────────────────
+async def addbiodomain_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ch = update.effective_chat
+    if ch.type == "private":
+        return await update.message.reply_text("⚠️ This command only works in a group.")
+    if not await sender_is_admin(ctx, update):
+        return await update.message.reply_text("🔒 Admins only.")
+    g = db.get_group(ch.id)
+    if not bool(g.get("premium", False)):
+        return await update.message.reply_text("💎 This is a Premium-only feature. DM @Suhani_TG to get Premium.")
+    if not ctx.args:
+        return await update.message.reply_text(
+            "❌ Usage: `/addbiodomain <domain>` (e.g. `/addbiodomain instagram.com`)",
+            parse_mode='Markdown'
+        )
+    domain = extract_domain(ctx.args[0])
+    if not domain:
+        return await update.message.reply_text("❌ That doesn't look like a valid domain.")
+    if g.get("bio_link_domains") is None:
+        db.update_group(ch.id, {"bio_link_domains": DEFAULT_BIO_LINK_DOMAINS.copy()})
+    db.add_bio_domain(ch.id, domain)
+    await update.message.reply_text(
+        f"🌐 *𝗔𝗱𝗱𝗲𝗱 𝘁𝗼 𝗕𝗶𝗼 𝗟𝗶𝗻𝗸 𝗗𝗼𝗺𝗮𝗶𝗻𝘀:* `{domain}`\n\n"
+        f"_Only used when Bio Link mode is set to 🟡 Domains Only (see /settings → 💎 Premium)._",
+        parse_mode='Markdown'
+    )
+
+
+# ─── /removebiodomain ─────────────────────────────────────
+async def removebiodomain_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ch = update.effective_chat
+    if ch.type == "private":
+        return await update.message.reply_text("⚠️ This command only works in a group.")
+    if not await sender_is_admin(ctx, update):
+        return await update.message.reply_text("🔒 Admins only.")
+    g = db.get_group(ch.id)
+    if not bool(g.get("premium", False)):
+        return await update.message.reply_text("💎 This is a Premium-only feature. DM @Suhani_TG to get Premium.")
+    if not ctx.args:
+        return await update.message.reply_text(
+            "❌ Usage: `/removebiodomain <domain>`",
+            parse_mode='Markdown'
+        )
+    domain = extract_domain(ctx.args[0])
+    if g.get("bio_link_domains") is None:
+        # Make sure the field exists first so $pull actually has
+        # something to work against for groups still on the defaults.
+        db.update_group(ch.id, {"bio_link_domains": DEFAULT_BIO_LINK_DOMAINS.copy()})
+    db.remove_bio_domain(ch.id, domain)
+    await update.message.reply_text(f"✅ Removed from Bio Link Domains: `{domain}`", parse_mode='Markdown')
+
+
+# ─── /biodomains ──────────────────────────────────────────
+async def biodomains_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ch = update.effective_chat
+    if ch.type == "private":
+        return await update.message.reply_text("⚠️ This command only works in a group.")
+    if not await sender_is_admin(ctx, update):
+        return await update.message.reply_text("🔒 Admins only.")
+
+    g = db.get_group(ch.id)
+    domains = g.get("bio_link_domains")
+    if domains is None:
+        domains = DEFAULT_BIO_LINK_DOMAINS
+
+    if not domains:
+        return await update.message.reply_text(
+            "🌐 No Bio Link domains set.\n\nUse `/addbiodomain <domain>` to add one.",
+            parse_mode='Markdown'
+        )
+    await update.message.reply_text(
+        f"🌐 *𝗕𝗜𝗢 𝗟𝗜𝗡𝗞 𝗗𝗢𝗠𝗔𝗜𝗡𝗦* ({len(domains)})\n{'─'*14}\n\n"
+        + "\n".join(f"  • `{d}`" for d in domains)
+        + f"\n\n_Only used when Bio Link mode is 🟡 Domains Only._",
         parse_mode='Markdown'
     )
 
@@ -6649,7 +6940,7 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
         g = db.get_group(ch.id)
         prem_on = bool(g.get("premium", False))
         uname_on = bool(g.get("allow_member_usernames", False))
-        bio_link_on = bool(g.get("bio_link_guard", True))
+        bio_link_mode = _bio_link_mode(g)
         bio_bl_on = bool(g.get("bio_blacklist_guard", True))
         bio_uname_mode = g.get("bio_username_guard", "off")
         text = (
@@ -6672,6 +6963,21 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
         )
         rows = []
         if prem_on:
+            link_mode_label = {
+                "off": "🔴 OFF",
+                "blacklist": "🟡 Domains Only",
+                "all": "🟢 All Links",
+            }[bio_link_mode]
+            domains = g.get("bio_link_domains")
+            if domains is None:
+                domains = DEFAULT_BIO_LINK_DOMAINS
+            link_mode_desc = {
+                "off": "_Links in bios aren't checked at all._",
+                "blacklist": f"_Only trips on a link to one of {len(domains)} blacklisted domain(s): "
+                             + ", ".join(f"`{d}`" for d in domains)
+                             + " — manage with `/addbiodomain`, `/removebiodomain`, `/biodomains`._",
+                "all": "_ANY link at all in a bio gets shadow-blocked, regardless of domain._",
+            }[bio_link_mode]
             uname_mode_label = {
                 "off": "🔴 OFF",
                 "users_only": "🟡 Users Only",
@@ -6682,11 +6988,19 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
                 "users_only": "_A plain Telegram user's @username is allowed in bios — but any channel's, group's, or other non-user @username still gets shadow-blocked._",
                 "full": "_ANY @username in a bio gets shadow-blocked — no exceptions._",
             }[bio_uname_mode]
+            bio_words_custom = db.get_biowords(ch.id)
+            bio_words_desc = (
+                f"_Custom list, independent from `/blacklist`. Manage with `/addbioword`, `/removebioword`, `/biowords`._"
+                if bio_words_custom is not None else
+                f"_Mirrors your main `/blacklist` + global blacklist until you customize it with `/addbioword` or `/removebioword`._"
+            )
             text += (
                 f"{'─'*14}\n"
                 f"*🕵️ 𝗕𝗶𝗼 𝗚𝘂𝗮𝗿𝗱 𝗖𝗵𝗲𝗰𝗸𝘀:*\n"
-                f"🔗 Link check: {'🟢 ON' if bio_link_on else '🔴 OFF'}\n"
+                f"🔗 Link check: {link_mode_label}\n"
+                f"{link_mode_desc}\n\n"
                 f"⛔ Blacklisted word check: {'🟢 ON' if bio_bl_on else '🔴 OFF'}\n"
+                f"{bio_words_desc}\n\n"
                 f"👤 Username check: {uname_mode_label}\n"
                 f"{uname_mode_desc}\n\n"
                 f"{'─'*14}\n"
@@ -6694,12 +7008,14 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
                 f"{'_Only this group’s members can send a @username. Everyone else’s @username gets blocked + warned._' if uname_on else '_All @username mentions are currently blocked in this group (default)._'}\n\n"
             )
             rows.append([
-                {"text": f"🔗 𝗕𝗶𝗼 𝗟𝗶𝗻𝗸 {ICON_ON if bio_link_on else ICON_OFF}",
-                 "callback_data": "cfg_premium_biolink_toggle",
-                 "style": "success" if bio_link_on else "danger"},
+                {"text": f"🔗 𝗕𝗶𝗼 𝗟𝗶𝗻𝗸: {link_mode_label}",
+                 "callback_data": "cfg_premium_biolink_cycle",
+                 "style": "success" if bio_link_mode == "all" else ("primary" if bio_link_mode == "blacklist" else "danger")}
+            ])
+            rows.append([
                 {"text": f"⛔ 𝗕𝗶𝗼 𝗪𝗼𝗿𝗱 {ICON_ON if bio_bl_on else ICON_OFF}",
                  "callback_data": "cfg_premium_bioblacklist_toggle",
-                 "style": "success" if bio_bl_on else "danger"},
+                 "style": "success" if bio_bl_on else "danger"}
             ])
             rows.append([
                 {"text": f"👤 𝗕𝗶𝗼 𝗨𝘀𝗲𝗿𝗻𝗮𝗺𝗲: {uname_mode_label}",
@@ -6734,12 +7050,17 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
         await cfg_callback_reroute(update, ctx, "cfg_premium")
         return
 
-    if data == "cfg_premium_biolink_toggle":
+    if data == "cfg_premium_biolink_cycle":
         g = db.get_group(ch.id)
         if not bool(g.get("premium", False)):
             await query.answer("💎 This is a Premium-only feature. DM @Suhani_TG to get Premium.", show_alert=True)
             return
-        db.update_group(ch.id, {"bio_link_guard": not bool(g.get("bio_link_guard", True))})
+        cur = _bio_link_mode(g)
+        nxt = {"off": "blacklist", "blacklist": "all", "all": "off"}.get(cur, "all")
+        patch = {"bio_link_guard": nxt}
+        if nxt == "blacklist" and g.get("bio_link_domains") is None:
+            patch["bio_link_domains"] = DEFAULT_BIO_LINK_DOMAINS.copy()
+        db.update_group(ch.id, patch)
         await cfg_callback_reroute(update, ctx, "cfg_premium")
         return
 
@@ -7369,6 +7690,12 @@ def main():
     app.add_handler(CommandHandler("addblacklist",     addblacklist_cmd))
     app.add_handler(CommandHandler("removeblacklist",  removeblacklist_cmd))
     app.add_handler(CommandHandler("blacklist",        blacklist_cmd))
+    app.add_handler(CommandHandler("addbioword",       addbioword_cmd))
+    app.add_handler(CommandHandler("removebioword",    removebioword_cmd))
+    app.add_handler(CommandHandler("biowords",         biowords_cmd))
+    app.add_handler(CommandHandler("addbiodomain",     addbiodomain_cmd))
+    app.add_handler(CommandHandler("removebiodomain",  removebiodomain_cmd))
+    app.add_handler(CommandHandler("biodomains",       biodomains_cmd))
     app.add_handler(CommandHandler("addwhitelist",     addwhitelist_cmd))
     app.add_handler(CommandHandler("removewhitelist",  removewhitelist_cmd))
     app.add_handler(CommandHandler("whitelist",        whitelist_cmd))
