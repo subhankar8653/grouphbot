@@ -170,6 +170,7 @@ DEFAULT_FILTERS = {
     "whitelist":    True,   # whitelist exceptions apply
     "welcome":      True,   # welcome message on join
     "warncaptcha":  True,   # auto-unmute captcha on warning/mute (off = old admin-only unmute button)
+    "del_deleted_accounts": False,  # sweep + auto-kick genuinely deleted Telegram accounts
 }
 
 FILTER_LABELS = {
@@ -193,6 +194,7 @@ FILTER_LABELS = {
     "whitelist":   "✅ 𝗦𝗮𝗳𝗲 𝗗𝗼𝗺𝗮𝗶𝗻𝘀/𝗪𝗼𝗿𝗱𝘀",
     "welcome":     "👋 𝗪𝗲𝗹𝗰𝗼𝗺𝗲 𝗠𝗲𝘀𝘀𝗮𝗴𝗲",
     "warncaptcha": "🔐 𝗪𝗮𝗿𝗻 𝗔𝘂𝘁𝗼-𝗨𝗻𝗺𝘂𝘁𝗲 𝗖𝗮𝗽𝘁𝗰𝗵𝗮",
+    "del_deleted_accounts": "🗑️ 𝗥𝗲𝗺𝗼𝘃𝗲 𝗗𝗲𝗹𝗲𝘁𝗲𝗱 𝗔𝗰𝗰𝗼𝘂𝗻𝘁𝘀",
 }
 # ── Filters grouped into categories for a cleaner /settings → Filters UI ──
 FILTER_GROUPS = [
@@ -201,7 +203,7 @@ FILTER_GROUPS = [
                              "nocommands", "nohashtags", "novoice", "nochinese", "imagefilter",
                              "nopremiumemoji", "noquotes"]),
     ("📋 𝗪𝗼𝗿𝗱 𝗟𝗶𝘀𝘁𝘀", ["blacklist", "whitelist"]),
-    ("👥 𝗚𝗿𝗼𝘂𝗽 𝗕𝗲𝗵𝗮𝘃𝗶𝗼𝘂𝗿", ["noevents", "welcome", "warncaptcha"]),
+    ("👥 𝗚𝗿𝗼𝘂𝗽 𝗕𝗲𝗵𝗮𝘃𝗶𝗼𝘂𝗿", ["noevents", "welcome", "warncaptcha", "del_deleted_accounts"]),
 ]
 
 # ═══════════════════════════════════════════════════════════
@@ -800,6 +802,17 @@ class DB:
         f = dict(g.get("filters") or {})
         f[key] = bool(value)
         self.update_group(chat_id, {"filters": f})
+
+    def get_known_member_ids(self, chat_id):
+        """Bot API se poore group ka member-list seedha nahi milta — sirf
+        wahi users milte hain jinka koi message bot ne is group mein dekha
+        ho. Isliye 'Remove Deleted Accounts' sweep isi list ko candidates
+        ke roop me use karta hai (naye joins alag se real-time check hote
+        hain, on_join me)."""
+        try:
+            return list(self.activity.distinct("user_id", {"chat_id": chat_id}))
+        except Exception:
+            return []
 
     def get_total_msg_count(self, chat_id: int, user_id: int) -> int:
         """Group mein is user ke total messages kitne hain (sab dates milakar)."""
@@ -2176,6 +2189,83 @@ async def delete_after(ctx, chat_id, msg_id, delay_seconds):
         pass
 
 
+# ═══════════════════════════════════════════════════════════
+#  DELETED-ACCOUNT SWEEP — /settings → Filters → Remove Deleted Accounts
+# ═══════════════════════════════════════════════════════════
+# ⚠️ Bot API me koi "is_deleted" flag directly nahi milta, isliye yeh
+# sirf ek best-effort heuristic hai: ek GENUINELY deleted Telegram account
+# hamesha first_name = "Deleted Account", koi last_name nahi, aur koi
+# username nahi — is exact combination ke saath wapas aata hai. Koi real
+# user bhi apna naam literally "Deleted Account" rakh sakta hai — agar
+# uska bhi last_name aur username dono khaali hain to woh bhi match ho
+# jaayega, isliye yeh 100% guaranteed nahi hai, bas sabse reliable signal
+# hai jo Bot API deta hai.
+def is_deleted_account(user) -> bool:
+    if user is None or getattr(user, "is_bot", False):
+        return False
+    if (user.first_name or "") != "Deleted Account":
+        return False
+    if getattr(user, "last_name", None):
+        return False
+    if getattr(user, "username", None):
+        return False
+    return True
+
+
+DELACC_TASKS = {}  # chat_id -> running sweep asyncio.Task
+
+
+async def run_deleted_account_sweep(ctx, chat_id):
+    """Setting ON hote hi ek baar chalta hai — jitne bhi known members
+    genuinely deleted accounts nikle, unko remove karta hai. Beech me
+    setting OFF ho jaaye to turant ruk jaata hai. Poora scan khatam hone
+    par (agar tab bhi ON hai) ek summary message bhejta hai."""
+    removed = 0
+    try:
+        candidate_ids = db.get_known_member_ids(chat_id)
+        for uid in candidate_ids:
+            if not db.get_filters(chat_id).get("del_deleted_accounts"):
+                return  # user ne beech me OFF kar diya
+            try:
+                member = await ctx.bot.get_chat_member(chat_id, uid)
+            except Exception:
+                continue  # ab group me nahi hai ya resolve nahi hua
+            if member.status in ("administrator", "creator", "left", "kicked"):
+                continue  # admins/owner ko kabhi touch nahi karte
+            if is_deleted_account(member.user):
+                try:
+                    await ctx.bot.ban_chat_member(chat_id, uid)
+                    await ctx.bot.unban_chat_member(chat_id, uid)  # ban→unban = clean removal
+                    removed += 1
+                except Exception:
+                    pass
+            await asyncio.sleep(1.5)  # Telegram rate-limit se bachne ke liye chhota gap
+    finally:
+        DELACC_TASKS.pop(chat_id, None)
+        if db.get_filters(chat_id).get("del_deleted_accounts"):
+            try:
+                if removed:
+                    await ctx.bot.send_message(
+                        chat_id,
+                        f"✅ Deleted-account cleanup complete — {removed} removed. "
+                        f"No more deleted accounts left in this group."
+                    )
+                else:
+                    await ctx.bot.send_message(
+                        chat_id,
+                        "✅ No deleted accounts found in this group."
+                    )
+            except Exception:
+                pass
+
+
+def start_deleted_account_sweep(ctx, chat_id):
+    old = DELACC_TASKS.get(chat_id)
+    if old and not old.done():
+        return  # ek sweep pehle se chal raha hai
+    DELACC_TASKS[chat_id] = asyncio.create_task(run_deleted_account_sweep(ctx, chat_id))
+
+
 
 async def auto_delete_commands(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Group mein aane wale har command ko 10 min mein delete karo (sirf groups, broadcast nahi)."""
@@ -2277,7 +2367,7 @@ async def _is_menu_owner(ctx, chat_id, message_id, user_id) -> bool:
 # (koi button/tap/reply nahi aata) to khud-ba-khud delete ho jaata hai,
 # taki group mein bekaar ke settings messages padhe na rahein.
 PANEL_TIMERS = {}
-PANEL_IDLE_SECONDS = 60
+PANEL_IDLE_SECONDS = 180  # pehle 60 second tha — bahut jaldi delete ho raha tha
 
 # ── Panel ↔ trigger-command linking ─────────────────────────
 # Jab bot koi command (jaise /start, /help, /settings) ke jawab mein
@@ -2940,10 +3030,19 @@ async def menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Sirf tab timer (re)start karo jab click asli owner ne kiya ho aur
     # panel abhi bhi khula ho (close/dismiss/warn-actions apni delete-lifecycle
     # khud handle karte hain, unhe idle-timer se chhedna nahi hai).
+    # Private (DM) panels ke liye sirf tabhi reschedule karo jab yeh panel
+    # pehle se hi scheduled tha (e.g. regular-user /start panel) — isse
+    # Owner ke DM control-panel ka behaviour (jahan koi autodelete kabhi
+    # tha hi nahi) accidentally nahi badalta.
+    already_scheduled_private = (
+        chat and chat.type == "private"
+        and (chat.id, query.message.message_id) in PANEL_TIMERS
+    )
     if (
-        is_owner_click and chat and chat.type != "private" and data
+        is_owner_click and chat and data
         and data not in ("close_menu", "dismiss_warn")
         and not data.startswith(("unban_", "unmute_"))
+        and (chat.type != "private" or already_scheduled_private)
     ):
         try:
             schedule_panel_autodelete(ctx, chat.id, query.message.message_id)
@@ -3472,7 +3571,7 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"_Say thanks → +{REP_PER_THANK} rep · Clear a warning → {REP_PER_WARN_REMOVE} rep_\n\n"
         f"_Add me to your group and make me admin to get started._"
     )
-    await update.message.reply_text(
+    sent = await update.message.reply_text(
         text,
         parse_mode='Markdown',
         reply_markup=InlineKeyboardMarkup([
@@ -3482,6 +3581,8 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ],
         ])
     )
+    _remember_menu_owner(ch.id, sent.message_id, u.id)
+    schedule_panel_autodelete(ctx, ch.id, sent.message_id, cmd_msg_id=update.message.message_id)
 
 
 # ─── /help ──────────────────────────────────────────────────
@@ -6747,6 +6848,13 @@ async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         pass
     for member in update.message.new_chat_members:
         db.remember_user(member)  # seen-users index — resolve @username/userid later
+        if member.id != ctx.bot.id and db.get_filters(update.effective_chat.id).get("del_deleted_accounts") and is_deleted_account(member):
+            try:
+                await ctx.bot.ban_chat_member(update.effective_chat.id, member.id)
+                await ctx.bot.unban_chat_member(update.effective_chat.id, member.id)
+            except Exception:
+                pass
+            continue  # welcome/captcha flow skip — yeh ek deleted account tha
         if member.id == ctx.bot.id:
             db.add_group(update.effective_chat.id)
             try:
@@ -7703,6 +7811,10 @@ async def _cfg_callback_body(update, ctx, data, query, ch, u):
                 await query.answer(f"{FILTER_LABELS.get(key, key)} → {state}")
             except Exception:
                 pass
+            if key == "del_deleted_accounts" and not cur:
+                # ON hua — sweep shuru karo (OFF hone par run_deleted_account_sweep
+                # apne loop me khud check karke ruk jaata hai)
+                start_deleted_account_sweep(ctx, ch.id)
         await _cfg_edit(
             query, ch.id,
             f"*🛡️ FEATURES — {_filters_status_line(ch.id)}*\n{'─'*14}\n\n"
