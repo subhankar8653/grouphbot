@@ -2629,6 +2629,43 @@ def ckb_start_group(is_admin=False):
     return rows
 
 
+# ── /start panel — same 5-row layout in a group or in the bot's DM ────
+def build_start_text(is_group: bool, is_admin_here: bool = False, user_first_name: str = None) -> str:
+    if is_group:
+        text = (
+            f"🛡️ *𝗚𝘂𝗮𝗿𝗱𝗶𝗮𝗻* is online and protecting this group.\n"
+            f"_Tap a button below to get started._"
+        )
+        if is_admin_here:
+            text += f"\n⚙️ _Admins — open /settings for the control panel._"
+        return text
+    return (
+        f"🛡️ *𝗚𝗨𝗔𝗥𝗗𝗜𝗔𝗡 — 𝗚𝗿𝗼𝘂𝗽 𝗣𝗿𝗼𝘁𝗲𝗰𝘁𝗶𝗼𝗻 𝗕𝗼𝘁*\n"
+        f"_Security · Moderation · Automation_\n"
+        f"{'─'*14}\n\n"
+        f"👋 *Hi {md_esc(user_first_name or 'there')}!*\n\n"
+        f"I keep groups safe, clean, and spam-free —\n"
+        f"around the clock, with zero effort from admins. 🔥\n\n"
+        f"_Tap a button below to get started._"
+    )
+
+
+async def kb_start_panel(ctx, is_group: bool):
+    try:
+        me = await ctx.bot.get_me()
+        uname = me.username
+    except Exception:
+        uname = None
+    add_url = f"https://t.me/{uname}?startgroup=true" if uname else "https://telegram.org"
+    return [
+        [{"text": "🚀 𝗛𝗼𝘄 𝘁𝗼 𝗨𝘀𝗲",     "callback_data": "start_howto",    "style": "primary"}],
+        [{"text": "🛡️ 𝗪𝗵𝗮𝘁 𝗜 𝗖𝗮𝗻 𝗗𝗼", "callback_data": "start_features", "style": "success"}],
+        [{"text": "📜 𝗥𝘂𝗹𝗲𝘀",           "callback_data": "show_rules",     "style": "primary"}],
+        [{"text": "📋 𝗖𝗼𝗺𝗺𝗮𝗻𝗱𝘀",        "callback_data": "menu_main" if is_group else "menu_user", "style": "primary"}],
+        [{"text": "➕ 𝗔𝗱𝗱 𝘁𝗼 𝗚𝗿𝗼𝘂𝗽",    "url": add_url,                    "style": "success"}],
+    ]
+
+
 # ═══════════════════════════════════════════════════════════
 #  VIOLATION CHECK
 # ═══════════════════════════════════════════════════════════
@@ -3357,8 +3394,108 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
         )
         return
 
+    elif data == "start_home":
+        chat_id = update.effective_chat.id if update.effective_chat else 0
+        is_group = bool(chat and chat.type != "private")
+        if is_group:
+            is_admin_here = (query.from_user.id == OWNER_ID) or await is_adm(ctx, chat_id, query.from_user.id)
+            text = build_start_text(True, is_admin_here)
+        else:
+            text = build_start_text(False, False, query.from_user.first_name)
+        rows = await kb_start_panel(ctx, is_group)
+        await query.answer()
+        success = await edit_colored_message(chat_id, query.message.message_id, text, rows) if is_group else False
+        if not success:
+            await query.edit_message_text(text, reply_markup=_rows_to_markup(rows), parse_mode='Markdown')
+        return
+
+    elif data == "start_howto":
+        text = (
+            f"🚀 *𝗛𝗢𝗪 𝗧𝗢 𝗨𝗦𝗘*\n"
+            f"{'─'*14}\n\n"
+            f"1️⃣ Add me to your group _(button below)_\n"
+            f"2️⃣ Make me an *Admin* with:\n"
+            f"     ✅ Delete Messages\n"
+            f"     ✅ Restrict Members\n"
+            f"     ✅ Ban Members\n"
+            f"3️⃣ Open `/settings` in the group to turn\n"
+            f"     features ON/OFF the way you like\n"
+            f"4️⃣ That's it — protection runs automatically! 🛡️\n\n"
+            f"{'─'*14}\n"
+            f"💡 _Type_ `/help` _anytime for the full command list._"
+        )
+        await query.answer()
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("◀️ 𝗕𝗮𝗰𝗸", callback_data="start_home")],
+                [InlineKeyboardButton("❌ 𝗖𝗹𝗼𝘀𝗲", callback_data="close_menu")],
+            ]),
+            parse_mode='Markdown'
+        )
+        return
+
+    elif data == "start_features":
+        chat_id = update.effective_chat.id if update.effective_chat else 0
+        is_group = bool(chat and chat.type != "private")
+        prem_status = ""
+        if is_group:
+            g = db.get_group(chat_id) or {}
+            is_prem = g.get("premium", False)
+            prem_status = f"Status: {'🟢 *Active*' if is_prem else '🔴 *Not active in this group*'}\n\n"
+        text = (
+            f"🛡️ *𝗪𝗛𝗔𝗧 𝗜 𝗖𝗔𝗡 𝗗𝗢*\n"
+            f"{'─'*14}\n\n"
+            f"🚨 Antispam, blacklist & profanity filters\n"
+            f"🌊 Anti-flood / anti-raid protection\n"
+            f"🔗 Links, forwards, contacts & location filters\n"
+            f"🤖 Auto-kicks spambots added to the group\n"
+            f"👤 External @mention filtering\n"
+            f"🎭 Captcha verification for new members\n"
+            f"⚠️ Warn system with auto-mute escalation\n"
+            f"👑 Immortal users _(ban immunity)_\n"
+            f"💀 Global ban (fban) across your groups\n"
+            f"🗑️ Sticker/media & message auto-delete\n"
+            f"🗑️ Deleted-account auto-removal\n"
+            f"⭐ Reputation & leaderboard system\n\n"
+            f"{'─'*14}\n"
+            f"💎 *𝗣𝗥𝗘𝗠𝗜𝗨𝗠 𝗙𝗘𝗔𝗧𝗨𝗥𝗘𝗦*\n"
+            f"{prem_status}"
+            f"  ✏️ *Edit Guard* — rechecks edited messages\n"
+            f"       against your filters, not just new ones\n"
+            f"  🕵️ *Bio Guard* — scans member bios for links\n"
+            f"       or blacklisted words, shadow-blocks them\n"
+            f"  👤 *Member Username Guard* — optionally allow only\n"
+            f"       this group's own members to send a @username\n\n"
+            f"_Contact the bot owner to upgrade your group._"
+        )
+        await query.answer()
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("◀️ 𝗕𝗮𝗰𝗸", callback_data="start_home")],
+                [InlineKeyboardButton("❌ 𝗖𝗹𝗼𝘀𝗲", callback_data="close_menu")],
+            ]),
+            parse_mode='Markdown'
+        )
+        return
+
     elif data == "show_rules":
         chat_id = update.effective_chat.id if update.effective_chat else 0
+        if chat and chat.type == "private":
+            await query.answer()
+            await query.edit_message_text(
+                f"📜 *𝗚𝗥𝗢𝗨𝗣 𝗥𝗨𝗟𝗘𝗦*\n"
+                f"{'─'*14}\n\n"
+                f"Rules are set per-group, so there's nothing to show here in DM.\n"
+                f"Open `/rules` inside your group instead, or add me to one below.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("◀️ 𝗕𝗮𝗰𝗸", callback_data="start_home")],
+                    [InlineKeyboardButton("❌ 𝗖𝗹𝗼𝘀𝗲", callback_data="close_menu")],
+                ]),
+                parse_mode='Markdown'
+            )
+            return
         custom = db.get_rules(chat_id) if chat_id else None
         if custom:
             rules_text = (
@@ -3478,29 +3615,17 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     u  = update.effective_user
     ch = update.effective_chat
 
-    # Group me /start → sirf ek line with button
+    # Group me /start → unified panel (same layout as DM)
     if ch.type != "private":
         is_admin_here = (u.id == OWNER_ID) or await is_adm(ctx, ch.id, u.id)
-        start_text = (
-            f"🛡️ *𝗚𝘂𝗮𝗿𝗱𝗶𝗮𝗻* is online and protecting this group.\n"
-            f"_Type /help to see all commands._"
-        )
-        if is_admin_here:
-            start_text += f"\n⚙️ _Admins — open /settings for the control panel._"
-        buttons = [
-            [
-                InlineKeyboardButton("📋 𝗖𝗼𝗺𝗺𝗮𝗻𝗱𝘀", callback_data="menu_main"),
-                InlineKeyboardButton("📜 𝗥𝘂𝗹𝗲𝘀", callback_data="show_rules"),
-            ]
-        ]
-        if is_admin_here:
-            buttons.append([InlineKeyboardButton("⚙️ 𝗦𝗲𝘁𝘁𝗶𝗻𝗴𝘀", callback_data="cfg_main")])
-        msg_id = await send_colored_message(ch.id, start_text, ckb_start_group(is_admin_here))
+        start_text = build_start_text(True, is_admin_here)
+        rows = await kb_start_panel(ctx, True)
+        msg_id = await send_colored_message(ch.id, start_text, rows)
         if not msg_id:
             sent = await update.message.reply_text(
                 start_text,
                 parse_mode='Markdown',
-                reply_markup=InlineKeyboardMarkup(buttons)
+                reply_markup=_rows_to_markup(rows)
             )
             _remember_menu_owner(ch.id, sent.message_id, u.id)
             schedule_panel_autodelete(ctx, ch.id, sent.message_id, cmd_msg_id=update.message.message_id)
@@ -3551,35 +3676,13 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # DM — Regular user
-    text = (
-                f"🛡️ *𝗚𝗨𝗔𝗥𝗗𝗜𝗔𝗡 — 𝗚𝗿𝗼𝘂𝗽 𝗣𝗿𝗼𝘁𝗲𝗰𝘁𝗶𝗼𝗻 𝗕𝗼𝘁*\n"
-        f"_Security · Moderation · Automation_\n"
-        f"{'─'*14}\n\n"
-        f"👋 *Hi {md_esc(u.first_name or 'there')}!*\n\n"
-        f"I keep groups safe, clean, and spam-free —\n"
-        f"around the clock, with zero effort from admins. 🔥\n\n"
-        f"{'─'*14}\n"
-        f"📱 *𝗬𝗢𝗨𝗥 𝗖𝗢𝗠𝗠𝗔𝗡𝗗𝗦*\n\n"
-        f"  📜 `/rules` — View group rules\n"
-        f"  ⚠️ `/warnings` — Check your warnings\n"
-        f"  ⭐ `/rep` — Your profile card\n"
-        f"  🏆 `/repboard` — Reputation ranking\n"
-        f"  🆔 `/id` — Your Telegram ID\n\n"
-        f"{'─'*14}\n"
-        f"💎 *𝗥𝗘𝗣𝗨𝗧𝗔𝗧𝗜𝗢𝗡*\n"
-        f"_Say thanks → +{REP_PER_THANK} rep · Clear a warning → {REP_PER_WARN_REMOVE} rep_\n\n"
-        f"_Add me to your group and make me admin to get started._"
-    )
+    # DM — Regular user (same 5-row panel as group /start)
+    text = build_start_text(False, False, u.first_name)
+    rows = await kb_start_panel(ctx, False)
     sent = await update.message.reply_text(
         text,
         parse_mode='Markdown',
-        reply_markup=InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("📋 𝗔𝗹𝗹 𝗖𝗼𝗺𝗺𝗮𝗻𝗱𝘀", callback_data="menu_user"),
-                InlineKeyboardButton("⚠️ 𝗪𝗮𝗿𝗻 𝗦𝘆𝘀𝘁𝗲𝗺", callback_data="menu_warns"),
-            ],
-        ])
+        reply_markup=_rows_to_markup(rows)
     )
     _remember_menu_owner(ch.id, sent.message_id, u.id)
     schedule_panel_autodelete(ctx, ch.id, sent.message_id, cmd_msg_id=update.message.message_id)
