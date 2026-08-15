@@ -3260,34 +3260,21 @@ async def _menu_callback_dispatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE
                 f"_Follow the rules to avoid punishment._"
             )
         else:
-            rules_text = (
-                f"📜 *𝗚𝗥𝗢𝗨𝗣 𝗥𝗨𝗟𝗘𝗦*\n"
-                f"{'─'*14}\n\n"
-                f"🚫 *𝙉𝙊𝙏 𝘼𝙇𝙇𝙊𝙒𝙀𝘿:*\n\n"
-                f"  1️⃣  🤖 External bot usernames\n"
-                f"  2️⃣  🔗 Links & URLs\n"
-                f"  3️⃣  ↩️ Forwarded messages\n"
-                f"       ✅ _Linked channel: allowed_\n"
-                f"  4️⃣  🔞 Adult emojis (2+)\n"
-                f"  5️⃣  🗣️ Abusive language\n"
-                f"  6️⃣  ⛔ Blacklisted words\n"
-                f"  7️⃣  🌊 Spamming / Flooding\n\n"
-                f"{'─'*14}\n\n"
-                f"⚠️ *𝙋𝙐𝙉𝙄𝙎𝙃𝙈𝙀𝙉𝙏 𝙎𝘾𝘼𝙇𝙀:*\n"
-                f"  • 1st offense → 35s mute\n"
-                f"  • 2nd offense → 60s mute\n"
-                f"  • 3rd offense → 120s mute\n"
-                f"  • 4th offense → 1 WEEK (ALL groups!)\n\n"
-                f"{'─'*14}\n"
-                f"✅ _Respect the rules & enjoy the group!_"
-            )
+            rules_text = build_auto_rules_text(chat_id)
+
+        buttons = [[InlineKeyboardButton("◀️ 𝗕𝗮𝗰𝗸", callback_data="menu_main")]]
+        u = query.from_user
+        if chat_id and u and await _cfg_is_authorized(ctx, chat_id, u.id):
+            # Admin/owner is viewing — let them jump straight into editing rules,
+            # and hand this panel's ownership to them so that tap works.
+            _remember_menu_owner(chat_id, query.message.message_id, u.id)
+            buttons.insert(0, [InlineKeyboardButton("✏️ 𝗦𝗲𝘁 𝗖𝘂𝘀𝘁𝗼𝗺 𝗥𝘂𝗹𝗲𝘀", callback_data="cfg_rules_set")])
+        buttons.append([InlineKeyboardButton("❌ 𝗖𝗹𝗼𝘀𝗲", callback_data="close_menu")])
+
         await query.answer()
         await query.edit_message_text(
             rules_text,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("◀️ 𝗕𝗮𝗰𝗸", callback_data="menu_main")],
-                [InlineKeyboardButton("❌ 𝗖𝗹𝗼𝘀𝗲", callback_data="close_menu")],
-            ]),
+            reply_markup=InlineKeyboardMarkup(buttons),
             parse_mode='Markdown'
         )
         return
